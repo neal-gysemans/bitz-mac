@@ -6,10 +6,12 @@ import Combine
 ///
 /// Uses `AVAudioEngine` with preloaded `AVAudioPCMBuffer`s for instant (< 50 ms) sound playback.
 /// Stops or pauses the audio rendering engine when silent to maintain 0.0% idle CPU overhead.
-/// Conforms to `CyberAudioPlaying` so clients can interact with it via protocol or test spy.
+/// Enforces per-event cooldowns, transition-only state sounds, and environmental suppression.
 @MainActor
 public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
     public let settingsStore: CyberAudioSettingsStore
+    public let environmentDetector: AudioEnvironmentDetecting
+    public let dateProvider: @Sendable () -> Date
 
     // Preloaded sound buffers decoded once at launch
     public private(set) var loadedBuffers: [CyberSoundEvent: AVAudioPCMBuffer] = [:]
@@ -24,14 +26,25 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
     @Published public private(set) var isPurring: Bool = false
     @Published public private(set) var isEngineRunning: Bool = false
 
+    // Cooldown & Rate Limiting state
+    public private(set) var lastOneShotPlayedAt: Date?
+    public private(set) var agentChimeCooldowns: [String: Date] = [:]
+    public private(set) var lastFanfarePlayedAt: Date?
+    public private(set) var lastObservedState: BitzState?
+    public var minOneShotInterval: TimeInterval = 1.5
+
     private var purrFadeTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
     public init(
         settingsStore: CyberAudioSettingsStore = CyberAudioSettingsStore(),
+        environmentDetector: AudioEnvironmentDetecting = AudioEnvironmentDetector(),
+        dateProvider: @escaping @Sendable () -> Date = { Date() },
         engine: AVAudioEngine = AVAudioEngine()
     ) {
         self.settingsStore = settingsStore
+        self.environmentDetector = environmentDetector
+        self.dateProvider = dateProvider
         self.engine = engine
         self.mixerNode = engine.mainMixerNode
         self.purrNode = AVAudioPlayerNode()
@@ -81,7 +94,6 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
 
     // MARK: - Asset Preloading
 
-    /// Preloads and decodes all sound assets into memory as PCM buffers.
     public func preloadBuffers() {
         for event in CyberSoundEvent.allCases {
             if let url = resolveAssetURL(for: event.assetFileName) {
@@ -95,7 +107,6 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
                     try audioFile.read(into: buffer)
                     loadedBuffers[event] = buffer
                 } catch {
-                    // Graceful fallback: log warning without crashing
                     #if DEBUG
                     print("[CyberAudioService] Failed to decode \(event.assetFileName): \(error)")
                     #endif
@@ -103,19 +114,16 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             }
         }
 
-        // Configure purr node with its specific buffer format
         if let purrFormat = loadedBuffers[.purr]?.format {
             engine.disconnectNodeOutput(purrNode)
             engine.connect(purrNode, to: mixerNode, format: purrFormat)
         }
     }
 
-    /// Resolves the URL for an audio asset across SPM bundle, AppKit bundle, and local paths.
     public func resolveAssetURL(for fileName: String) -> URL? {
         let name = (fileName as NSString).deletingPathExtension
         let ext = (fileName as NSString).pathExtension
 
-        // 1. Try Bundle.module (SwiftPM resource bundle)
         #if SWIFT_PACKAGE
         if let moduleURL = Bundle.module.url(forResource: name, withExtension: ext) {
             return moduleURL
@@ -125,7 +133,6 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
         }
         #endif
 
-        // 2. Try Bundle.main (Packaged .app bundle)
         if let mainURL = Bundle.main.url(forResource: name, withExtension: ext) {
             return mainURL
         }
@@ -133,7 +140,6 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             return mainSubURL
         }
 
-        // 3. Fallback to direct relative paths (Development & Test worktrees)
         let candidatePaths = [
             "Resources/Sounds/\(fileName)",
             "src/Resources/Sounds/\(fileName)",
@@ -150,7 +156,7 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
         return nil
     }
 
-    // MARK: - Engine Lifecycle & Zero-Idle-CPU Power Gating
+    // MARK: - Engine Lifecycle & Power Gating
 
     private func ensureEngineRunning() -> Bool {
         if !engine.isRunning {
@@ -167,7 +173,6 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
         return true
     }
 
-    /// Checks if any audio is actively rendering. If completely silent, pauses the engine.
     private func evaluateIdlePowerGating() {
         guard !isPurring else { return }
 
@@ -178,10 +183,75 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
         }
     }
 
+    // MARK: - Cooldown & Suppression Evaluation
+
+    public func canPlay(
+        _ event: CyberSoundEvent,
+        agentId: String? = nil,
+        now: Date? = nil
+    ) -> (allowed: Bool, reason: AudioSuppressionReason?) {
+        guard settingsStore.isEnabled else {
+            return (false, .masterDisabled)
+        }
+
+        guard settingsStore.isEventEnabled(event) else {
+            return (false, .eventDisabled)
+        }
+
+        // Environmental suppression
+        if environmentDetector.isSystemOutputMuted() {
+            return (false, .systemMuted)
+        }
+
+        if settingsStore.isCallSuppressionEnabled && environmentDetector.isMicrophoneOrScreenCaptureActive() {
+            return (false, .callOrScreenSharingActive)
+        }
+
+        if settingsStore.isFocusDNDSuppressionEnabled && environmentDetector.isFocusOrDNDActive() {
+            return (false, .focusActive)
+        }
+
+        guard loadedBuffers[event] != nil else {
+            return (false, .assetMissing)
+        }
+
+        let currentTime = now ?? dateProvider()
+
+        // Global rate limit check (for non-looping sounds)
+        if !event.isLooping, let lastPlayed = lastOneShotPlayedAt {
+            if currentTime.timeIntervalSince(lastPlayed) < minOneShotInterval {
+                return (false, .rateLimited)
+            }
+        }
+
+        // Event-specific cooldowns
+        if event == .agentNeedsApproval, let agentId {
+            if let lastChime = agentChimeCooldowns[agentId] {
+                if currentTime.timeIntervalSince(lastChime) < event.defaultCooldown {
+                    return (false, .cooldownActive)
+                }
+            }
+        } else if event == .allAgentsDone {
+            if let lastFanfare = lastFanfarePlayedAt {
+                if currentTime.timeIntervalSince(lastFanfare) < event.defaultCooldown {
+                    return (false, .cooldownActive)
+                }
+            }
+        }
+
+        return (true, nil)
+    }
+
     // MARK: - Playback API
 
     public func play(_ event: CyberSoundEvent) {
-        guard settingsStore.isEnabled, settingsStore.isEventEnabled(event) else {
+        play(event, agentId: nil)
+    }
+
+    public func play(_ event: CyberSoundEvent, agentId: String?) {
+        let now = dateProvider()
+        let check = canPlay(event, agentId: agentId, now: now)
+        guard check.allowed else {
             return
         }
 
@@ -193,7 +263,14 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             return
         }
 
-        // Find an idle one-shot player node, or round-robin to the first
+        // Record cooldowns
+        lastOneShotPlayedAt = now
+        if event == .agentNeedsApproval, let agentId {
+            agentChimeCooldowns[agentId] = now
+        } else if event == .allAgentsDone {
+            lastFanfarePlayedAt = now
+        }
+
         let playerNode = oneShotNodes.first { !$0.isPlaying } ?? oneShotNodes[0]
 
         if playerNode.isPlaying {
@@ -219,6 +296,10 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
 
         if on {
             guard settingsStore.isEnabled, settingsStore.isPurrEnabled else { return }
+            if environmentDetector.isSystemOutputMuted() { return }
+            if settingsStore.isCallSuppressionEnabled && environmentDetector.isMicrophoneOrScreenCaptureActive() { return }
+            if settingsStore.isFocusDNDSuppressionEnabled && environmentDetector.isFocusOrDNDActive() { return }
+
             guard let buffer = loadedBuffers[.purr] else { return }
             guard ensureEngineRunning() else { return }
 
@@ -230,8 +311,7 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             purrNode.scheduleBuffer(buffer, at: nil, options: .loops, completionHandler: nil)
             purrNode.play()
 
-            // Fade in over ~250 ms
-            let targetVol: Float = 0.35 // Purr stays gentle
+            let targetVol: Float = 0.35
             let step: Float = targetVol / 10.0
             purrFadeTask = Task { @MainActor [weak self] in
                 while !Task.isCancelled {
@@ -246,7 +326,6 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             isPurring = false
             purrFadeTask?.cancel()
 
-            // Fade out over ~250 ms, then stop
             let step: Float = 0.35 / 10.0
             purrFadeTask = Task { @MainActor [weak self] in
                 while !Task.isCancelled {
@@ -280,5 +359,74 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             engine.pause()
             isEngineRunning = false
         }
+    }
+
+    // MARK: - State & Event Observation
+
+    /// Handles state transition from WellnessPointEngine, firing state sounds ONLY on transition.
+    public func handleStateTransition(from oldState: BitzState?, to newState: BitzState) {
+        guard oldState != newState else { return }
+        lastObservedState = newState
+
+        switch newState {
+        case .superCharged:
+            setPurring(true)
+        case .burnout:
+            if oldState == .superCharged {
+                setPurring(false)
+            }
+            play(.burnout)
+        case .overheating:
+            if oldState == .superCharged {
+                setPurring(false)
+            }
+            play(.overheating)
+        case .charging:
+            if oldState == .superCharged {
+                setPurring(false)
+            }
+            play(.charging)
+        case .balanced, .dopamineSad, .overworked:
+            if oldState == .superCharged {
+                setPurring(false)
+            }
+        }
+    }
+
+    /// Attaches observations to WellnessPointEngine.
+    public func observe(wellnessEngine: WellnessPointEngine) {
+        wellnessEngine.$currentState
+            .sink { [weak self] newState in
+                guard let self else { return }
+                let oldState = self.lastObservedState
+                self.handleStateTransition(from: oldState, to: newState)
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Attaches observations to AgentMonitorService.
+    public func observe(agentMonitor: AgentMonitorService) {
+        var previousActiveCount = agentMonitor.activeAgents.count
+
+        agentMonitor.onEventHandled = { [weak self] event in
+            guard let self else { return }
+            if event.kind == .needsApproval {
+                self.play(.agentNeedsApproval, agentId: event.agentID)
+            }
+        }
+
+        agentMonitor.$activeAgents
+            .sink { [weak self] currentAgents in
+                guard let self else { return }
+                let currentCount = currentAgents.count
+
+                // All agents finished detection: transition from non-empty to empty
+                if previousActiveCount > 0 && currentCount == 0 {
+                    self.play(.allAgentsDone)
+                }
+
+                previousActiveCount = currentCount
+            }
+            .store(in: &cancellables)
     }
 }

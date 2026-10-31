@@ -27,6 +27,8 @@ public final class AgentMonitorService: ObservableObject {
     private let clock: @Sendable () -> Date
     private var dismissTask: Task<Void, Never>? = nil
 
+    public var onEventHandled: (@MainActor (AgentEvent) -> Void)? = nil
+
     private static let customAgentsKey = "Bitz.AgentMonitor.CustomAgents"
     private static let agentDisabledPrefix = "Bitz.AgentMonitor.Disabled."
     private static let popupsEnabledKey = "Bitz.AgentMonitor.PopupsEnabled"
@@ -174,6 +176,8 @@ public final class AgentMonitorService: ObservableObject {
                 displayPopup(text: text, kind: .done, agentName: event.agentName, durationSeconds: 6.0)
             }
         }
+
+        onEventHandled?(event)
     }
 
     private func displayPopup(text: String, kind: AgentEventKind, agentName: String, durationSeconds: TimeInterval?) {
