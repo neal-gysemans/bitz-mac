@@ -110,6 +110,7 @@
     },
     "WP04": {
       "actor": "user",
+      "agent": "reviewer",
       "agent_profile": "__resolved_profile_absent__",
       "agent_profile_version": "__resolved_profile_version_absent__",
       "assignee": "antigravity",
@@ -137,6 +138,7 @@
     },
     "WP05": {
       "actor": "user",
+      "agent": "reviewer",
       "agent_profile": "__resolved_profile_absent__",
       "agent_profile_version": "__resolved_profile_version_absent__",
       "assignee": "antigravity",
