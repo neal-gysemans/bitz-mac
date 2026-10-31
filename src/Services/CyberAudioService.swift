@@ -475,6 +475,10 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             guard let self else { return }
             if event.kind == .needsApproval {
                 self.play(.agentNeedsApproval, agentId: event.agentID)
+            } else if event.kind == .done {
+                if agentMonitor.activeAgents.isEmpty {
+                    self.play(.allAgentsDone)
+                }
             }
         }
 
