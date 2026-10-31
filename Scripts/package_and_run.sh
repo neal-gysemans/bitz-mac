@@ -23,6 +23,11 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
 chmod +x "$MACOS_DIR/$APP_NAME"
 
+BIN_DIR="$(dirname "$BIN_PATH")"
+if compgen -G "$BIN_DIR"/*.bundle > /dev/null; then
+    cp -R "$BIN_DIR"/*.bundle "$RESOURCES_DIR/"
+fi
+
 if [[ -f "$ROOT_DIR/Resources/AppIcon.icns" ]]; then
     cp "$ROOT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 fi
