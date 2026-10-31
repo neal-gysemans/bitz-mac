@@ -11,5 +11,7 @@
   "purpose_tldr": "cyber audio",
   "slug": "cyber-audio-01M68WSH",
   "target_branch": "feat/issue-21-cyber-audio",
-  "topology": "coord"
+  "topology": "coord",
+  "vcs": "git",
+  "vcs_locked_at": "2026-10-31T11:57:41.489251+00:00"
 }
