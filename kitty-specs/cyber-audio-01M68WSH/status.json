@@ -1,152 +1,20 @@
 {
-  "event_count": 27,
-  "last_event_id": "01M68ZBPM71KBVFK3BFDSJ56A6",
-  "materialized_at": "2026-10-31T12:36:11.015979+00:00",
+  "event_count": 0,
+  "last_event_id": null,
+  "materialized_at": "",
   "mission_number": "",
-  "mission_slug": "cyber-audio-01M68WSH",
+  "mission_slug": "",
   "mission_type": "software-dev",
   "summary": {
-    "approved": 4,
+    "approved": 0,
     "blocked": 0,
     "canceled": 0,
     "claimed": 0,
     "done": 0,
     "for_review": 0,
-    "in_progress": 1,
+    "in_progress": 0,
     "in_review": 0,
     "planned": 0
   },
-  "work_packages": {
-    "WP01": {
-      "actor": "user",
-      "agent": "reviewer",
-      "agent_profile": "__resolved_profile_absent__",
-      "agent_profile_version": "__resolved_profile_version_absent__",
-      "force_count": 0,
-      "lane": "approved",
-      "last_event_id": "01M68XKV90B54KPNPA520AWJ9D",
-      "last_transition_at": "2026-10-31T12:05:40.768808+00:00",
-      "model": "__resolved_model_absent__",
-      "notes": [
-        "Ready for review: Audio models, settings store, and protocol architecture implemented and tested",
-        "Review passed: Cyber audio data models, settings store, and test spy fully implemented with passing tests"
-      ],
-      "provider": "__resolved_provider_absent__",
-      "review_result": {
-        "feedback_path": "/Users/akramkasimi/Documents/bitz-mac/kitty-specs/cyber-audio-01M68WSH/tasks/WP01-audio-models-and-settings-store/review-cycle-1.md",
-        "reference": "review-cycle://cyber-audio-01M68WSH/WP01-audio-models-and-settings-store/review-cycle-1.md",
-        "reviewer": "user",
-        "verdict": "approved"
-      },
-      "role": "reviewer",
-      "shell_pid": 1580,
-      "shell_pid_created_at": "1793312768.326811",
-      "subtasks": {
-        "T001": "done",
-        "T002": "done",
-        "T003": "done",
-        "T004": "done"
-      }
-    },
-    "WP02": {
-      "actor": "user",
-      "agent": "reviewer",
-      "agent_profile": "__resolved_profile_absent__",
-      "agent_profile_version": "__resolved_profile_version_absent__",
-      "force_count": 0,
-      "lane": "approved",
-      "last_event_id": "01M68Y7AFBFMB7AF31P0VJWPY0",
-      "last_transition_at": "2026-10-31T12:16:18.923322+00:00",
-      "model": "__resolved_model_absent__",
-      "notes": [
-        "Ready for review: Sound assets, license provenance, and low-latency audio engine implemented and tested",
-        "Review passed: Sound assets synthesized under 300KB, license complete, and low-latency audio engine tested"
-      ],
-      "provider": "__resolved_provider_absent__",
-      "review_result": {
-        "feedback_path": "/Users/akramkasimi/Documents/bitz-mac/kitty-specs/cyber-audio-01M68WSH/tasks/WP02-sound-assets-and-audio-engine/review-cycle-1.md",
-        "reference": "review-cycle://cyber-audio-01M68WSH/WP02-sound-assets-and-audio-engine/review-cycle-1.md",
-        "reviewer": "user",
-        "verdict": "approved"
-      },
-      "role": "reviewer",
-      "shell_pid": 1580,
-      "shell_pid_created_at": "1793312768.326811",
-      "subtasks": {
-        "T005": "done",
-        "T006": "done",
-        "T007": "done",
-        "T008": "done"
-      }
-    },
-    "WP03": {
-      "actor": "user",
-      "agent": "antigravity",
-      "agent_profile": "__resolved_profile_absent__",
-      "agent_profile_version": "__resolved_profile_version_absent__",
-      "force_count": 0,
-      "lane": "approved",
-      "last_event_id": "01M68YRGF8K9CF6H7V36ZJD7HX",
-      "last_transition_at": "2026-10-31T12:25:42.120547+00:00",
-      "model": "__resolved_model_absent__",
-      "notes": [
-        "Review passed: Event wiring, cooldown enforcement, and environmental suppression fully implemented with 100% passing tests"
-      ],
-      "provider": "__resolved_provider_absent__",
-      "review_result": {
-        "reference": "review-cycle://cyber-audio-01M68WSH/WP03-event-wiring-cooldowns-and-suppression/review-cycle-1.md",
-        "reviewer": "user",
-        "verdict": "approved"
-      },
-      "role": "reviewer",
-      "shell_pid": 1580,
-      "shell_pid_created_at": "1793312768.326811",
-      "subtasks": {
-        "T009": "done",
-        "T010": "done",
-        "T011": "done",
-        "T012": "done"
-      }
-    },
-    "WP04": {
-      "actor": "user",
-      "agent_profile": "__resolved_profile_absent__",
-      "agent_profile_version": "__resolved_profile_version_absent__",
-      "assignee": "antigravity",
-      "force_count": 0,
-      "lane": "approved",
-      "last_event_id": "01M68ZAW7A565EZCYQSMXHHDN1",
-      "last_transition_at": "2026-10-31T12:35:43.978105+00:00",
-      "model": "__resolved_model_absent__",
-      "notes": [
-        "Review passed: Settings window Audio tab, menu bar sound submenu, and comprehensive view tests fully implemented with passing tests"
-      ],
-      "provider": "__resolved_provider_absent__",
-      "review_result": {
-        "reference": "review-cycle://cyber-audio-01M68WSH/WP04-settings-and-menu-bar-ui/review-cycle-1.md",
-        "reviewer": "user",
-        "verdict": "approved"
-      },
-      "role": "reviewer",
-      "subtasks": {
-        "T013": "done",
-        "T014": "done",
-        "T015": "done",
-        "T016": "done"
-      }
-    },
-    "WP05": {
-      "actor": "user",
-      "agent_profile": "__resolved_profile_absent__",
-      "agent_profile_version": "__resolved_profile_version_absent__",
-      "assignee": "antigravity",
-      "force_count": 0,
-      "lane": "in_progress",
-      "last_event_id": "01M68ZBPM71KBVFK3BFDSJ56A6",
-      "last_transition_at": "2026-10-31T12:36:11.015979+00:00",
-      "model": "__resolved_model_absent__",
-      "provider": "__resolved_provider_absent__",
-      "role": "implementer"
-    }
-  }
+  "work_packages": {}
 }
