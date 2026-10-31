@@ -14,9 +14,8 @@
   "accepted_by": "akramkasimi",
   "accepted_from_commit": "c001feb3d8ae484b87140f4c6affd23f827ab2d3",
   "baseline_merge_commit": "47180fb34d560310033b29dd3c18f0c109e0000e",
-  "coordination_branch": "kitty/mission-cyber-audio-01M68WSH",
   "created_at": "2026-10-31T11:51:19.535395+00:00",
-  "flattened": false,
+  "flattened": true,
   "friendly_name": "cyber audio",
   "mission_id": "01M68WSH8EMBW0NJ6ZY5Q58JNZ",
   "mission_number": null,
@@ -27,7 +26,6 @@
   "slug": "cyber-audio-01M68WSH",
   "status_phase": "1",
   "target_branch": "feat/issue-21-cyber-audio",
-  "topology": "coord",
   "vcs": "git",
   "vcs_locked_at": "2026-10-31T11:57:41.489251+00:00"
 }
