@@ -27,6 +27,11 @@ if [[ -f "$ROOT_DIR/Resources/AppIcon.icns" ]]; then
     cp "$ROOT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 fi
 
+if [[ -d "$ROOT_DIR/Resources/Sounds" ]]; then
+    mkdir -p "$RESOURCES_DIR/Sounds"
+    cp -R "$ROOT_DIR/Resources/Sounds/"* "$RESOURCES_DIR/Sounds/"
+fi
+
 cat > "$CONTENTS_DIR/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -20,7 +20,10 @@ let package = Package(
         .target(
             name: "BitzCore",
             path: "src",
-            exclude: ["Executable"]
+            exclude: ["Executable"],
+            resources: [
+                .process("Resources/Sounds")
+            ]
         ),
         .executableTarget(
             name: "Bitz",
