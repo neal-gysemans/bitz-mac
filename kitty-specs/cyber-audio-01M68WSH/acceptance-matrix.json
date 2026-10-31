@@ -1,0 +1,109 @@
+{
+  "mission_slug": "cyber-audio-01M68WSH",
+  "mission_number": "",
+  "mission_type": "software-dev",
+  "overall_verdict": "pass",
+  "criteria": [
+    {
+      "criterion_id": "FR-001",
+      "description": "CyberAudioSettingsStore master toggle, volume, and per-event persistence",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/CyberAudioSettingsStoreTests.swift",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-10-31T12:05:00.000000+00:00",
+      "notes": "UserDefaults persistence, master default off, volume sanitization, per-event toggles verified."
+    },
+    {
+      "criterion_id": "FR-002",
+      "description": "CyberAudioService core AVAudioEngine and preloaded PCM buffers",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/CyberAudioServiceTests.swift",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-10-31T12:15:00.000000+00:00",
+      "notes": "AVAudioEngine node pool, preloaded PCM buffers, and instant playback verified."
+    },
+    {
+      "criterion_id": "FR-003",
+      "description": "Zero idle CPU consumption via power gating",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/CyberAudioServiceTests.swift::testStopAllHaltsEngineAndResetsPurr",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-10-31T12:15:00.000000+00:00",
+      "notes": "Engine pauses when silent to maintain 0.0% idle CPU overhead."
+    },
+    {
+      "criterion_id": "FR-004",
+      "description": "State transition sounds exclusively on state change",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/CyberAudioIntegrationTests.swift::testStateTransitionsTriggerSoundsExclusivelyOnTransition",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-10-31T12:25:00.000000+00:00",
+      "notes": "Sounds trigger only on transitions into burnout, overheating, charging, or superCharged."
+    },
+    {
+      "criterion_id": "FR-005",
+      "description": "Looping mechanical purr with smooth fade in/out",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/CyberAudioServiceTests.swift::testPurrLoopStateManagement",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-10-31T12:15:00.000000+00:00",
+      "notes": "Purr loop fades in over 250ms on superCharged and fades out on exit."
+    },
+    {
+      "criterion_id": "FR-006",
+      "description": "Agent needs approval chime with >= 10s cooldown",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/CyberAudioIntegrationTests.swift::testAgentChimeCooldownEnforcement",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-10-31T12:25:00.000000+00:00",
+      "notes": "Two-tone chime plays when agent hits needsApproval, suppressed by per-agent 10s cooldown."
+    },
+    {
+      "criterion_id": "FR-007",
+      "description": "Agent all-done fanfare with >= 60s cooldown",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/CyberAudioIntegrationTests.swift::testAllDoneFanfareCooldownEnforcement",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-10-31T12:25:00.000000+00:00",
+      "notes": "Victory fanfare plays when active agents become empty, rate-limited to >= 60s."
+    },
+    {
+      "criterion_id": "FR-008",
+      "description": "Settings window Sound tab & MenuBar Sound submenu",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/AudioSettingsViewsTests.swift",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-10-31T12:35:00.000000+00:00",
+      "notes": "AudioSettingsTabView, SettingsRootView integration, and menu bar sound controls verified."
+    },
+    {
+      "criterion_id": "FR-009",
+      "description": "Environmental suppression for mute, mic/calls, and Focus/DND",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/CyberAudioIntegrationTests.swift::testEnvironmentalSuppressionRules",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-10-31T12:25:00.000000+00:00",
+      "notes": "Audio skips cleanly without buffering during system mute, active calls, or DND."
+    },
+    {
+      "criterion_id": "FR-010",
+      "description": "Small bundled audio assets (< 300 KB total) with CC0 license",
+      "proof_type": "manual_inspection",
+      "evidence": "Resources/Sounds/ (184 KB total) and Resources/Sounds/LICENSE.md",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-10-31T12:12:00.000000+00:00",
+      "notes": "Total asset size is 184 KB, well under 300 KB budget, fully CC0 licensed."
+    }
+  ],
+  "negative_invariants": []
+}
