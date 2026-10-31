@@ -1,16 +1,16 @@
 {
-  "event_count": 32,
-  "last_event_id": "01M68ZSFYPT8DWYAN5FHV790G3",
-  "materialized_at": "2026-10-31T12:43:42.934261+00:00",
+  "event_count": 33,
+  "last_event_id": "01M68ZSK65HA5D3ATX8JWQX2W0",
+  "materialized_at": "2026-10-31T12:43:46.245503+00:00",
   "mission_number": "1",
   "mission_slug": "cyber-audio-01M68WSH",
   "mission_type": "software-dev",
   "summary": {
-    "approved": 3,
+    "approved": 2,
     "blocked": 0,
     "canceled": 0,
     "claimed": 0,
-    "done": 2,
+    "done": 3,
     "for_review": 0,
     "in_progress": 0,
     "in_review": 0,
@@ -80,14 +80,14 @@
       }
     },
     "WP03": {
-      "actor": "user",
+      "actor": "merge",
       "agent": "antigravity",
       "agent_profile": "__resolved_profile_absent__",
       "agent_profile_version": "__resolved_profile_version_absent__",
       "force_count": 0,
-      "lane": "approved",
-      "last_event_id": "01M68YRGF8K9CF6H7V36ZJD7HX",
-      "last_transition_at": "2026-10-31T12:25:42.120547+00:00",
+      "lane": "done",
+      "last_event_id": "01M68ZSK65HA5D3ATX8JWQX2W0",
+      "last_transition_at": "2026-10-31T12:43:46.245503+00:00",
       "model": "__resolved_model_absent__",
       "notes": [
         "Review passed: Event wiring, cooldown enforcement, and environmental suppression fully implemented with 100% passing tests"
