@@ -105,24 +105,5 @@
       "notes": "Total asset size is 184 KB, well under 300 KB budget, fully CC0 licensed."
     }
   ],
-  "invariants": [
-    {
-      "invariant_id": "INV-001",
-      "description": "100% Click-Through Guarantee on Mascot Overlay and Speech Bubble panels",
-      "pass_fail": "pass",
-      "evidence": "Tests/BitzTests/MascotOverlayPanelTests.swift"
-    },
-    {
-      "invariant_id": "INV-002",
-      "description": "Zero Keyboard Focus Stealing (canBecomeKey = false)",
-      "pass_fail": "pass",
-      "evidence": "Tests/BitzTests/SpeechBubblePanelTests.swift"
-    },
-    {
-      "invariant_id": "INV-003",
-      "description": "Default Off Usability Guard (isEnabled = false default)",
-      "pass_fail": "pass",
-      "evidence": "Tests/BitzTests/CyberAudioSettingsStoreTests.swift::testInitialDefaultsAreSafeAndDefaultOff"
-    }
-  ]
+  "negative_invariants": []
 }
