@@ -1,88 +1,71 @@
-<!-- spec-kitty intake: ingested from issues/2026-10-29-settings-window-mascot-behavior.md at 2026-10-29T13:29:13.355387+00:00 -->
-<!-- brief_hash: 93070d60540e8fa91111b1d37c2a5da02a98c53038adc329dacd1079b3bd2024 -->
+<!-- spec-kitty intake: ingested from issues/2026-10-31-cyber-audio-design.md at 2026-10-31T11:51:11.786560+00:00 -->
+<!-- brief_hash: f0504fecab05450f33758df0b5afa41da3d9f7f9022d6424cdaebdce86fc2fda -->
+
+# [Feature]: Cyber Audio Design (purr, state sounds, agent chimes)
+
+**Issue**: refs #21
 
 ## Summary
-Introduce a dedicated macOS Settings / Preferences window to configure mascot behaviors, appearance, telemetry, and AI agent monitoring, decluttering the menu bar dropdown into a lightweight, glanceable menu.
+Add an optional Cyber Audio layer: low-latency 8-bit / cybernetic sound effects tied to mascot states and agent events.
 
 ## Environment
 - **Product/Service**: bitz-mac (Bitz the Cyber Cat)
 - **Region/Version**: current `main`
 - **Browser/OS**: macOS 14.0+ (Apple Silicon)
 
-## Problem / Motivation
-Currently, all mascot controls, configuration options, and diagnostic tools live directly inside the `MenuBarExtra` dropdown (`BitzMenuBarContentView`). Even with submenu grouping, the menu has grown overloaded with:
-- Mascot size and opacity steppers and presets
-- Screen corner anchoring and dragging toggles
-- Multi-monitor routing and connected screen lists
-- Telemetry metrics toggles, display placements, polling cadence, and disk warning thresholds
-- Hardware sensor outputs, manual sampling triggers, and productive/distraction rule actions
-- Monitored AI agents, popup alerts, and hook installer actions
-- State simulation buttons and keybinds cheat sheet
-- Update checker and login items
+## Problem or Motivation
+Bitz communicates its state today purely visually (Rive animations / visor color driven by `BitzState` in `src/Services/WellnessPointEngine.swift`, and agent popups from `AgentMonitorService` in `src/Services/AgentMonitorService.swift`). When the mascot is out of the user's line of sight (another Space, full-screen editor, second monitor), important moments are missed:
 
-Interacting with nested submenus inside a transient MenuBarExtra dropdown is cumbersome and prone to accidental dismissals. Menu bar menus are meant for fast, glanceable status and quick actions, while rich customization belongs in a dedicated macOS Settings window.
+- An AI agent hits `.needsApproval` and sits idle waiting for the user.
+- All tracked agents finish (`activeAgents` becomes empty after `.done`).
+- Bitz slides into `.burnout` / `.overheating` — exactly when the user is too heads-down to look at the corner of the screen.
 
-## Reproduction Steps
-1. Launch Bitz on macOS.
-2. Click the Bitz cat icon in the macOS menu bar.
-3. Observe a deep, multi-tiered list of submenus and controls covering appearance, dragging, multi-monitor routing, telemetry toggles, hardware sensors, AI agents, simulator overrides, and update settings.
-4. Try configuring multiple telemetry metrics or sensor rules; the menu closes after each interaction.
+A small, tasteful audio layer would make Bitz feel alive (a "cyber cat" that purrs) and make agent hand-offs noticeable, without becoming noisy.
 
-## Expected Behavior
-- The menu bar dropdown is lightweight and glanceable:
-  - Current mascot state, streak, and focus PTS.
-  - Quick actions (e.g., "Pet Bitz", "Unlock / Lock Position").
-  - Concise active alert summary (e.g., active agent or thermal warning, if applicable).
-  - A clean `Settings...` menu item (with standard `⌘,` shortcut) that opens a dedicated Settings window.
-  - Minimal lifecycle items (`Check for Updates...`, `Quit Bitz`).
-- Clicking `Settings...` opens a native, tabbed macOS Preferences / Settings window where users can comfortably configure all mascot behaviors, telemetry, and integrations without the dropdown closing.
+## Proposed Solution / Feature
+Add an optional **Cyber Audio** layer: low-latency 8-bit / cybernetic sound effects tied to mascot states and agent events.
 
-## Actual Behavior
-There is no Settings window. All controls, configurations, and diagnostic toggles are packed into `BitzMenuBarContentView`, making the menu bar extra crowded and difficult to navigate.
+### Sound Map (Initial Set)
 
-## Proposed Solution: Dedicated Settings Window
+| Trigger | Source | Sound |
+|---|---|---|
+| Flow / petting | `BitzState.superCharged` (and future petting interaction) | Soft looping mechanical purr (fades in/out, very low volume) |
+| Burnout | transition into `BitzState.burnout` | Glitchy "power-down" sweep |
+| Overheating | transition into `BitzState.overheating` | Short fan-whir / thermal alarm glitch |
+| Agent needs attention | `AgentEventKind.needsApproval` in `AgentMonitorService.handleEvent(_:)` | Two-tone chime |
+| All agents finished | `.done` that leaves `activeAgents` empty | Short 8-bit fanfare |
+| (optional) Charging | `BitzState.charging` | Soft "power-up" blip |
 
-Implement a native macOS Settings scene (or `NSWindowController` with `NSHostingController`) structured into intuitive tabs:
+### Architecture
 
-### 1. General & Mascot Appearance
-- **Mascot Scale**: Steppers, slider, and size presets (Tiny to Massive).
-- **Opacity**: Slider and presets (20% to 100%).
-- **Positioning**: Default screen corner anchor picker, drag unlock/lock toggle, edge snap padding.
-- **Display Target**: Primary display, follow active screen, or pin to a specific display.
+- New `src/Services/CyberAudioService.swift` (`@MainActor final class CyberAudioService: ObservableObject`) that:
+  - Uses `AVAudioEngine` + a small pool of `AVAudioPlayerNode`s with **preloaded `AVAudioPCMBuffer`s** (decoded once at launch) for low latency; the purr uses a looping buffer with a gain ramp.
+  - Stops/pauses the engine when nothing is playing so idle CPU ≈ 0 (no running render loop while silent).
+  - Exposes `play(_ event: CyberSoundEvent)` and `setPurring(_ on: Bool)`; observes `WellnessPointEngine`'s published state and `AgentMonitorService`'s `activeAgents` / events via Combine rather than modifying their logic heavily.
+  - Per-event **cooldowns** (e.g. chime ≥ 10 s per agent, fanfare ≥ 60 s, burnout/overheat only on state *transition*, never on repeat evaluations) plus a global rate limit to prevent spam.
+- New `src/Models/CyberAudioSettingsStore.swift` following the existing `AvatarOpacityStore` / `AvatarScaleStore` pattern (UserDefaults-backed `ObservableObject`, owned by the app delegate in `src/App/BitzApp.swift` next to `scaleStore` / `opacityStore` / `positionStore`):
+  - `isEnabled` master toggle — **default off** (or "subtle" preset at low volume if enabled).
+  - `volume` (0.0–1.0, default ~0.3), applied via the engine's main mixer.
+  - Per-event toggles (purr, burnout, overheating, agent chime, all-done fanfare).
+- Menu bar UI in `BitzApp.swift` / Settings window alongside other tabs/menus: Audio settings section with master toggle, volume slider, per-event toggles, and a "Test sounds" action.
 
-### 2. Behaviors & Wellness Engine
-- **Focus & Rest Cadence**: Continuous work warning threshold (e.g., 50 min overworked, 90 min burnout), break recharge rate.
-- **App Classification Rules**: Manage custom productive vs. dopamine drain application list.
-- **Interactions**: Petting cooldown, audio effects / cyber purr volume toggles (refs #21).
+### Respecting the User's Context
+- Respect system mute / zero output volume (skip playback rather than queueing).
+- Respect macOS **Focus / Do Not Disturb** when detectable (suppress everything except, optionally, the agent-approval chime behind an explicit opt-in).
+- Suppress sounds while **screen sharing or in a call** when detectable (e.g. microphone/camera in use via CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere`, or known conferencing apps frontmost). If detection isn't reliable, document the limitation and fall back to the user's toggles.
+- Never steal audio focus or duck other apps.
 
-### 3. AI Coding Agents
-- **Popup Notifications**: Toggle speech bubble alerts for agent completion and approval requests.
-- **Monitored Agents**: Enable/disable detection per agent (Claude Code, Gemini CLI, Antigravity, Cursor, Windsurf, Copilot, Codex, etc.).
-- **Hook Integration**: Install / uninstall Claude Code hook buttons with status indicators.
-- **Custom Agents**: Register custom process names, bundle IDs, or log paths.
-
-### 4. Telemetry & Hardware Sensors
-- **Visible Metrics**: Checkbox list for Disk, RAM, CPU Load/Die Temp, GPU, FPS, Network, Battery.
-- **Display Placements**: Menu bar title, mascot Cyber HUD, speech bubble carousel, or menu bar dropdown.
-- **Sampling Cadence**: Polling interval picker (1s, 3s, 5s, 10s).
-- **Warning Thresholds**: Low disk space alert threshold, CPU overheat threshold.
-
-### 5. Diagnostics & Advanced
-- **State Simulation**: Quick override triggers for testing states (Super Charged, Balanced, Dopamine Overload, Overworked, Burnout, Charging, Overheat).
-- **Keyboard Shortcuts Reference**: Cheat sheet of all global and local keybinds.
-- **Updates & System**: Automatic update check toggle, manual update checker, Launch at Login toggle.
+### Assets
+- Small bundled assets (target < 300 KB total), short mono CAF/WAV (or AAC) clips under a `Resources/Sounds/` folder.
+- License-clean only: custom-made (e.g. synthesized with sfxr/jsfxr/ChipTone) or CC0, with a `Resources/Sounds/LICENSE.md` / credits file listing each asset's source and license.
 
 ## Acceptance Criteria
-- [ ] Add a native macOS `Settings` window (or preferences window) accessible via `⌘,` and via a `Settings...` item in the menu bar dropdown.
-- [ ] Group configuration into organized tabs (`General`, `Behaviors`, `AI Agents`, `Telemetry`, `Advanced`).
-- [ ] Slim down `BitzMenuBarContentView` to focus strictly on glanceable status, quick actions, `Settings...`, and `Quit`.
-- [ ] Settings window does not interfere with the transparent click-through mascot panel (`MascotOverlayPanel.ignoresMouseEvents` invariant preserved).
-- [ ] Settings changes take effect immediately across all stores (`AvatarScaleStore`, `AvatarOpacityStore`, `AvatarPositionStore`, `DisplayPreferenceStore`, `TelemetrySettingsStore`, `AgentMonitorService`).
-- [ ] Unit tests cover settings window initialization and user default synchronization.
-
-## Impact
-**Medium / High** - Significantly improves user experience and ergonomics by uncluttering the menu bar extra and establishing a scalable foundation for upcoming mascot customization features.
-
-## Additional Context
-- Follows Apple Human Interface Guidelines for macOS Settings / Preferences windows.
-- Complements ongoing feature work for custom color palettes (#28), per-emotion color panel (#31), and mascot roster (#30), which can now be housed elegantly in Settings tabs rather than bloating the menu bar.
+- [ ] `CyberAudioService` plays preloaded buffers via `AVAudioEngine` (or `AVAudioPlayer` fallback) with perceptibly instant (< ~50 ms) playback.
+- [ ] Sounds trigger for: purr during `superCharged`/petting, power-down on entering `burnout`, glitch on entering `overheating`, chime on `needsApproval`, fanfare when all active agents are done.
+- [ ] State sounds fire only on state **transitions**; per-event cooldowns and a global rate limit prevent spam (covered by unit tests with an injected clock).
+- [ ] `CyberAudioSettingsStore` persists master toggle (default **off**), volume, and per-event toggles in UserDefaults, following the `AvatarOpacityStore` pattern.
+- [ ] Settings & menu bar exposed: master toggle, volume control, per-event toggles, and a "Test sounds" action.
+- [ ] Playback is skipped when system output is muted, when Focus/DND is active (if detectable), and during calls/screen sharing (if detectable); limitations are documented.
+- [ ] Idle CPU usage is unchanged vs. baseline when no sound is playing (engine paused/stopped when idle).
+- [ ] Bundled assets are small (< 300 KB total) and license-clean (custom or CC0) with a credits/LICENSE file.
+- [ ] Unit tests cover state→sound mapping, cooldowns, settings persistence, and suppression rules using a mock audio player.
