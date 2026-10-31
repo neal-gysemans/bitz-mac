@@ -28,7 +28,8 @@
       "last_transition_at": "2026-10-31T12:05:40.768808+00:00",
       "model": "__resolved_model_absent__",
       "notes": [
-        "Ready for review: Audio models, settings store, and protocol architecture implemented and tested"
+        "Ready for review: Audio models, settings store, and protocol architecture implemented and tested",
+        "Review passed: Cyber audio data models, settings store, and test spy fully implemented with passing tests"
       ],
       "provider": "__resolved_provider_absent__",
       "review_result": {
