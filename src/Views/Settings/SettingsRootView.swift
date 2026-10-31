@@ -6,6 +6,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
     case general = "General"
     case behaviors = "Behaviors"
     case agents = "AI Agents"
+    case audio = "Audio"
     case telemetry = "Telemetry"
     case advanced = "Advanced"
 
@@ -16,6 +17,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return "paintbrush.fill"
         case .behaviors: return "pawprint.fill"
         case .agents: return "cpu.fill"
+        case .audio: return "speaker.wave.2.fill"
         case .telemetry: return "chart.xyaxis.line"
         case .advanced: return "gearshape.2.fill"
         }
@@ -34,6 +36,8 @@ public struct SettingsRootView: View {
     @ObservedObject public var updateStore: AppUpdateStore
     @ObservedObject public var telemetryDashboard: TelemetryDashboardService
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
+    @ObservedObject public var audioSettings: CyberAudioSettingsStore
+    public var audioPlayer: (any CyberAudioPlaying)?
 
     @State private var selectedTab: SettingsTab = .general
 
@@ -47,7 +51,9 @@ public struct SettingsRootView: View {
         agentMonitor: AgentMonitorService,
         updateStore: AppUpdateStore,
         telemetryDashboard: TelemetryDashboardService,
-        telemetrySettings: TelemetrySettingsStore
+        telemetrySettings: TelemetrySettingsStore,
+        audioSettings: CyberAudioSettingsStore = CyberAudioSettingsStore(),
+        audioPlayer: (any CyberAudioPlaying)? = nil
     ) {
         self.engine = engine
         self.activityMonitor = activityMonitor
@@ -59,6 +65,8 @@ public struct SettingsRootView: View {
         self.updateStore = updateStore
         self.telemetryDashboard = telemetryDashboard
         self.telemetrySettings = telemetrySettings
+        self.audioSettings = audioSettings
+        self.audioPlayer = audioPlayer
     }
 
     public var body: some View {
@@ -172,6 +180,11 @@ public struct SettingsRootView: View {
         case .agents:
             AgentsSettingsTabView(
                 agentMonitor: agentMonitor
+            )
+        case .audio:
+            AudioSettingsTabView(
+                settingsStore: audioSettings,
+                audioPlayer: audioPlayer
             )
         case .telemetry:
             TelemetrySettingsTabView(
