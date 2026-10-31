@@ -24,7 +24,6 @@
   "purpose_context": "This mission advances cyber audio on feat/issue-21-cyber-audio so stakeholders can track the work from mission creation onward.",
   "purpose_tldr": "cyber audio",
   "slug": "cyber-audio-01M68WSH",
-  "status_phase": "1",
   "target_branch": "feat/issue-21-cyber-audio",
   "topology": "coord",
   "vcs": "git",
