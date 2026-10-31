@@ -12,6 +12,7 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
     public let settingsStore: CyberAudioSettingsStore
     public let environmentDetector: AudioEnvironmentDetecting
     public let dateProvider: @Sendable () -> Date
+    public var randomPurrIntervalProvider: @Sendable () -> TimeInterval
 
     // Preloaded sound buffers decoded once at launch
     public private(set) var loadedBuffers: [CyberSoundEvent: AVAudioPCMBuffer] = [:]
@@ -34,17 +35,21 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
     public var minOneShotInterval: TimeInterval = 1.5
 
     private var purrFadeTask: Task<Void, Never>?
+    private var periodicPurrTask: Task<Void, Never>?
+    public private(set) var isPettingActive: Bool = false
     private var cancellables = Set<AnyCancellable>()
 
     public init(
         settingsStore: CyberAudioSettingsStore = CyberAudioSettingsStore(),
         environmentDetector: AudioEnvironmentDetecting = AudioEnvironmentDetector(),
         dateProvider: @escaping @Sendable () -> Date = { Date() },
+        randomPurrIntervalProvider: @escaping @Sendable () -> TimeInterval = { Double.random(in: 45.0...90.0) },
         engine: AVAudioEngine = AVAudioEngine()
     ) {
         self.settingsStore = settingsStore
         self.environmentDetector = environmentDetector
         self.dateProvider = dateProvider
+        self.randomPurrIntervalProvider = randomPurrIntervalProvider
         self.engine = engine
         self.mixerNode = engine.mainMixerNode
         self.purrNode = AVAudioPlayerNode()
@@ -56,6 +61,7 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
 
     deinit {
         purrFadeTask?.cancel()
+        periodicPurrTask?.cancel()
     }
 
     // MARK: - Setup & Configuration
@@ -308,60 +314,84 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
     }
 
     public func setPurring(_ on: Bool) {
-        guard on != isPurring else { return }
-
         if on {
-            guard settingsStore.isEnabled, settingsStore.isPurrEnabled else { return }
-            if environmentDetector.isSystemOutputMuted() { return }
-            if settingsStore.isCallSuppressionEnabled && environmentDetector.isMicrophoneOrScreenCaptureActive() { return }
-            if settingsStore.isFocusDNDSuppressionEnabled && environmentDetector.isFocusOrDNDActive() { return }
-
-            guard let buffer = loadedBuffers[.purr] else { return }
-            guard ensureEngineRunning() else { return }
-
-            isPurring = true
-            purrNode.stop()
-            purrFadeTask?.cancel()
-
-            purrNode.volume = 0.0
-            purrNode.scheduleBuffer(buffer, at: nil, options: .loops, completionHandler: nil)
-            purrNode.play()
-
-            let targetVol: Float = 0.35
-            let step: Float = targetVol / 10.0
-            purrFadeTask = Task { @MainActor [weak self] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 25_000_000)
-                    guard !Task.isCancelled, let self else { return }
-                    let nextVol = min(self.purrNode.volume + step, targetVol)
-                    self.purrNode.volume = nextVol
-                    if nextVol >= targetVol { break }
-                }
-            }
+            startPeriodicPurrScheduler()
         } else {
-            isPurring = false
-            purrFadeTask?.cancel()
+            stopPeriodicPurrScheduler()
+        }
+    }
 
-            let step: Float = 0.35 / 10.0
-            purrFadeTask = Task { @MainActor [weak self] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 25_000_000)
-                    guard !Task.isCancelled, let self else { return }
-                    let nextVol = max(self.purrNode.volume - step, 0.0)
-                    self.purrNode.volume = nextVol
-                    if nextVol <= 0.0 {
-                        self.purrNode.stop()
-                        self.evaluateIdlePowerGating()
-                        break
-                    }
-                }
+    /// Starts periodic random purring during high wellness (`superCharged`), playing an initial purr
+    /// followed by subsequent soothing purrs at natural random intervals (45s–90s).
+    public func startPeriodicPurrScheduler() {
+        stopPeriodicPurrScheduler()
+        guard settingsStore.isEnabled, settingsStore.isPurrEnabled else { return }
+
+        playPurrBurst()
+
+        periodicPurrTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { break }
+                let interval = self.randomPurrIntervalProvider()
+                try? await Task.sleep(nanoseconds: UInt64(max(0.05, interval) * 1_000_000_000))
+                guard !Task.isCancelled else { break }
+                guard self.lastObservedState == .superCharged || self.isPettingActive else { break }
+                self.playPurrBurst()
             }
         }
     }
 
+    /// Halts the periodic purr scheduler and stops active purr audio.
+    public func stopPeriodicPurrScheduler() {
+        periodicPurrTask?.cancel()
+        periodicPurrTask = nil
+        if !isPettingActive {
+            stopPurr()
+        }
+    }
+
+    /// Plays a single natural purr cycle (~3.0s), automatically pausing the engine when complete.
+    public func playPurrBurst() {
+        guard settingsStore.isEnabled, settingsStore.isPurrEnabled else { return }
+        if environmentDetector.isSystemOutputMuted() { return }
+        if settingsStore.isCallSuppressionEnabled && environmentDetector.isMicrophoneOrScreenCaptureActive() { return }
+        if settingsStore.isFocusDNDSuppressionEnabled && environmentDetector.isFocusOrDNDActive() { return }
+
+        guard let buffer = loadedBuffers[.purr] else { return }
+        guard ensureEngineRunning() else { return }
+
+        isPurring = true
+        purrNode.stop()
+        purrFadeTask?.cancel()
+
+        purrNode.volume = 0.50
+        purrNode.scheduleBuffer(buffer, at: nil, options: []) { [weak self, weak purrNode] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                purrNode?.stop()
+                self.isPurring = false
+                self.evaluateIdlePowerGating()
+            }
+        }
+        purrNode.play()
+    }
+
+    /// Stops any active purr audio immediately and evaluates power gating.
+    public func stopPurr() {
+        purrFadeTask?.cancel()
+        if purrNode.isPlaying {
+            purrNode.stop()
+        }
+        isPurring = false
+        evaluateIdlePowerGating()
+    }
+
     public func stopAll() {
+        periodicPurrTask?.cancel()
+        periodicPurrTask = nil
         purrFadeTask?.cancel()
         isPurring = false
+        isPettingActive = false
         purrNode.stop()
         purrNode.volume = 0.0
 
@@ -425,13 +455,12 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
         wellnessEngine.$isPetReactionActive
             .sink { [weak self] isPetting in
                 guard let self else { return }
+                self.isPettingActive = isPetting
                 if isPetting {
-                    if !self.isPurring {
-                        self.setPurring(true)
-                    }
+                    self.playPurrBurst()
                 } else {
                     if self.lastObservedState != .superCharged {
-                        self.setPurring(false)
+                        self.stopPurr()
                     }
                 }
             }

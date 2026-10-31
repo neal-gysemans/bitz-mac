@@ -194,7 +194,7 @@ public struct AudioSettingsTabView: View {
     private func eventDescription(for event: CyberSoundEvent) -> String {
         switch event {
         case .purr:
-            return "Warm, soothing cat purr loop with rhythmic chest rumble"
+            return "Warm, soothing cat purr (plays on petting & at random intervals when supercharged)"
         case .burnout:
             return "8-bit power-down pitch sweep when entering burnout"
         case .overheating:

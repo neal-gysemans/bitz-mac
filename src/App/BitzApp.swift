@@ -545,7 +545,7 @@ struct BitzMenuBarContentView: View {
                     set: { audioSettings.setEnabled($0) }
                 ))
                 Divider()
-                Toggle("Soothing Purr Loop", isOn: Binding(
+                Toggle("Soothing Purr (Petting & High Wellness)", isOn: Binding(
                     get: { audioSettings.isPurrEnabled },
                     set: { audioSettings.setPurrEnabled($0) }
                 ))

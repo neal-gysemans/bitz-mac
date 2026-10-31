@@ -1,6 +1,23 @@
 import XCTest
 @testable import BitzCore
 
+private final class AtomicCounter: @unchecked Sendable {
+    private var val: Int = 0
+    private let lock = NSLock()
+
+    func increment() {
+        lock.lock()
+        defer { lock.unlock() }
+        val += 1
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return val
+    }
+}
+
 private final class TestClock: @unchecked Sendable {
     private var time: Date
     private let lock = NSLock()
@@ -243,5 +260,39 @@ final class CyberAudioIntegrationTests: XCTestCase {
         let checkNormal = service.canPlay(.allAgentsDone, now: clock.now, bypassCooldown: false)
         XCTAssertFalse(checkNormal.allowed)
         XCTAssertEqual(checkNormal.reason, .cooldownActive)
+    }
+
+    func testSuperChargedStateSchedulesPeriodicPurrsAndStopsOnExit() async {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        store.setEnabled(true)
+
+        let counter = AtomicCounter()
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: MockAudioEnvironmentDetector(),
+            randomPurrIntervalProvider: {
+                counter.increment()
+                return 0.05 // 50ms interval for quick test
+            }
+        )
+
+        let engine = WellnessPointEngine(userDefaults: defaults)
+        service.observe(wellnessEngine: engine)
+
+        // 1. Transition into superCharged triggers initial purr
+        service.handleStateTransition(from: .balanced, to: .superCharged)
+        XCTAssertTrue(service.isPurring)
+
+        // 2. Wait for next random interval tick
+        try? await Task.sleep(nanoseconds: 80_000_000)
+        XCTAssertGreaterThanOrEqual(counter.value, 1)
+
+        // 3. Transition out of superCharged halts scheduler
+        service.handleStateTransition(from: .superCharged, to: .balanced)
+        XCTAssertFalse(service.isPurring)
     }
 }
