@@ -139,6 +139,7 @@
       "actor": "user",
       "agent_profile": "__resolved_profile_absent__",
       "agent_profile_version": "__resolved_profile_version_absent__",
+      "assignee": "antigravity",
       "force_count": 0,
       "lane": "in_progress",
       "last_event_id": "01M68ZBPM71KBVFK3BFDSJ56A6",
