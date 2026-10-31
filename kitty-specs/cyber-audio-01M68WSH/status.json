@@ -1,16 +1,16 @@
 {
-  "event_count": 33,
-  "last_event_id": "01M68ZSK65HA5D3ATX8JWQX2W0",
-  "materialized_at": "2026-10-31T12:43:46.245503+00:00",
+  "event_count": 34,
+  "last_event_id": "01M68ZSP0K4759WP05M3CZSAVT",
+  "materialized_at": "2026-10-31T12:43:49.139430+00:00",
   "mission_number": "1",
   "mission_slug": "cyber-audio-01M68WSH",
   "mission_type": "software-dev",
   "summary": {
-    "approved": 2,
+    "approved": 1,
     "blocked": 0,
     "canceled": 0,
     "claimed": 0,
-    "done": 3,
+    "done": 4,
     "for_review": 0,
     "in_progress": 0,
     "in_review": 0,
@@ -109,14 +109,14 @@
       }
     },
     "WP04": {
-      "actor": "user",
+      "actor": "merge",
       "agent_profile": "__resolved_profile_absent__",
       "agent_profile_version": "__resolved_profile_version_absent__",
       "assignee": "antigravity",
       "force_count": 0,
-      "lane": "approved",
-      "last_event_id": "01M68ZAW7A565EZCYQSMXHHDN1",
-      "last_transition_at": "2026-10-31T12:35:43.978105+00:00",
+      "lane": "done",
+      "last_event_id": "01M68ZSP0K4759WP05M3CZSAVT",
+      "last_transition_at": "2026-10-31T12:43:49.139430+00:00",
       "model": "__resolved_model_absent__",
       "notes": [
         "Review passed: Settings window Audio tab, menu bar sound submenu, and comprehensive view tests fully implemented with passing tests"
