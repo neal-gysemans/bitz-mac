@@ -545,7 +545,7 @@ struct BitzMenuBarContentView: View {
                     set: { audioSettings.setEnabled($0) }
                 ))
                 Divider()
-                Toggle("Mechanical Purr Loop", isOn: Binding(
+                Toggle("Soothing Purr Loop", isOn: Binding(
                     get: { audioSettings.isPurrEnabled },
                     set: { audioSettings.setPurrEnabled($0) }
                 ))
@@ -587,7 +587,7 @@ struct BitzMenuBarContentView: View {
                     .disabled(!audioSettings.isEnabled)
                 Divider()
                 Button("Test Chime") {
-                    audioService?.play(.agentNeedsApproval)
+                    audioService?.play(.agentNeedsApproval, bypassCooldown: true)
                 }
                 .disabled(!audioSettings.isEnabled)
             } label: {

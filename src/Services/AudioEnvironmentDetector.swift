@@ -130,13 +130,10 @@ public final class AudioEnvironmentDetector: AudioEnvironmentDetecting, @uncheck
     }
 
     public func isFocusOrDNDActive() -> Bool {
-        // macOS does not provide a public C/Swift API to query Do Not Disturb status
-        // without private framework entitlements. We check the standard user defaults
-        // notification center preference key if accessible, or return false.
-        let dndDefaults = UserDefaults(suiteName: "com.apple.controlcenter")
-        if let dndActive = dndDefaults?.bool(forKey: "NSStatusItem Visible Item-0") {
-            return dndActive
-        }
+        // macOS does not provide a public non-private API to query Do Not Disturb / Focus status
+        // without private framework entitlements or full-disk TCC access.
+        // Returns false to avoid false-positive permanent audio suppression for users
+        // who have the Focus icon pinned in their menu bar.
         return false
     }
 }

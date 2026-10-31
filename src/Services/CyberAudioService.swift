@@ -188,7 +188,8 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
     public func canPlay(
         _ event: CyberSoundEvent,
         agentId: String? = nil,
-        now: Date? = nil
+        now: Date? = nil,
+        bypassCooldown: Bool = false
     ) -> (allowed: Bool, reason: AudioSuppressionReason?) {
         guard settingsStore.isEnabled else {
             return (false, .masterDisabled)
@@ -213,6 +214,10 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
 
         guard loadedBuffers[event] != nil else {
             return (false, .assetMissing)
+        }
+
+        if bypassCooldown {
+            return (true, nil)
         }
 
         let currentTime = now ?? dateProvider()
@@ -245,12 +250,20 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
     // MARK: - Playback API
 
     public func play(_ event: CyberSoundEvent) {
-        play(event, agentId: nil)
+        play(event, agentId: nil, bypassCooldown: false)
+    }
+
+    public func play(_ event: CyberSoundEvent, bypassCooldown: Bool) {
+        play(event, agentId: nil, bypassCooldown: bypassCooldown)
     }
 
     public func play(_ event: CyberSoundEvent, agentId: String?) {
+        play(event, agentId: agentId, bypassCooldown: false)
+    }
+
+    public func play(_ event: CyberSoundEvent, agentId: String?, bypassCooldown: Bool) {
         let now = dateProvider()
-        let check = canPlay(event, agentId: agentId, now: now)
+        let check = canPlay(event, agentId: agentId, now: now, bypassCooldown: bypassCooldown)
         guard check.allowed else {
             return
         }
@@ -263,12 +276,14 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             return
         }
 
-        // Record cooldowns
-        lastOneShotPlayedAt = now
-        if event == .agentNeedsApproval, let agentId {
-            agentChimeCooldowns[agentId] = now
-        } else if event == .allAgentsDone {
-            lastFanfarePlayedAt = now
+        // Record cooldowns only for live operational playback (not UI previews)
+        if !bypassCooldown {
+            lastOneShotPlayedAt = now
+            if event == .agentNeedsApproval, let agentId {
+                agentChimeCooldowns[agentId] = now
+            } else if event == .allAgentsDone {
+                lastFanfarePlayedAt = now
+            }
         }
 
         let playerNode = oneShotNodes.first { !$0.isPlaying } ?? oneShotNodes[0]
@@ -282,8 +297,9 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             engine.connect(playerNode, to: mixerNode, format: buffer.format)
         }
 
-        playerNode.scheduleBuffer(buffer, at: nil, options: []) { [weak self] in
+        playerNode.scheduleBuffer(buffer, at: nil, options: []) { [weak self, weak playerNode] in
             Task { @MainActor [weak self] in
+                playerNode?.stop()
                 self?.evaluateIdlePowerGating()
             }
         }
@@ -395,11 +411,29 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
 
     /// Attaches observations to WellnessPointEngine.
     public func observe(wellnessEngine: WellnessPointEngine) {
+        lastObservedState = wellnessEngine.currentState
+
         wellnessEngine.$currentState
             .sink { [weak self] newState in
                 guard let self else { return }
                 let oldState = self.lastObservedState
                 self.handleStateTransition(from: oldState, to: newState)
+            }
+            .store(in: &cancellables)
+
+        // Observe user petting interaction ("Pet Bitz (<3)")
+        wellnessEngine.$isPetReactionActive
+            .sink { [weak self] isPetting in
+                guard let self else { return }
+                if isPetting {
+                    if !self.isPurring {
+                        self.setPurring(true)
+                    }
+                } else {
+                    if self.lastObservedState != .superCharged {
+                        self.setPurring(false)
+                    }
+                }
             }
             .store(in: &cancellables)
     }

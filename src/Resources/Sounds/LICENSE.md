@@ -13,7 +13,7 @@ All sound assets contained in this directory (`Resources/Sounds/`) were algorith
 
 | File | Duration | Sample Rate | Description & Parameters |
 |---|---|---|---|
-| `purr_loop.wav` | 1.50 s | 22,050 Hz Mono | 60 Hz base mechanical tone + 24 Hz motor flutter modulation with seamless boundary crossfade. |
+| `purr_loop.wav` | 2.40 s | 22,050 Hz Mono | Warm acoustic cat purr with 24.8 Hz glottal pulse train, thoracic chest rumble, and natural inhale/exhale breath modulation. |
 | `burnout_glitch.wav` | 0.55 s | 22,050 Hz Mono | 550 Hz -> 50 Hz exponential descending frequency sweep with bitcrush modulation. |
 | `overheat_alarm.wav` | 0.45 s | 22,050 Hz Mono | Dual-burst 880 Hz / 980 Hz frequency-modulated thermal alert pulse. |
 | `agent_chime.wav` | 0.42 s | 22,050 Hz Mono | Two-tone bell chime: Note 1 (A5, 880 Hz) and Note 2 (E6, 1318.5 Hz) with exponential decays. |

@@ -190,4 +190,58 @@ final class CyberAudioIntegrationTests: XCTestCase {
         XCTAssertFalse(checkDND.allowed)
         XCTAssertEqual(checkDND.reason, .focusActive)
     }
+
+    func testPettingInteractionTriggersAndEndsPurrLoop() {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        store.setEnabled(true)
+
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: MockAudioEnvironmentDetector()
+        )
+
+        let engine = WellnessPointEngine(userDefaults: defaults)
+        service.observe(wellnessEngine: engine)
+
+        XCTAssertFalse(service.isPurring)
+
+        // Trigger pet interaction
+        engine.triggerPetInteraction()
+        XCTAssertTrue(engine.isPetReactionActive)
+        XCTAssertTrue(service.isPurring)
+    }
+
+    func testPreviewBypassesCooldownsAndDoesNotAffectLiveCooldownTimers() {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        store.setEnabled(true)
+
+        let clock = TestClock()
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: MockAudioEnvironmentDetector(),
+            dateProvider: { clock.now }
+        )
+
+        // Normal playback enforces 60s cooldown
+        service.play(.allAgentsDone)
+        XCTAssertEqual(service.lastFanfarePlayedAt, clock.now)
+
+        // Repeat within 5s with bypassCooldown = true is allowed!
+        clock.advance(by: 5.0)
+        let checkPreview = service.canPlay(.allAgentsDone, now: clock.now, bypassCooldown: true)
+        XCTAssertTrue(checkPreview.allowed)
+
+        // And normal playback is still rejected due to cooldown
+        let checkNormal = service.canPlay(.allAgentsDone, now: clock.now, bypassCooldown: false)
+        XCTAssertFalse(checkNormal.allowed)
+        XCTAssertEqual(checkNormal.reason, .cooldownActive)
+    }
 }

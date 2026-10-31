@@ -9,6 +9,9 @@ public protocol CyberAudioPlaying: AnyObject {
     /// Plays a discrete one-shot sound effect if master audio and the event toggle are enabled.
     func play(_ event: CyberSoundEvent)
 
+    /// Plays a sound effect with an optional flag to bypass cooldown/rate-limit checks (for UI previews).
+    func play(_ event: CyberSoundEvent, bypassCooldown: Bool)
+
     /// Controls whether the continuous mechanical purr loop is active.
     func setPurring(_ on: Bool)
 
@@ -17,6 +20,12 @@ public protocol CyberAudioPlaying: AnyObject {
 
     /// Current purring loop status.
     var isPurring: Bool { get }
+}
+
+public extension CyberAudioPlaying {
+    func play(_ event: CyberSoundEvent) {
+        play(event, bypassCooldown: false)
+    }
 }
 
 /// A test spy conforming to `CyberAudioPlaying` for unit testing state machines,
@@ -30,7 +39,7 @@ public final class SpyCyberAudioPlayer: CyberAudioPlaying {
 
     public init() {}
 
-    public func play(_ event: CyberSoundEvent) {
+    public func play(_ event: CyberSoundEvent, bypassCooldown: Bool) {
         playedEvents.append(event)
     }
 

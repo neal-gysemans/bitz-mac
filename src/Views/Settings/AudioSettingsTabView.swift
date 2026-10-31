@@ -121,7 +121,7 @@ public struct AudioSettingsTabView: View {
                         Spacer()
 
                         Button {
-                            audioPlayer?.play(event)
+                            audioPlayer?.play(event, bypassCooldown: true)
                         } label: {
                             Label("Test", systemImage: "play.fill")
                                 .font(.caption)
@@ -194,7 +194,7 @@ public struct AudioSettingsTabView: View {
     private func eventDescription(for event: CyberSoundEvent) -> String {
         switch event {
         case .purr:
-            return "Gentle mechanical purr loop during superCharged wellness"
+            return "Warm, soothing cat purr loop with rhythmic chest rumble"
         case .burnout:
             return "8-bit power-down pitch sweep when entering burnout"
         case .overheating:

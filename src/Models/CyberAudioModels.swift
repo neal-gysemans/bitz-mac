@@ -14,7 +14,7 @@ public enum CyberSoundEvent: String, CaseIterable, Identifiable, Codable, Sendab
     public var displayName: String {
         switch self {
         case .purr:
-            return "Mechanical Purr"
+            return "Soothing Cat Purr"
         case .burnout:
             return "Burnout Glitch"
         case .overheating:
