@@ -89,7 +89,10 @@ final class CyberAudioServiceTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let store = CyberAudioSettingsStore(userDefaults: defaults)
-        let service = CyberAudioService(settingsStore: store)
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: MockAudioEnvironmentDetector()
+        )
 
         // When audio is disabled, setPurring(true) does nothing
         service.setPurring(true)
@@ -112,7 +115,10 @@ final class CyberAudioServiceTests: XCTestCase {
         let store = CyberAudioSettingsStore(userDefaults: defaults)
         store.setEnabled(true)
 
-        let service = CyberAudioService(settingsStore: store)
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: MockAudioEnvironmentDetector()
+        )
         service.setPurring(true)
         XCTAssertTrue(service.isPurring)
 
@@ -129,7 +135,10 @@ final class CyberAudioServiceTests: XCTestCase {
         let store = CyberAudioSettingsStore(userDefaults: defaults)
         store.setEnabled(true)
 
-        let service = CyberAudioService(settingsStore: store)
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: MockAudioEnvironmentDetector()
+        )
         service.setPurring(true)
         XCTAssertTrue(service.isPurring)
 
