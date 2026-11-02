@@ -113,6 +113,23 @@ public struct SettingsRootView: View {
             .buttonStyle(.borderedProminent)
             .tint(.red)
             .keyboardShortcut("q", modifiers: [.command])
+
+            // Window-scoped shortcut listeners
+            Group {
+                Button("") { scaleStore.stepDown() }
+                    .keyboardShortcut("-", modifiers: [.command])
+                Button("") { scaleStore.stepUp() }
+                    .keyboardShortcut("=", modifiers: [.command])
+                Button("") { opacityStore.stepDown() }
+                    .keyboardShortcut("[", modifiers: [.command])
+                Button("") { opacityStore.stepUp() }
+                    .keyboardShortcut("]", modifiers: [.command])
+                Button("") { engine.triggerPetInteraction() }
+                    .keyboardShortcut("p", modifiers: [.command])
+            }
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .allowsHitTesting(false)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)

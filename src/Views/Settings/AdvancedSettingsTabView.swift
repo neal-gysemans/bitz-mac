@@ -111,17 +111,17 @@ public struct AdvancedSettingsTabView: View {
                 VStack(spacing: 8) {
                     shortcutRow(action: "Move mascot anywhere (drag)", keys: ["⌥ Option", "Drag"])
                     Divider()
-                    shortcutRow(action: "Lock position when dragging", keys: ["⎋ Esc"])
+                    shortcutRow(action: "Lock position when dragging", keys: ["⎋ Esc", "⏎ Return"])
                     Divider()
-                    shortcutRow(action: "Pet Bitz mascot", keys: ["P"])
+                    shortcutRow(action: "Pet Bitz mascot", keys: ["⌘ P", "or", "P"])
                     Divider()
-                    shortcutRow(action: "Open Settings Window", keys: ["⌘", ","])
+                    shortcutRow(action: "Toggle / Open Settings", keys: ["⌘ ,", "or", "⌥⌘B"])
                     Divider()
                     shortcutRow(action: "Scale mascot smaller / larger", keys: ["⌘ -", "⌘ ="])
                     Divider()
                     shortcutRow(action: "Decrease / increase opacity", keys: ["⌘ [", "⌘ ]"])
                     Divider()
-                    shortcutRow(action: "Quit Bitz", keys: ["⌘", "Q"])
+                    shortcutRow(action: "Quit Bitz", keys: ["⌘ Q"])
                 }
             }
 

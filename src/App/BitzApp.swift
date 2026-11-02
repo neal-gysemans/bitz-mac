@@ -181,19 +181,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         self.localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // Option + Command + B (KeyCode 11) -> Toggle Settings Window
-            if event.modifierFlags.contains([.option, .command]) && event.keyCode == 11 {
-                if SettingsWindowManager.shared.isWindowOpen {
-                    SettingsWindowManager.shared.closeSettingsWindow()
-                } else {
-                    self?.showSettingsWindow()
-                }
-                return nil
-            }
-            guard let self, self.positionStore.isPositionUnlocked else { return event }
-            // Escape (53) or Return (36) immediately locks position
-            if event.keyCode == 53 || event.keyCode == 36 {
-                self.positionStore.lockPosition()
+            guard let self else { return event }
+            if self.handleKeyEvent(event) {
                 return nil
             }
             return event
@@ -201,23 +190,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
 
         self.globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return }
-            // Option + Command + B (KeyCode 11) -> Toggle Settings Window
-            if event.modifierFlags.contains([.option, .command]) && event.keyCode == 11 {
-                Task { @MainActor [weak self] in
-                    if SettingsWindowManager.shared.isWindowOpen {
-                        SettingsWindowManager.shared.closeSettingsWindow()
-                    } else {
-                        self?.showSettingsWindow()
-                    }
-                }
-                return
-            }
-            guard self.positionStore.isPositionUnlocked else { return }
-            // Escape (53) or Return (36) immediately locks position
-            if event.keyCode == 53 || event.keyCode == 36 {
-                Task { @MainActor [weak self] in
-                    self?.positionStore.lockPosition()
-                }
+            Task { @MainActor [weak self] in
+                self?.handleKeyEvent(event)
             }
         }
     }
@@ -291,7 +265,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         engine.persistState()
     }
 
-    /// Configures standard application menu shortcuts (`⌘Q` to Quit, `⌘W` to Close, `⌘,` for Settings)
+    /// Configures standard application menu shortcuts (`⌘Q` to Quit, `⌘W` to Close, `⌘,` for Settings, `⌘P` to Pet, `⌘=`/`⌘-` to Scale, `⌘]`/`⌘[` for Opacity)
     /// even when running as an accessory menu bar application.
     public func setupApplicationMenu() {
         guard NSApp?.mainMenu == nil else { return }
@@ -319,6 +293,47 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(settingsItem)
         appMenu.addItem(NSMenuItem.separator())
 
+        let petItem = NSMenuItem(
+            title: "Pet Bitz",
+            action: #selector(petBitzAction),
+            keyEquivalent: "p"
+        )
+        petItem.target = self
+        appMenu.addItem(petItem)
+
+        let scaleUpItem = NSMenuItem(
+            title: "Scale Mascot Larger",
+            action: #selector(scaleUpAction),
+            keyEquivalent: "="
+        )
+        scaleUpItem.target = self
+        appMenu.addItem(scaleUpItem)
+
+        let scaleDownItem = NSMenuItem(
+            title: "Scale Mascot Smaller",
+            action: #selector(scaleDownAction),
+            keyEquivalent: "-"
+        )
+        scaleDownItem.target = self
+        appMenu.addItem(scaleDownItem)
+
+        let opacityUpItem = NSMenuItem(
+            title: "Increase Mascot Opacity",
+            action: #selector(increaseOpacityAction),
+            keyEquivalent: "]"
+        )
+        opacityUpItem.target = self
+        appMenu.addItem(opacityUpItem)
+
+        let opacityDownItem = NSMenuItem(
+            title: "Decrease Mascot Opacity",
+            action: #selector(decreaseOpacityAction),
+            keyEquivalent: "["
+        )
+        opacityDownItem.target = self
+        appMenu.addItem(opacityDownItem)
+        appMenu.addItem(NSMenuItem.separator())
+
         let closeItem = NSMenuItem(
             title: "Close Window",
             action: #selector(NSWindow.performClose(_:)),
@@ -337,6 +352,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         NSApp?.mainMenu = mainMenu
     }
 
+    // MARK: - Menu & Shortcut Actions
+
     @objc public func showSettingsWindow() {
         SettingsWindowManager.shared.showSettingsWindow(
             rootView: SettingsRootView(
@@ -354,6 +371,115 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
                 audioPlayer: audioService
             )
         )
+    }
+
+    @objc public func toggleSettingsWindow() {
+        if SettingsWindowManager.shared.isWindowOpen {
+            SettingsWindowManager.shared.closeSettingsWindow()
+        } else {
+            showSettingsWindow()
+        }
+    }
+
+    @objc public func petBitzAction() {
+        engine.triggerPetInteraction()
+    }
+
+    @objc public func scaleUpAction() {
+        scaleStore.stepUp()
+    }
+
+    @objc public func scaleDownAction() {
+        scaleStore.stepDown()
+    }
+
+    @objc public func increaseOpacityAction() {
+        opacityStore.stepUp()
+    }
+
+    @objc public func decreaseOpacityAction() {
+        opacityStore.stepDown()
+    }
+
+    @objc public func lockPositionAction() {
+        positionStore.lockPosition()
+    }
+
+    /// Handles keyboard shortcuts locally or globally without stealing key focus.
+    @MainActor
+    @discardableResult
+    public func handleKeyEvent(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let cmd = flags.contains(.command)
+        let opt = flags.contains(.option)
+        let ctrl = flags.contains(.control)
+        let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        let keyCode = event.keyCode
+
+        // 1. Toggle / Open Settings Window: ⌥⌘B or ⌘,
+        if (cmd && opt && !ctrl && (keyCode == 11 || chars == "b")) ||
+           (cmd && !opt && !ctrl && (keyCode == 43 || chars == ",")) {
+            toggleSettingsWindow()
+            return true
+        }
+
+        // 2. Lock position when dragging or unlocked: ⎋ Esc (53), ⏎ Return (36), or Enter (76)
+        if positionStore.isInteractivityEnabled && (keyCode == 53 || keyCode == 36 || keyCode == 76) {
+            positionStore.lockPosition()
+            return true
+        }
+
+        // 3. Scale Mascot: ⌘- to step down, ⌘= / ⌘+ to step up
+        if cmd && !opt && !ctrl {
+            if keyCode == 27 || chars == "-" || chars == "_" {
+                scaleStore.stepDown()
+                return true
+            }
+            if keyCode == 24 || chars == "=" || chars == "+" {
+                scaleStore.stepUp()
+                return true
+            }
+        }
+
+        // 4. Opacity: ⌘[ to step down, ⌘] to step up
+        if cmd && !opt && !ctrl {
+            if keyCode == 33 || chars == "[" || chars == "{" {
+                opacityStore.stepDown()
+                return true
+            }
+            if keyCode == 30 || chars == "]" || chars == "}" {
+                opacityStore.stepUp()
+                return true
+            }
+        }
+
+        // 5. Pet Bitz: ⌘P, or bare 'P' when no text input is focused
+        if cmd && !opt && !ctrl && (keyCode == 35 || chars == "p") {
+            engine.triggerPetInteraction()
+            return true
+        }
+        if !cmd && !opt && !ctrl && (keyCode == 35 || chars == "p") {
+            if !isFirstResponderTextInput() {
+                engine.triggerPetInteraction()
+                return true
+            }
+        }
+
+        // 6. Quit: ⌘Q
+        if cmd && !opt && !ctrl && (keyCode == 12 || chars == "q") {
+            NSApplication.shared.terminate(nil)
+            return true
+        }
+
+        return false
+    }
+
+    private func isFirstResponderTextInput() -> Bool {
+        guard let keyWindow = NSApp?.keyWindow,
+              let firstResponder = keyWindow.firstResponder else {
+            return false
+        }
+        return firstResponder is NSText || firstResponder is NSTextView || firstResponder is NSTextField
     }
 
     /// Instantiates and positions the borderless, click-through `MascotOverlayPanel`(s)
@@ -624,7 +750,40 @@ struct BitzMenuBarContentView: View {
 
             Divider()
 
-            // MARK: - 3. Dedicated Settings Entrance
+            // MARK: - 3. Appearance Quick Adjustments
+            Menu {
+                Button("Scale Mascot Larger (⌘=)") {
+                    scaleStore.stepUp()
+                }
+                .keyboardShortcut("=", modifiers: [.command])
+                .disabled(!scaleStore.canStepUp)
+
+                Button("Scale Mascot Smaller (⌘-)") {
+                    scaleStore.stepDown()
+                }
+                .keyboardShortcut("-", modifiers: [.command])
+                .disabled(!scaleStore.canStepDown)
+
+                Divider()
+
+                Button("Increase Opacity (⌘])") {
+                    opacityStore.stepUp()
+                }
+                .keyboardShortcut("]", modifiers: [.command])
+                .disabled(!opacityStore.canStepUp)
+
+                Button("Decrease Opacity (⌘[)") {
+                    opacityStore.stepDown()
+                }
+                .keyboardShortcut("[", modifiers: [.command])
+                .disabled(!opacityStore.canStepDown)
+            } label: {
+                Label("Size & Opacity", systemImage: "arrow.up.left.and.arrow.down.right")
+            }
+
+            Divider()
+
+            // MARK: - 4. Dedicated Settings Entrance
             Button("Settings...") {
                 openSettingsWindow()
             }
@@ -641,7 +800,7 @@ struct BitzMenuBarContentView: View {
             Button("Quit Bitz") {
                 NSApplication.shared.terminate(nil)
             }
-            .keyboardShortcut("q")
+            .keyboardShortcut("q", modifiers: [.command])
         }
         .padding(8)
     }
@@ -696,7 +855,7 @@ struct BitzMenuBarContentView: View {
             engine.triggerPetInteraction()
         }
         .accessibilityLabel("Pet Bitz")
-        .keyboardShortcut("p")
+        .keyboardShortcut("p", modifiers: [.command])
 
         Toggle(positionStore.isMascotVisible ? "Mascot Visible on Screen" : "Mascot Hidden (Click to Show)", isOn: $positionStore.isMascotVisible)
 
