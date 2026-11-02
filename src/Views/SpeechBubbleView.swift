@@ -8,12 +8,16 @@ public enum SpeechBubbleContent {
     case wellness(String)
     case carousel(String)
 
-    /// Only the update alert has buttons, so it is the only bubble that takes clicks.
+    /// Update alert and agent warning bubbles have buttons, so they are the only bubbles that take clicks.
     public var isInteractive: Bool {
-        if case .update = self {
+        switch self {
+        case .update:
             return true
+        case .agentPopup(let popup):
+            return popup.kind == .warning
+        case .wellness, .carousel:
+            return false
         }
-        return false
     }
 
     @MainActor
@@ -91,6 +95,8 @@ public struct SpeechBubbleView: View {
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings
         ) {
+        case .agentPopup(let popup) where popup.kind == .warning:
+            warningBubbleView(popup)
         case .agentPopup(let popup):
             let colors = agentPopupColors(for: popup.kind)
             textBubble(popup.text, fill: colors.fill, stroke: colors.stroke)
@@ -132,9 +138,44 @@ public struct SpeechBubbleView: View {
             return (Color.yellow, Color(red: 0.85, green: 0.45, blue: 0.05).opacity(0.96))
         case .done:
             return (Color.green, Color(red: 0.05, green: 0.65, blue: 0.35).opacity(0.96))
-        case .started, .working:
+        case .almostDone:
+            // Neon Magenta (#FF007F) on violet: eager, no button
+            return (MascotOverlayView.visorColor(for: .superCharged), Color(red: 0.42, green: 0.10, blue: 0.55).opacity(0.96))
+        case .warning:
+            // Warning Amber (#FFB000), the same colour as the warning visor
+            return (MascotOverlayView.visorColor(for: .overworked), Color(red: 0.45, green: 0.12, blue: 0.04).opacity(0.96))
+        case .started, .working, .usage:
+            // `.usage` never reaches the bubble
             return (Color.cyan, Color(red: 0.12, green: 0.45, blue: 0.85).opacity(0.96))
         }
+    }
+
+    private func warningBubbleView(_ popup: AgentPopupState) -> some View {
+        let colors = agentPopupColors(for: .warning)
+        return VStack(spacing: 5) {
+            Text(popup.text)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .multilineTextAlignment(.center)
+                .lineLimit(4)
+                .minimumScaleFactor(0.75)
+                .foregroundStyle(Color.white)
+
+            Button(action: { agentMonitor.acknowledgeWarning() }) {
+                Text("GOT IT")
+                    .font(.system(size: 8, weight: .heavy, design: .monospaced))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(colors.stroke))
+                    .foregroundStyle(Color.black)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: Self.maxBubbleWidth)
+        .background(RoundedRectangle(cornerRadius: 8).fill(colors.fill))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(colors.stroke, lineWidth: 1.5))
+        .shadow(color: colors.stroke.opacity(0.6), radius: 6)
     }
 
     private func updateBubbleView(for release: GitHubReleaseInfo) -> some View {

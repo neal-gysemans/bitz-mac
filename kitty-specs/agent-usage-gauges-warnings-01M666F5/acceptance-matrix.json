@@ -1,0 +1,149 @@
+{
+  "mission_slug": "agent-usage-gauges-warnings-01M666F5",
+  "mission_number": "",
+  "mission_type": "software-dev",
+  "overall_verdict": "pass",
+  "criteria": [
+    {
+      "criterion_id": "FR-001",
+      "description": "Verify FR-001 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-001 (PASS): MascotOverlayPanelTests.testOverlayPanelWindowInvariantsMatchContractByteForByte, testBottomRightOriginCalculationAndScreenPositioning; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:39.877700+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    },
+    {
+      "criterion_id": "FR-002",
+      "description": "Verify FR-002 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-002 (PASS): WellnessPointEngineTests.testInitialDefaultStateIsBalancedAtFiftyPoints, testProductiveWorkTickAddsHalfPointAndTransitionsToSuperCharged; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:40.969043+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    },
+    {
+      "criterion_id": "FR-003",
+      "description": "Verify FR-003 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-003 (PASS): WellnessPointEngineTests.testRiveContractConstantsMatchSpecificationByteForByte, testExactBoundaryThresholds; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:42.079001+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    },
+    {
+      "criterion_id": "FR-004",
+      "description": "Verify FR-004 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-004 (PASS): WellnessPointEngineTests.testThermalWarningOverridesStateAndRestoresUnderlyingStateWhenCleared, ActivityMonitorServiceTests.testThermalOverheatingByTemperatureAndThermalStateAndRecovery; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:43.167320+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    },
+    {
+      "criterion_id": "FR-005",
+      "description": "Verify FR-005 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-005 (PASS): ActivityMonitorServiceTests.testProductiveBundleIDClassification, testProductiveAndUnproductiveSampleTicksUpdateWellnessEngine; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:44.273936+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    },
+    {
+      "criterion_id": "FR-006",
+      "description": "Verify FR-006 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-006 (PASS): WellnessPointEngineTests.testTriggerPetInteractionFiresRiveTriggerPetInput, WellnessPointEngineTests.testRapidPetInteractionDebouncesAndCancelsPreviousDismissal; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:45.303088+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    },
+    {
+      "criterion_id": "FR-007",
+      "description": "Verify FR-007 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-007 (PASS): Verified in Milestone 4 (F13, F14; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:46.370033+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    },
+    {
+      "criterion_id": "FR-008",
+      "description": "Verify FR-008 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-008 (PASS): MascotOverlayPanelTests.testAvatarScaleStoreDefaultPresetsAndStepClamping, testAvatarScaleStoreUserDefaultsPersistenceAndSanitization; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:47.440050+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    },
+    {
+      "criterion_id": "FR-009",
+      "description": "Verify FR-009 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-009 (PASS): MascotOverlayPanelTests.testAvatarOpacityStoreDefaultPresetsAndClamping; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:48.549311+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    },
+    {
+      "criterion_id": "FR-010",
+      "description": "Verify FR-010 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-010 (PASS): MascotOverlayPanelTests.testScreenCornerAnchorsAndRepositioning; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:49.629310+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    },
+    {
+      "criterion_id": "FR-011",
+      "description": "Verify FR-011 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-011 (PASS): WellnessPointEngineTests.testWellnessPointEnginePersistenceAndOfflineBreakRestoration, WellnessPointEngineTests.testPersistenceRejectsEpochZeroTimestampAndDoesNotGrantFiftyFourYearBreak; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:50.730928+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    },
+    {
+      "criterion_id": "FR-012",
+      "description": "Verify FR-012 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-012 (PASS): ActivityMonitorServiceTests.testChromiumSNSSSessionURLExtractionSupportsOtherBrowsers, ActivityMonitorServiceTests.testCustomAppRulesAndSleepWakeHandling; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:51.841542+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    },
+    {
+      "criterion_id": "FR-013",
+      "description": "Verify FR-013 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-013 (PASS (limitation L4)): AgentSignalPolicyTests.testPopupsDisabledKeepsWarningStateWithoutBubble, testDisablingAgentClearsWarningReadingAndSession; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:52.896944+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    },
+    {
+      "criterion_id": "FR-014",
+      "description": "Verify FR-014 is satisfied",
+      "proof_type": "automated_test",
+      "evidence": "docs/ACCEPTANCE_CRITERIA.md \u00a75.1 FR-014 (PASS (limitation L3)): SessionLogTailTests.testAttachSeedsAtMostLastSeedLimitBytesAndDropsPartialFirstLine, ClaudeCodeTranscriptAdapterTests.testStartupSeedsUsageSilentlyFromTail; xcrun swift test 258 tests 0 failures; release walkthrough 2026-10-31 \u00a71\u2013\u00a75 pass",
+      "pass_fail": "pass",
+      "verified_by": "claude (orchestrator)",
+      "verified_at": "2026-10-31T11:54:53.948369+00:00",
+      "notes": "TODO: replace with a real acceptance criterion"
+    }
+  ],
+  "negative_invariants": []
+}

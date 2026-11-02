@@ -29,6 +29,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
     nonisolated(unsafe) private var localKeyMonitor: Any?
     nonisolated(unsafe) private var globalKeyMonitor: Any?
     private var bubbleInteractivityCancellable: AnyCancellable?
+    private var warningVisorCancellable: AnyCancellable?
     private var screenReconfigTask: Task<Void, Never>?
 
     public override convenience init() {
@@ -72,7 +73,11 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         let processAdapter = ProcessAgentAdapter()
         let dropboxAdapter = DropboxAgentAdapter()
         let antigravityAdapter = AntigravityTranscriptAdapter()
-        self.agentMonitor = AgentMonitorService(adapters: [processAdapter, dropboxAdapter, antigravityAdapter])
+        let claudeAdapter = ClaudeCodeTranscriptAdapter()
+        self.agentMonitor = AgentMonitorService(
+            adapters: [processAdapter, dropboxAdapter, antigravityAdapter, claudeAdapter],
+            userDefaults: userDefaults
+        )
 
         self.telemetryDashboard.bindDependencies(
             agentMonitor: self.agentMonitor,
@@ -116,6 +121,14 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         .sink { [weak self] in
             self?.updatePanelsInteractivity()
         }
+        // The engine only gets a flag, so agent policy stays in AgentMonitorService (R10)
+        self.warningVisorCancellable = self.agentMonitor.$activeWarning
+            .map { $0 != nil }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] active in
+                self?.engine.setWarningVisor(active: active)
+            }
         self.displayStore.onDisplayPreferenceChanged = { [weak self] in
             self?.syncOverlayPanels()
         }
@@ -483,7 +496,19 @@ struct BitzMenuBarContentView: View {
                     .foregroundStyle(.orange)
             }
 
-            if let agentPopup = agentMonitor.activePopup {
+            if let agentWarning = agentMonitor.activeWarning {
+                Divider()
+                Text(agentWarning.text)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .lineLimit(3)
+                Button("Dismiss Agent Warning") {
+                    agentMonitor.acknowledgeWarning()
+                }
+            }
+
+            // The warning popup's text is already shown above
+            if let agentPopup = agentMonitor.activePopup, agentPopup.kind != .warning {
                 Divider()
                 Text(agentPopup.text)
                     .font(.caption)

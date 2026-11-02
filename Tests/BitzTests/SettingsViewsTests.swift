@@ -69,6 +69,54 @@ final class SettingsViewsTests: XCTestCase {
         XCTAssertEqual(engine.currentPoints, 90.0)
     }
 
+    func testAgentSignalsCardSettingsPersistAndClamp() {
+        let suiteName = "AgentSignalsCardTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let monitor = AgentMonitorService(adapters: [], userDefaults: defaults)
+        let tab = AgentsSettingsTabView(agentMonitor: monitor)
+        _ = tab.body
+
+        // Toggles and steppers bind `$agentMonitor.signalSettings.<field>`; this checks persistence of those fields,
+        // not the SwiftUI controls themselves. The window picker goes through its real binding.
+        monitor.signalSettings.loopWarningEnabled = false
+        monitor.signalSettings.contextThresholdPercent = 95
+        tab.windowBinding("claude").wrappedValue = 1_000_000
+
+        let reloaded = AgentMonitorService(adapters: [], userDefaults: defaults)
+        XCTAssertEqual(reloaded.signalSettings, monitor.signalSettings)
+        XCTAssertFalse(reloaded.signalSettings.loopWarningEnabled)
+        XCTAssertEqual(reloaded.signalSettings.contextThresholdPercent, 95)
+        XCTAssertEqual(reloaded.signalSettings.contextWindow(for: "claude"), 1_000_000)
+
+        monitor.signalSettings.contextThresholdPercent = 120
+        XCTAssertEqual(monitor.signalSettings.contextThresholdPercent, 99)
+    }
+
+    func testContextWindowBindingsIgnoreInvalidTokensAndDeriveCustom() {
+        let suiteName = "AgentSignalsWindowTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let monitor = AgentMonitorService(adapters: [], userDefaults: defaults)
+        let tab = AgentsSettingsTabView(agentMonitor: monitor)
+
+        // Custom field: typing 0 or a negative value never reaches the store.
+        tab.windowBinding("claude").wrappedValue = 0
+        tab.windowBinding("claude").wrappedValue = -5
+        XCTAssertEqual(monitor.signalSettings.contextWindow(for: "claude"), 200_000)
+
+        // Picker: presets select themselves, anything else reads as Custom.
+        XCTAssertEqual(tab.windowPresetBinding("claude").wrappedValue, 200_000)
+        XCTAssertEqual(tab.windowPresetBinding("antigravity").wrappedValue, 1_000_000)
+        tab.windowBinding("claude").wrappedValue = 150_000
+        XCTAssertEqual(tab.windowPresetBinding("claude").wrappedValue, AgentsSettingsTabView.customWindowTag)
+
+        tab.windowPresetBinding("claude").wrappedValue = 1_000_000
+        XCTAssertEqual(monitor.signalSettings.contextWindow(for: "claude"), 1_000_000)
+    }
+
     func testGeneralSettingsTabViewInteractions() {
         let suiteName = "GeneralSettingsTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

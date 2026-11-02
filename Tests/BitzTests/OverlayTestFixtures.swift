@@ -39,7 +39,7 @@ final class OverlayFixture {
         scaleStore = AvatarScaleStore(userDefaults: defaults)
         opacityStore = AvatarOpacityStore(userDefaults: defaults)
         positionStore = AvatarPositionStore(userDefaults: defaults)
-        agentMonitor = AgentMonitorService(adapters: [])
+        agentMonitor = AgentMonitorService(adapters: [], userDefaults: defaults)
         updateStore = AppUpdateStore(
             currentVersionString: "1.2.0",
             updateService: StubUpdateService(release: Self.release),
@@ -63,6 +63,15 @@ final class OverlayFixture {
 
     func showApprovalPopup(_ message: String) {
         agentMonitor.handleEvent(AgentEvent(agentID: "claude", agentName: "Claude", kind: .needsApproval, message: message))
+    }
+
+    func showWarning(_ text: String) {
+        agentMonitor.handleEvent(AgentEvent(agentID: "claude", agentName: "Claude", kind: .warning, message: text,
+                                            metadata: [AgentEvent.MetadataKey.reason: "reported"]))
+    }
+
+    func showAlmostDone(_ text: String) {
+        agentMonitor.handleEvent(AgentEvent(agentID: "claude", agentName: "Claude", kind: .almostDone, message: text))
     }
 
     func mascotView(onEarTopChanged: ((CGFloat) -> Void)? = nil) -> MascotOverlayView {

@@ -172,8 +172,8 @@ Bitz features multi-channel signaling to monitor your AI coding companions witho
 ### Supported Agents & Signal Channels
 | Agent | Signal Channel | Supported Signals | Integration Details |
 | :--- | :--- | :--- | :--- |
-| **Claude Code** | Drop-box hooks in `~/.claude/settings.json` | `.started`, `.working`, `.needsApproval`, `.done` | 1-click install via Menu Bar (`Stop` & `PermissionRequest` hooks) |
-| **Antigravity** | Live session transcript monitoring (`transcript.jsonl`) | `.working`, `.needsApproval`, `.done` | Automatic via `AntigravityTranscriptAdapter` monitoring `~/.gemini/antigravity/brain/` |
+| **Claude Code** | Session log (`~/.claude/projects/<project>/<session>.jsonl`, read-only) + drop-box hooks | `.working`, `.done`, context gauge, loop & stall warnings (log); `.needsApproval` (hook) | Automatic via `ClaudeCodeTranscriptAdapter`; optional 1-click hooks via Menu Bar (`Stop` & `PermissionRequest`) |
+| **Antigravity** | Live session transcript monitoring (`transcript.jsonl`) | `.working`, `.needsApproval`, `.done`, context gauge, loop & stall warnings | Automatic via `AntigravityTranscriptAdapter` monitoring `~/.gemini/antigravity/brain/` |
 | **Codex CLI / ChatGPT** | Drop-box event script or `notify` config | `.started`, `.done` | Drop-box JSON files written to `Bitz/agent-events/` |
 | **Cursor / Windsurf / Copilot** | Process & bundle ID detection | `.started`, `.working` (focus PTS boost) | Automatically detected as active productive developer apps |
 | **Custom Agents** | User-defined processes & bundle IDs | `.started`, `.working`, `.done` | Configurable in Menu Bar or programmatically in `AgentMonitorService` |
@@ -192,6 +192,16 @@ Any third-party script or agent can trigger Bitz speech bubbles by dropping a `.
   "timestamp": "2026-10-28T12:00:00Z"
 }
 ```
+
+`kind` is one of `started`, `working`, `needsApproval`, `done`, `almostDone`, `warning` or `usage`, with optional string/number `metadata` (full schema: [`docs/agent-dropbox-event.schema.json`](docs/agent-dropbox-event.schema.json)). Bitz has no built-in "almost done" detector; scripts send `almostDone` themselves. Examples:
+
+```json
+{ "agentID": "claude", "agentName": "Claude", "kind": "almostDone", "message": "✨ Claude is almost done!" }
+{ "agentID": "claude", "agentName": "Claude", "kind": "warning", "message": "⚠️ Build failed", "metadata": { "reason": "reported" } }
+{ "agentID": "codex", "agentName": "Codex", "kind": "usage", "metadata": { "contextTokens": 185000 } }
+```
+
+A warning stays until **GOT IT**, menu bar **Dismiss Agent Warning**, or the same agent's `done` / `needsApproval`; the visor turns amber meanwhile. Thresholds and toggles live in Settings → AI Agents → Agent Signals & Warnings.
 
 ---
 

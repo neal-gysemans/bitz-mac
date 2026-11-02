@@ -326,4 +326,74 @@ final class TelemetryDashboardServiceTests: XCTestCase {
         XCTAssertGreaterThan(service.snapshot.disk.totalBytes, 0)
         XCTAssertGreaterThan(service.snapshot.ram.totalBytes, 0)
     }
+
+    // MARK: - 6. Agent Context Gauge (FR-006)
+
+    private let claudeContext = AgentContextReading(agentID: "claude", agentName: "Claude", tokens: 148_000, windowTokens: 200_000)
+
+    func testAgentsMetricShowsContextInBadgeSummaryAndTitle() {
+        let agents = AgentTelemetry(activeCount: 1, agentNames: ["Claude"], context: claudeContext)
+        let snapshot = TelemetrySnapshot(agents: agents)
+
+        XCTAssertEqual(agents.compactBadge, "1 AGTS · 74%")
+        XCTAssertEqual(agents.formattedSummary, "1 active (Claude) · Claude ctx 148k · 74%")
+        XCTAssertEqual(snapshot.hudSummary(enabledMetrics: [.agents], focusPoints: 0), "1 AGTS · 74% • 0 PTS")
+        XCTAssertEqual(snapshot.speechBubbleCarouselMessages(enabledMetrics: [.agents]), ["🤖 1 active (Claude) · Claude ctx 148k · 74%"])
+        XCTAssertEqual(snapshot.menuBarTitle(enabledMetrics: [.agents]), "Bitz • 1 Agts 74%")
+    }
+
+    func testAgentsMetricUnchangedWithoutContext() {
+        let agents = AgentTelemetry(activeCount: 1, agentNames: ["Claude"])
+        let snapshot = TelemetrySnapshot(agents: agents)
+
+        XCTAssertNil(agents.context)
+        XCTAssertEqual(agents.compactBadge, "1 AGTS")
+        XCTAssertEqual(agents.formattedSummary, "1 active (Claude)")
+        XCTAssertEqual(snapshot.hudSummary(enabledMetrics: [.agents], focusPoints: 0), "1 AGTS • 0 PTS")
+        XCTAssertEqual(snapshot.speechBubbleCarouselMessages(enabledMetrics: [.agents]), ["🤖 1 active (Claude)"])
+        XCTAssertEqual(snapshot.menuBarTitle(enabledMetrics: [.agents]), "Bitz • 1 Agts")
+
+        // Nothing active and no reading: agents stay out of every placement.
+        let empty = TelemetrySnapshot(agents: .empty)
+        XCTAssertEqual(empty.hudSummary(enabledMetrics: [.agents], focusPoints: 0), "0 PTS")
+        XCTAssertEqual(empty.speechBubbleCarouselMessages(enabledMetrics: [.agents]), [])
+        XCTAssertEqual(empty.menuBarTitle(enabledMetrics: [.agents]), "Bitz")
+    }
+
+    func testLastContextReadingStaysVisibleWhenNoAgentIsActive() {
+        let idle = TelemetrySnapshot(agents: AgentTelemetry(activeCount: 0, context: claudeContext))
+
+        XCTAssertEqual(idle.agents.compactBadge, "CTX 74%")
+        XCTAssertEqual(idle.hudSummary(enabledMetrics: [.agents], focusPoints: 0), "CTX 74% • 0 PTS")
+        XCTAssertEqual(idle.speechBubbleCarouselMessages(enabledMetrics: [.agents]),
+                       ["🤖 No agents currently active · Claude ctx 148k · 74%"])
+        XCTAssertEqual(idle.menuBarTitle(enabledMetrics: [.agents]), "Bitz • Ctx 74%")
+    }
+
+    func testDashboardKeepsLastContextReadingAfterTurnEnds() async {
+        let suiteName = "TelemetryAgentContext.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let monitor = AgentMonitorService(adapters: [], userDefaults: defaults)
+        let service = TelemetryDashboardService(
+            settingsStore: TelemetrySettingsStore(userDefaults: defaults),
+            provider: MockTelemetryDataProvider(),
+            agentMonitor: monitor
+        )
+
+        monitor.handleEvent(AgentEvent(agentID: "claude", agentName: "Claude", kind: .working))
+        monitor.handleEvent(AgentEvent(agentID: "claude", agentName: "Claude", kind: .usage,
+                                       metadata: [AgentEvent.MetadataKey.contextTokens: "148000"]))
+        await service.performSampleTick()
+        XCTAssertEqual(service.snapshot.agents.context, claudeContext)
+        XCTAssertEqual(service.snapshot.agents.compactBadge, "1 AGTS · 74%")
+
+        // The turn ends: the reading stays, which is when it is most worth checking.
+        monitor.handleEvent(AgentEvent(agentID: "claude", agentName: "Claude", kind: .done))
+        await service.performSampleTick()
+        XCTAssertEqual(service.snapshot.agents.activeCount, 0)
+        XCTAssertEqual(service.snapshot.agents.context, claudeContext)
+        XCTAssertEqual(service.snapshot.agents.compactBadge, "CTX 74%")
+    }
 }

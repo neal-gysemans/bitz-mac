@@ -1,0 +1,165 @@
+{
+  "event_count": 86,
+  "last_event_id": "01M68X23HH32PEHJAN7SVZ0QY3",
+  "materialized_at": "2026-10-31T11:55:59.409795+00:00",
+  "mission_number": "",
+  "mission_slug": "agent-usage-gauges-warnings-01M666F5",
+  "mission_type": "",
+  "summary": {
+    "approved": 0,
+    "blocked": 0,
+    "canceled": 0,
+    "claimed": 0,
+    "done": 9,
+    "for_review": 0,
+    "in_progress": 0,
+    "in_review": 0,
+    "planned": 0
+  },
+  "work_packages": {
+    "WP01": {
+      "actor": "merge",
+      "agent": "claude",
+      "force_count": 1,
+      "lane": "done",
+      "last_event_id": "01M68X20KGRWJW0KJBEMW2FSDH",
+      "last_transition_at": "2026-10-31T11:55:56.400160+00:00",
+      "review_result": {
+        "feedback_path": "/Users/nealgysemans/Code/bitz-mac/kitty-specs/agent-usage-gauges-warnings-01M666F5/tasks/WP01-event-model-and-dropbox-contract/review-cycle-1.md",
+        "reference": "review-cycle://agent-usage-gauges-warnings-01M666F5/WP01-event-model-and-dropbox-contract/review-cycle-1.md",
+        "reviewer": "reviewer-renata (claude/fable)",
+        "verdict": "approved"
+      },
+      "shell_pid": 56650,
+      "shell_pid_created_at": "1793369942.232185"
+    },
+    "WP02": {
+      "actor": "merge",
+      "agent": "claude",
+      "force_count": 2,
+      "lane": "done",
+      "last_event_id": "01M68X21021DG54A864HAWBXCZ",
+      "last_transition_at": "2026-10-31T11:55:56.802121+00:00",
+      "review_result": {
+        "feedback_path": "/Users/nealgysemans/Code/bitz-mac/kitty-specs/agent-usage-gauges-warnings-01M666F5/tasks/WP02-monitor-policy-and-signal-settings/review-cycle-1.md",
+        "reference": "review-cycle://agent-usage-gauges-warnings-01M666F5/WP02-monitor-policy-and-signal-settings/review-cycle-1.md",
+        "reviewer": "reviewer-renata (claude/fable)",
+        "verdict": "approved"
+      },
+      "shell_pid": 65537,
+      "shell_pid_created_at": "1793370998.813271"
+    },
+    "WP03": {
+      "actor": "merge",
+      "agent": "claude",
+      "force_count": 5,
+      "lane": "done",
+      "last_event_id": "01M68X21BM3KP6378QYRSVSK0D",
+      "last_transition_at": "2026-10-31T11:55:57.172725+00:00",
+      "review_result": {
+        "feedback_path": "/Users/nealgysemans/Code/bitz-mac/kitty-specs/agent-usage-gauges-warnings-01M666F5/tasks/WP03-shared-session-log-foundation/review-cycle-3.md",
+        "reference": "review-cycle://agent-usage-gauges-warnings-01M666F5/WP03-shared-session-log-foundation/review-cycle-3.md",
+        "reviewer": "reviewer-renata (claude/fable)",
+        "verdict": "approved"
+      },
+      "shell_pid": 11660,
+      "shell_pid_created_at": "1793376123.738235"
+    },
+    "WP04": {
+      "actor": "merge",
+      "agent": "claude",
+      "force_count": 5,
+      "lane": "done",
+      "last_event_id": "01M68X21PZD6BAKEHGHZNC7HNN",
+      "last_transition_at": "2026-10-31T11:55:57.536012+00:00",
+      "review_result": {
+        "feedback_path": "/Users/nealgysemans/Code/bitz-mac/kitty-specs/agent-usage-gauges-warnings-01M666F5/tasks/WP04-claude-code-transcript-adapter/review-cycle-3.md",
+        "reference": "review-cycle://agent-usage-gauges-warnings-01M666F5/WP04-claude-code-transcript-adapter/review-cycle-3.md",
+        "reviewer": "reviewer-renata (claude/fable)",
+        "verdict": "approved"
+      },
+      "shell_pid": 15995,
+      "shell_pid_created_at": "1793376536.04228"
+    },
+    "WP05": {
+      "actor": "merge",
+      "agent": "claude",
+      "force_count": 5,
+      "lane": "done",
+      "last_event_id": "01M68X222EWW7VGN3CV03BHFDN",
+      "last_transition_at": "2026-10-31T11:55:57.902339+00:00",
+      "review_result": {
+        "feedback_path": "/Users/nealgysemans/Code/bitz-mac/kitty-specs/agent-usage-gauges-warnings-01M666F5/tasks/WP05-antigravity-usage-and-loop-signals/review-cycle-3.md",
+        "reference": "review-cycle://agent-usage-gauges-warnings-01M666F5/WP05-antigravity-usage-and-loop-signals/review-cycle-3.md",
+        "reviewer": "reviewer-renata (claude/fable)",
+        "verdict": "approved"
+      },
+      "shell_pid": 16175,
+      "shell_pid_created_at": "1793376540.922821"
+    },
+    "WP06": {
+      "actor": "merge",
+      "agent": "claude",
+      "force_count": 2,
+      "lane": "done",
+      "last_event_id": "01M68X235HGGRT7RC27J08MPYD",
+      "last_transition_at": "2026-10-31T11:55:59.025856+00:00",
+      "review_result": {
+        "feedback_path": "/Users/nealgysemans/Code/bitz-mac/kitty-specs/agent-usage-gauges-warnings-01M666F5/tasks/WP06-warning-bubble-amber-visor-and-wiring/review-cycle-1.md",
+        "reference": "review-cycle://agent-usage-gauges-warnings-01M666F5/WP06-warning-bubble-amber-visor-and-wiring/review-cycle-1.md",
+        "reviewer": "reviewer-renata (claude/fable)",
+        "verdict": "approved"
+      },
+      "shell_pid": 93600,
+      "shell_pid_created_at": "1793372708.923597"
+    },
+    "WP07": {
+      "actor": "merge",
+      "agent": "claude",
+      "force_count": 2,
+      "lane": "done",
+      "last_event_id": "01M68X22E3GB0W816G8G7E5DKY",
+      "last_transition_at": "2026-10-31T11:55:58.275988+00:00",
+      "review_result": {
+        "feedback_path": "/Users/nealgysemans/Code/bitz-mac/kitty-specs/agent-usage-gauges-warnings-01M666F5/tasks/WP07-context-gauge-on-agents-metric/review-cycle-1.md",
+        "reference": "review-cycle://agent-usage-gauges-warnings-01M666F5/WP07-context-gauge-on-agents-metric/review-cycle-1.md",
+        "reviewer": "reviewer-renata (claude/fable)",
+        "verdict": "approved"
+      },
+      "shell_pid": 78763,
+      "shell_pid_created_at": "1793371923.314158"
+    },
+    "WP08": {
+      "actor": "merge",
+      "agent": "claude",
+      "force_count": 2,
+      "lane": "done",
+      "last_event_id": "01M68X22SJEDEG7NK6V1CRQK10",
+      "last_transition_at": "2026-10-31T11:55:58.642779+00:00",
+      "review_result": {
+        "feedback_path": "/Users/nealgysemans/Code/bitz-mac/kitty-specs/agent-usage-gauges-warnings-01M666F5/tasks/WP08-agent-signals-settings-card/review-cycle-1.md",
+        "reference": "review-cycle://agent-usage-gauges-warnings-01M666F5/WP08-agent-signals-settings-card/review-cycle-1.md",
+        "reviewer": "reviewer-renata (claude/fable)",
+        "verdict": "approved"
+      },
+      "shell_pid": 79419,
+      "shell_pid_created_at": "1793371933.870366"
+    },
+    "WP09": {
+      "actor": "merge",
+      "agent": "claude",
+      "force_count": 4,
+      "lane": "done",
+      "last_event_id": "01M68X23HH32PEHJAN7SVZ0QY3",
+      "last_transition_at": "2026-10-31T11:55:59.409795+00:00",
+      "review_result": {
+        "feedback_path": "/Users/nealgysemans/Code/bitz-mac/kitty-specs/agent-usage-gauges-warnings-01M666F5/tasks/WP09-living-docs-and-release-verification/review-cycle-2.md",
+        "reference": "review-cycle://agent-usage-gauges-warnings-01M666F5/WP09-living-docs-and-release-verification/review-cycle-2.md",
+        "reviewer": "reviewer-renata (claude/fable)",
+        "verdict": "approved"
+      },
+      "shell_pid": 99826,
+      "shell_pid_created_at": "1793447514.857186"
+    }
+  }
+}

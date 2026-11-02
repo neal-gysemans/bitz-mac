@@ -289,4 +289,46 @@ final class SpeechBubblePanelTests: XCTestCase {
         positionStore.lockPosition()
         XCTAssertTrue(panel.ignoresMouseEvents)
     }
+
+    // Synchronous for the same reason as `testOnlyABubbleWithButtonsTakesClicks`
+    func testWarningBubbleTakesClicksOnlyUntilAcknowledged() throws {
+        let (defaults, cleanup) = createIsolatedDefaults()
+        defer { cleanup() }
+
+        let delegate = BitzAppDelegate(
+            telemetryProvider: MockTelemetryProvider(),
+            scaleStore: AvatarScaleStore(userDefaults: defaults),
+            opacityStore: AvatarOpacityStore(userDefaults: defaults),
+            positionStore: AvatarPositionStore(userDefaults: defaults),
+            displayStore: DisplayPreferenceStore(userDefaults: defaults),
+            updateStore: AppUpdateStore(userDefaults: defaults),
+            userDefaults: defaults
+        )
+        delegate.setupOverlayPanel()
+        defer { delegate.overlayPanels.forEach { $0.close() } }
+
+        let panel = try XCTUnwrap(delegate.overlayPanel)
+        let bubble = panel.speechBubblePanel
+        XCTAssertTrue(bubble.ignoresMouseEvents)
+        XCTAssertFalse(delegate.engine.isWarningVisorActive)
+
+        delegate.agentMonitor.handleEvent(AgentEvent(
+            agentID: "claude", agentName: "Claude", kind: .warning, message: "⚠️ Claude may be stuck",
+            metadata: [AgentEvent.MetadataKey.reason: "reported"]
+        ))
+        XCTAssertTrue(spinRunLoop(until: { !bubble.ignoresMouseEvents }), "GOT IT must be clickable")
+        XCTAssertTrue(panel.ignoresMouseEvents, "Mascot stays click-through during a warning")
+        XCTAssertTrue(spinRunLoop(until: { delegate.engine.isWarningVisorActive }), "A warning turns the visor Amber")
+        XCTAssertFalse(bubble.canBecomeKey, "Clicking GOT IT must not steal focus")
+
+        // GOT IT's action
+        delegate.agentMonitor.acknowledgeWarning()
+        XCTAssertTrue(spinRunLoop(until: { bubble.ignoresMouseEvents }), "Bubble reverts to click-through right after GOT IT")
+        XCTAssertTrue(spinRunLoop(until: { !delegate.engine.isWarningVisorActive }), "Acknowledging clears the Amber visor")
+
+        delegate.agentMonitor.handleEvent(AgentEvent(agentID: "claude", agentName: "Claude", kind: .almostDone, message: "✨ Claude is almost done!"))
+        XCTAssertEqual(delegate.agentMonitor.activePopup?.kind, .almostDone)
+        XCTAssertFalse(spinRunLoop(until: { !bubble.ignoresMouseEvents }, timeout: 0.3), "The almost-done bubble has no buttons")
+        XCTAssertFalse(bubble.canBecomeKey)
+    }
 }

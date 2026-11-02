@@ -73,6 +73,7 @@ final class ProcessAgentAdapterTests: XCTestCase {
         XCTAssertEqual(collector.snapshot.count, 3)
         XCTAssertEqual(collector.snapshot.last?.kind, .done)
         XCTAssertEqual(collector.snapshot.last?.message, "Claude finished")
+        XCTAssertTrue(collector.snapshot.allSatisfy(\.isProcessPresence), "Every process event is tagged source=process")
 
         adapter.stop()
     }

@@ -197,6 +197,46 @@ final class WellnessPointEngineTests: XCTestCase {
         XCTAssertEqual(spy.floatInputs["speedMultiplier"], 2.0)
     }
 
+    // MARK: - Agent Warning Visor (R10)
+
+    /// The Rive `visorColor` input and the drawn visor must always show the same colour (charter DIR-004).
+    func testWarningVisorDrivesRiveAmberAndMatchesDrawnVisor() {
+        let spy = SpyRiveController()
+        let engine = WellnessPointEngine(initialPoints: 50.0, riveController: spy)
+        // The drawn colour each pushed Rive value stands for
+        let drawnColorState: [Float: BitzState] = [
+            BitzVisorColor.cyan: .balanced,
+            BitzVisorColor.amber: .overworked,
+            BitzVisorColor.red: .overheating,
+        ]
+        func assertVisor(_ riveValue: Float, state: BitzState, line: UInt = #line) {
+            XCTAssertEqual(engine.currentState, state, "warning visor never changes the wellness state", line: line)
+            XCTAssertEqual(spy.floatInputs["visorColor"], riveValue, line: line)
+            let drawn = MascotOverlayView.visorRGB(for: engine.currentState, warningVisorActive: engine.isWarningVisorActive)
+            let expected = MascotOverlayView.visorRGB(for: drawnColorState[riveValue]!)
+            XCTAssertTrue(drawn == expected, "drawn visor must match the Rive input", line: line)
+        }
+
+        XCTAssertFalse(engine.isWarningVisorActive)
+        assertVisor(BitzVisorColor.cyan, state: .balanced)
+
+        engine.setWarningVisor(active: true)
+        XCTAssertTrue(engine.isWarningVisorActive)
+        assertVisor(BitzVisorColor.amber, state: .balanced)
+        XCTAssertEqual(engine.currentPoints, 50.0)
+
+        engine.triggerThermalWarning(isOverheating: true)
+        assertVisor(BitzVisorColor.red, state: .overheating)
+
+        engine.triggerThermalWarning(isOverheating: false)
+        assertVisor(BitzVisorColor.amber, state: .balanced)
+
+        engine.setWarningVisor(active: false)
+        XCTAssertFalse(engine.isWarningVisorActive)
+        assertVisor(BitzVisorColor.cyan, state: .balanced)
+        XCTAssertEqual(engine.currentPoints, 50.0)
+    }
+
     // MARK: - Pet Interaction Trigger & ProductionRiveController
 
     func testTriggerPetInteractionFiresRiveTriggerPetInput() {

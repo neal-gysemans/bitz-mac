@@ -7,6 +7,12 @@ public struct AgentsSettingsTabView: View {
 
     @State private var hookActionMessage: String? = nil
     @State private var isHookActionError: Bool = false
+    /// Agents whose window picker sits on Custom; needed because a preset value would otherwise snap the picker back.
+    @State private var customWindowAgentIDs: Set<String> = []
+
+    /// Picker tag for Custom; stored windows are always > 0 (`AgentSignalSettings.clamped()`).
+    static let customWindowTag = 0
+    private static let contextWindowAgents = [(id: "claude", name: "Claude Code"), (id: "antigravity", name: "Antigravity")]
 
     public init(agentMonitor: AgentMonitorService) {
         self.agentMonitor = agentMonitor
@@ -29,7 +35,51 @@ public struct AgentsSettingsTabView: View {
                 }
             }
 
-            // Section 2: Monitored Agents Catalog
+            // Section 2: Agent Signals (FR-012); WP02's didSet clamps and persists every change.
+            settingsCard(title: "Agent Signals & Warnings", systemImage: "exclamationmark.triangle.fill") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Almost Done Heads-Up", isOn: $agentMonitor.signalSettings.almostDoneEnabled)
+
+                    Toggle("Context Window Warnings", isOn: $agentMonitor.signalSettings.contextWarningEnabled)
+                    Stepper("Warn at \(agentMonitor.signalSettings.contextThresholdPercent)% context",
+                            value: $agentMonitor.signalSettings.contextThresholdPercent, in: 50...99, step: 5)
+                        .disabled(!agentMonitor.signalSettings.contextWarningEnabled)
+                        .padding(.leading, 20)
+
+                    Toggle("Tool Loop Warnings (4 identical calls)", isOn: $agentMonitor.signalSettings.loopWarningEnabled)
+
+                    Toggle("Stall Warnings", isOn: $agentMonitor.signalSettings.stallWarningEnabled)
+                    Stepper("Stall after \(agentMonitor.signalSettings.stallTimeoutMinutes) min without output",
+                            value: $agentMonitor.signalSettings.stallTimeoutMinutes, in: 1...30)
+                        .disabled(!agentMonitor.signalSettings.stallWarningEnabled)
+                        .padding(.leading, 20)
+
+                    hint("Turning off Agent Speech Bubbles hides bubbles only; the amber visor and context gauge keep working.")
+
+                    Divider()
+
+                    ForEach(Self.contextWindowAgents, id: \.id) { agent in
+                        HStack {
+                            Picker("\(agent.name) context window", selection: windowPresetBinding(agent.id)) {
+                                Text("200k").tag(200_000)
+                                Text("1M").tag(1_000_000)
+                                Text("Custom").tag(Self.customWindowTag)
+                            }
+                            .fixedSize()
+
+                            if windowPresetBinding(agent.id).wrappedValue == Self.customWindowTag {
+                                TextField("Tokens", value: windowBinding(agent.id), format: .number)
+                                    .frame(width: 110)
+                                    .accessibilityLabel("\(agent.name) context window in tokens")
+                            }
+                        }
+                    }
+
+                    hint("Bitz can't read the model's window size from session logs. Pick 1M if you use a 1M-context model.")
+                }
+            }
+
+            // Section 3: Monitored Agents Catalog
             settingsCard(title: "Monitored AI Agents (\(agentMonitor.activeAgents.count) Active)", systemImage: "cpu.fill") {
                 VStack(spacing: 8) {
                     ForEach(agentMonitor.catalog) { agent in
@@ -65,7 +115,7 @@ public struct AgentsSettingsTabView: View {
                 }
             }
 
-            // Section 3: Claude Code Integration
+            // Section 4: Claude Code Integration
             settingsCard(title: "Claude Code Hook Integration", systemImage: "terminal.fill") {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Install notification hooks to `~/.claude/settings.json` for real-time task completions and tool-use approval popups.")
@@ -118,6 +168,41 @@ public struct AgentsSettingsTabView: View {
     }
 
     // MARK: - Helpers
+
+    /// Custom window field; ignores `<= 0` so a half-typed value never reaches the store.
+    func windowBinding(_ id: String) -> Binding<Int> {
+        Binding(get: { agentMonitor.signalSettings.contextWindow(for: id) },
+                set: { if $0 > 0 { agentMonitor.signalSettings.contextWindowTokens[id] = $0 } })
+    }
+
+    /// Picker selection: the stored window when it is a preset (200k / 1M), else `customWindowTag`.
+    func windowPresetBinding(_ id: String) -> Binding<Int> {
+        Binding(
+            get: {
+                let tokens = agentMonitor.signalSettings.contextWindow(for: id)
+                let isPreset = tokens == 200_000 || tokens == 1_000_000
+                return isPreset && !customWindowAgentIDs.contains(id) ? tokens : Self.customWindowTag
+            },
+            set: { tag in
+                if tag == Self.customWindowTag {
+                    customWindowAgentIDs.insert(id)
+                } else {
+                    customWindowAgentIDs.remove(id)
+                    agentMonitor.signalSettings.contextWindowTokens[id] = tag
+                }
+            }
+        )
+    }
+
+    private func hint(_ text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "info.circle")
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
 
     private func agentIcon(for name: String) -> String {
         let lower = name.lowercased()

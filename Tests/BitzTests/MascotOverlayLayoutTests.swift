@@ -53,6 +53,27 @@ final class MascotOverlayLayoutTests: XCTestCase {
         try assertBubbleFitsItsWindow(fixture.bubbleView)
     }
 
+    func testWarningBubbleWithButtonAtLargestScaleIsNotClippedByItsWindow() throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        fixture.scaleStore.setScale(AvatarScaleStore.maxScaleFactor)
+        fixture.showWarning("⚠️ Claude may be stuck in a tool loop (Bash ×4): swift test --filter MascotOverlayLayoutTests --parallel")
+        XCTAssertEqual(fixture.agentMonitor.activePopup?.kind, .warning, "Warning bubble must be showing")
+        try assertBubbleFitsItsWindow(fixture.bubbleView)
+    }
+
+    func testAlmostDoneBubbleIsNotClippedByItsWindow() throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        fixture.showAlmostDone("✨ Claude is almost done! Wrapping up the overlay layout fixes and running the full test suite")
+        XCTAssertEqual(fixture.agentMonitor.activePopup?.kind, .almostDone, "Almost-done bubble must be showing")
+        try assertBubbleFitsItsWindow(fixture.bubbleView)
+    }
+
+    func testMascotWithWarningVisorStaysInsidePanel() throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        fixture.engine.setWarningVisor(active: true)
+        try assertNothingDrawnOutside(fixture.mascotView(), size: MascotOverlayPanel.defaultPanelSize)
+    }
+
     /// The bubble is anchored to `earOverflow`, so it must match where the ears are actually drawn.
     func testEarOverflowMatchesDrawnEarTips() throws {
         for isLoafPosture in [false, true] {

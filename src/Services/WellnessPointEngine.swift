@@ -190,6 +190,8 @@ public final class WellnessPointEngine: ObservableObject {
     @Published public private(set) var lastTickWasProductive: Bool = true
     @Published public var latestTemperatureCelsius: Double? = nil
     @Published public var latestCPULoadPercentage: Double? = nil
+    /// External alert (e.g. an agent warning) shown as an Amber visor; never changes state, points or thresholds.
+    @Published public private(set) var isWarningVisorActive = false
 
     public let maxPoints: Double = 100.0
     public let minPoints: Double = 0.0
@@ -433,7 +435,14 @@ public final class WellnessPointEngine: ObservableObject {
         }
     }
 
-    /// Pushes the current `BitzState` inputs to the bound `BitzRiveControllable`.
+    public func setWarningVisor(active: Bool) {
+        guard active != isWarningVisorActive else { return }
+        isWarningVisorActive = active
+        syncWithRive()
+    }
+
+    /// Pushes the current `BitzState` inputs to the bound `BitzRiveControllable`; the warning visor overrides
+    /// `visorColor` with Amber except while overheating (mirrored by `MascotOverlayView.visorRGB(for:warningVisorActive:)`).
     public func syncWithRive() {
         guard let rive = riveController else { return }
 
@@ -479,6 +488,10 @@ public final class WellnessPointEngine: ObservableObject {
             rive.setInput(BitzRiveInputName.visorColor, value: BitzVisorColor.red)
             rive.setInput(BitzRiveInputName.isGlitching, value: true)
             rive.setInput(BitzRiveInputName.isStandby, value: false)
+        }
+
+        if isWarningVisorActive && currentState != .overheating {
+            rive.setInput(BitzRiveInputName.visorColor, value: BitzVisorColor.amber)
         }
     }
 }

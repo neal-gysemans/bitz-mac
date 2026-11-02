@@ -1,88 +1,59 @@
-<!-- spec-kitty intake: ingested from issues/2026-10-29-settings-window-mascot-behavior.md at 2026-10-29T13:29:13.355387+00:00 -->
-<!-- brief_hash: 93070d60540e8fa91111b1d37c2a5da02a98c53038adc329dacd1079b3bd2024 -->
+<!-- spec-kitty intake: ingested from issues/2026-10-30-agent-usage-gauges-warnings.md at 2026-10-30T10:42:10.021006+00:00 -->
+<!-- brief_hash: e0b1a62aba50087d4e89bc0bf598cc2eba07dcadbebedea393cfaae6a8ab9582 -->
+
+# Feature Request: AI Agent Usage Gauges, "Almost Done" Milestones & Critical Warnings
+
+Tracks GitHub issue #38.
 
 ## Summary
-Introduce a dedicated macOS Settings / Preferences window to configure mascot behaviors, appearance, telemetry, and AI agent monitoring, decluttering the menu bar dropdown into a lightweight, glanceable menu.
+Extend Bitz's agent monitoring so the mascot gives an "almost done" heads-up, shows how full an agent's context window is, and raises warnings when an agent is close to its context limit, stuck in a tool-call loop, or stalled.
 
 ## Environment
 - **Product/Service**: bitz-mac (Bitz the Cyber Cat)
-- **Region/Version**: current `main`
+- **Region/Version**: current `main` + speech bubble panel rework (#61 / PR #62)
 - **Browser/OS**: macOS 14.0+ (Apple Silicon)
 
 ## Problem / Motivation
-Currently, all mascot controls, configuration options, and diagnostic tools live directly inside the `MenuBarExtra` dropdown (`BitzMenuBarContentView`). Even with submenu grouping, the menu has grown overloaded with:
-- Mascot size and opacity steppers and presets
-- Screen corner anchoring and dragging toggles
-- Multi-monitor routing and connected screen lists
-- Telemetry metrics toggles, display placements, polling cadence, and disk warning thresholds
-- Hardware sensor outputs, manual sampling triggers, and productive/distraction rule actions
-- Monitored AI agents, popup alerts, and hook installer actions
-- State simulation buttons and keybinds cheat sheet
-- Update checker and login items
+`AgentMonitorService` (`src/Services/AgentMonitorService.swift`) only knows `started`, `working`, `needsApproval` and `done`. During long agent runs the user cannot tell:
 
-Interacting with nested submenus inside a transient MenuBarExtra dropdown is cumbersome and prone to accidental dismissals. Menu bar menus are meant for fast, glanceable status and quick actions, while rich customization belongs in a dedicated macOS Settings window.
+1. **Progress**: whether a task is 10% or 95% done. There is no "almost done" heads-up before the final notification.
+2. **Context depletion**: when the agent's context window is nearly full (quality degrades, auto-compaction kicks in).
+3. **Silent loops and stalls**: an agent repeating the same tool call, or sitting in `working` with no output, burns budget unnoticed.
 
-## Reproduction Steps
-1. Launch Bitz on macOS.
-2. Click the Bitz cat icon in the macOS menu bar.
-3. Observe a deep, multi-tiered list of submenus and controls covering appearance, dragging, multi-monitor routing, telemetry toggles, hardware sensors, AI agents, simulator overrides, and update settings.
-4. Try configuring multiple telemetry metrics or sensor rules; the menu closes after each interaction.
+## Data Sources Available Today (verified locally)
+- **Claude Code** session transcripts (`~/.claude/projects/<project>/<session>.jsonl`): assistant lines carry `message.model` and `message.usage` (`input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`) and `tool_use` content blocks (name + input), including the todo list tool.
+- **Antigravity** transcripts (`~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript.jsonl`, already tailed by `AntigravityTranscriptAdapter`): lines carry `input_tokens`, `cache_read_tokens`, `output_tokens`, `step_index` and `tool_calls`.
+- **Drop-box JSON API** (`~/Library/Application Support/Bitz/agent-events/*.json`, `DropboxAgentAdapter`): any hook or script can emit events directly.
+- Neither transcript records the model's context window size, session cost, or rate-limit state.
 
 ## Expected Behavior
-- The menu bar dropdown is lightweight and glanceable:
-  - Current mascot state, streak, and focus PTS.
-  - Quick actions (e.g., "Pet Bitz", "Unlock / Lock Position").
-  - Concise active alert summary (e.g., active agent or thermal warning, if applicable).
-  - A clean `Settings...` menu item (with standard `⌘,` shortcut) that opens a dedicated Settings window.
-  - Minimal lifecycle items (`Check for Updates...`, `Quit Bitz`).
-- Clicking `Settings...` opens a native, tabbed macOS Preferences / Settings window where users can comfortably configure all mascot behaviors, telemetry, and integrations without the dropdown closing.
+1. **Almost Done**: when an agent enters the final step of its own task list (e.g. last todo item in progress), Bitz shows an eager "✨ Claude is almost done!" bubble.
+2. **Context gauge**: the existing AI Agents telemetry metric shows the active agent's context usage (e.g. `Claude ctx 74%`) in the Cyber HUD / bubble carousel / menu bar title placements.
+3. **Warnings** (new `.warning` kind):
+   - Context window above a threshold (default 90%): "⚠️ Claude: context at 92%! Consider /compact soon."
+   - Tool loop: the same tool call (name + input) repeated 3+ times in a row.
+   - Stall: an agent in `working` with no new activity for 3+ minutes, while no tool call is pending.
+4. **Mascot**: warning bubbles stay until acknowledged or cleared by the next agent event; the visor turns amber while an agent warning is active.
+5. **Settings**: AI Agents tab gets toggles per warning type, the context threshold, the stall timeout, and the assumed context window size.
 
-## Actual Behavior
-There is no Settings window. All controls, configurations, and diagnostic toggles are packed into `BitzMenuBarContentView`, making the menu bar extra crowded and difficult to navigate.
+## Scope Decisions (agreed 2026-10-30)
+In scope: event model (`.almostDone`, `.warning`, optional `metadata`), monitor lifecycle, Claude Code transcript adapter, Antigravity usage/loop signals, stall detection, amber visor, context % on the AI Agents metric, settings, unit tests.
 
-## Proposed Solution: Dedicated Settings Window
-
-Implement a native macOS Settings scene (or `NSWindowController` with `NSHostingController`) structured into intuitive tabs:
-
-### 1. General & Mascot Appearance
-- **Mascot Scale**: Steppers, slider, and size presets (Tiny to Massive).
-- **Opacity**: Slider and presets (20% to 100%).
-- **Positioning**: Default screen corner anchor picker, drag unlock/lock toggle, edge snap padding.
-- **Display Target**: Primary display, follow active screen, or pin to a specific display.
-
-### 2. Behaviors & Wellness Engine
-- **Focus & Rest Cadence**: Continuous work warning threshold (e.g., 50 min overworked, 90 min burnout), break recharge rate.
-- **App Classification Rules**: Manage custom productive vs. dopamine drain application list.
-- **Interactions**: Petting cooldown, audio effects / cyber purr volume toggles (refs #21).
-
-### 3. AI Coding Agents
-- **Popup Notifications**: Toggle speech bubble alerts for agent completion and approval requests.
-- **Monitored Agents**: Enable/disable detection per agent (Claude Code, Gemini CLI, Antigravity, Cursor, Windsurf, Copilot, Codex, etc.).
-- **Hook Integration**: Install / uninstall Claude Code hook buttons with status indicators.
-- **Custom Agents**: Register custom process names, bundle IDs, or log paths.
-
-### 4. Telemetry & Hardware Sensors
-- **Visible Metrics**: Checkbox list for Disk, RAM, CPU Load/Die Temp, GPU, FPS, Network, Battery.
-- **Display Placements**: Menu bar title, mascot Cyber HUD, speech bubble carousel, or menu bar dropdown.
-- **Sampling Cadence**: Polling interval picker (1s, 3s, 5s, 10s).
-- **Warning Thresholds**: Low disk space alert threshold, CPU overheat threshold.
-
-### 5. Diagnostics & Advanced
-- **State Simulation**: Quick override triggers for testing states (Super Charged, Balanced, Dopamine Overload, Overworked, Burnout, Charging, Overheat).
-- **Keyboard Shortcuts Reference**: Cheat sheet of all global and local keybinds.
-- **Updates & System**: Automatic update check toggle, manual update checker, Launch at Login toggle.
+Out of scope, to be split into follow-up issues:
+- **Session cost ($)**: transcripts carry no cost; would require a maintained price table.
+- **Rate limit (429) detection**: no verified transcript or hook signal yet.
+- **Runaway CPU alerts**: `ProcessAgentAdapter` does not sample per-process CPU today; needs its own design against the charter's < 2% CPU budget.
+- **Do Not Disturb / Focus integration**: depends on #19 / #22 (not built yet).
+- **Alert sounds**: depends on #21 (not built yet).
 
 ## Acceptance Criteria
-- [ ] Add a native macOS `Settings` window (or preferences window) accessible via `⌘,` and via a `Settings...` item in the menu bar dropdown.
-- [ ] Group configuration into organized tabs (`General`, `Behaviors`, `AI Agents`, `Telemetry`, `Advanced`).
-- [ ] Slim down `BitzMenuBarContentView` to focus strictly on glanceable status, quick actions, `Settings...`, and `Quit`.
-- [ ] Settings window does not interfere with the transparent click-through mascot panel (`MascotOverlayPanel.ignoresMouseEvents` invariant preserved).
-- [ ] Settings changes take effect immediately across all stores (`AvatarScaleStore`, `AvatarOpacityStore`, `AvatarPositionStore`, `DisplayPreferenceStore`, `TelemetrySettingsStore`, `AgentMonitorService`).
-- [ ] Unit tests cover settings window initialization and user default synchronization.
+- [ ] `AgentEventKind` supports `.almostDone` and `.warning`; `AgentEvent` carries optional `metadata: [String: String]` and still decodes old drop-box JSON.
+- [ ] Mascot shows a distinct "Almost Done" bubble when an agent enters its final task step.
+- [ ] Context window usage percentage renders through the existing AI Agents telemetry metric.
+- [ ] Warning alerts trigger for context usage above threshold, repeated tool-call loops, and stalls (> 3 min, configurable).
+- [ ] Mascot visor turns amber while an agent warning is active.
+- [ ] Settings allow toggling each warning type and setting thresholds.
+- [ ] Unit tests cover `AgentMonitorService` handling of `.almostDone` and `.warning` lifecycle transitions and the transcript signal parsing.
 
 ## Impact
-**Medium / High** - Significantly improves user experience and ergonomics by uncluttering the menu bar extra and establishing a scalable foundation for upcoming mascot customization features.
-
-## Additional Context
-- Follows Apple Human Interface Guidelines for macOS Settings / Preferences windows.
-- Complements ongoing feature work for custom color palettes (#28), per-emotion color panel (#31), and mascot roster (#30), which can now be housed elegantly in Settings tabs rather than bloating the menu bar.
+**Medium** - Makes long autonomous agent runs observable from the desktop without checking the terminal, and prevents context degradation and runaway loops from going unnoticed.
