@@ -52,17 +52,52 @@ final class SettingsWindowManagerTests: XCTestCase {
 
     func testSettingsWindowCloseInvokesOnWindowClosed() {
         let manager = SettingsWindowManager()
-        var closeCallbackInvoked = false
+        var closeCallbackCount = 0
         manager.onWindowClosed = {
-            closeCallbackInvoked = true
+            closeCallbackCount += 1
         }
 
         manager.showSettingsWindow(rootView: Text("Settings Content"))
         XCTAssertTrue(manager.isWindowOpen)
-        XCTAssertFalse(closeCallbackInvoked)
+        XCTAssertEqual(closeCallbackCount, 0)
 
         manager.closeSettingsWindow()
         XCTAssertFalse(manager.isWindowOpen)
-        XCTAssertTrue(closeCallbackInvoked)
+        XCTAssertEqual(closeCallbackCount, 1, "onWindowClosed must fire exactly once on close")
+    }
+
+    func testCloseDetachesHostingControllerAndReopenReattachesWithoutIntrinsicSizing() throws {
+        let manager = SettingsWindowManager()
+        manager.showSettingsWindow(rootView: Text("Settings Content"))
+
+        let window = try XCTUnwrap(manager.window)
+        let initialHosting = try XCTUnwrap(window.contentViewController as? NSHostingController<Text>)
+        XCTAssertEqual(initialHosting.sizingOptions, [], "Settings NSHostingController must disable sizingOptions to avoid 30 fps layout thrash (#70)")
+
+        manager.closeSettingsWindow()
+        XCTAssertFalse(manager.isWindowOpen)
+        XCTAssertFalse(manager.isWindowVisible)
+        XCTAssertNil(window.contentViewController, "Closing Settings must detach contentViewController so background TimelineViews stop (#70)")
+
+        // Reopen must reuse the same NSWindow shell and reattach a fresh hosting controller with sizingOptions == []
+        manager.showSettingsWindow(rootView: Text("Reopened Settings Content"))
+        XCTAssertTrue(manager.isWindowOpen)
+        XCTAssertTrue(manager.window === window, "Reopening Settings must reuse the existing NSWindow instance")
+        let reopenedHosting = try XCTUnwrap(window.contentViewController as? NSHostingController<Text>)
+        XCTAssertEqual(reopenedHosting.sizingOptions, [])
+
+        manager.closeSettingsWindow()
+    }
+
+    func testAnimatedBitzCharacterViewAdaptiveFrameInterval() {
+        XCTAssertEqual(AnimatedBitzCharacterView.frameInterval(for: .balanced), 1.0 / 15.0, accuracy: 0.0001)
+        XCTAssertEqual(AnimatedBitzCharacterView.frameInterval(for: .charging), 1.0 / 15.0, accuracy: 0.0001)
+        XCTAssertEqual(AnimatedBitzCharacterView.frameInterval(for: .burnout), 1.0 / 15.0, accuracy: 0.0001)
+        XCTAssertEqual(AnimatedBitzCharacterView.frameInterval(for: .overworked), 1.0 / 15.0, accuracy: 0.0001)
+        XCTAssertEqual(AnimatedBitzCharacterView.frameInterval(for: .dopamineSad), 1.0 / 15.0, accuracy: 0.0001)
+
+        XCTAssertEqual(AnimatedBitzCharacterView.frameInterval(for: .superCharged), 1.0 / 30.0, accuracy: 0.0001)
+        XCTAssertEqual(AnimatedBitzCharacterView.frameInterval(for: .overheating), 1.0 / 30.0, accuracy: 0.0001)
+        XCTAssertEqual(AnimatedBitzCharacterView.frameInterval(for: .balanced, isPetReactionActive: true), 1.0 / 30.0, accuracy: 0.0001)
     }
 }

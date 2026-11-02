@@ -106,9 +106,10 @@ flowchart TD
    - For Firefox, this eliminates redundant file decompression of `recovery.jsonlz4` from disk.
    - For Safari, this halves AppleScript execution frequency via `NSAppleScript`.
    - `ActivityMonitorService` uses a single main run loop `Timer` with `20%` timer coalescing tolerance (`timer.tolerance = intervalSeconds * 0.2`) and lightweight metadata lookups, maintaining `< 1.5%` CPU usage.
-3. **CPU (`< 2%`) & Memory (`< 70MB`) Budgets (`NFR-001`, `NFR-002`, `DIR-003`)**:
-   - Continuous idle operations average $< 1.5\%$ CPU on Apple Silicon.
-   - `MascotOverlayPanel` bounds rendering to a single `250x250` buffer (`backing: .buffered`), maintaining a memory footprint well under `40MB`.
+3. **CPU (`< 2%`) & Memory (`< 70MB`) Budgets (`NFR-001`, `NFR-002`, `DIR-003`, `#70`)**:
+   - Continuous idle operations average `~0.2%–1.5%` CPU and `~50MB` memory on Apple Silicon.
+   - Continuous mascot breathing, tail wag, paw sway, overheating glitch, and floating ambient particles execute out-of-process in `WindowServer` via `CALayer` `CABasicAnimation` / `CAAnimationGroup` (`LiveBitzCharacterView`), avoiding SwiftUI 120Hz `TimelineView` / `UpdateCycle` layout passes on the main thread.
+   - Fixed-size windows (`MascotOverlayPanel` `250×250` and `SettingsWindowManager` `660×560`) set `sizingOptions = []`, `SettingsWindowManager` detaches `contentViewController = nil` when closed, polling `@ObservedObject`s are scoped to `Equatable` leaf subviews, and `AppleSiliconHardwareSensors` caches active `IOHIDServiceClient` thermal handles with cool-state TTL throttling.
 4. **App Sandbox & Privacy Compliance (`C-003`)**:
    - Zero Accessibility (`AXIsProcessTrusted`, `AXUIElement`) or keylogging (`CGEvent.tapCreate`) APIs are used.
    - For wellness telemetry, only `NSWorkspace.shared.frontmostApplication?.bundleIdentifier`, `CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .null)`, and `ProcessInfo.processInfo.thermalState` are read in-memory.

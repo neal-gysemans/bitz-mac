@@ -7,6 +7,7 @@ public struct GeneralSettingsTabView: View {
     @ObservedObject public var opacityStore: AvatarOpacityStore
     @ObservedObject public var positionStore: AvatarPositionStore
     @ObservedObject public var displayStore: DisplayPreferenceStore
+    @ObservedObject private var settingsWindowManager: SettingsWindowManager = .shared
     public var engine: WellnessPointEngine?
 
     public init(
@@ -288,7 +289,11 @@ public struct GeneralSettingsTabView: View {
             // Real Bitz Cyber Mascot with reactive scale & opacity
             VStack {
                 let currentState = engine?.currentState ?? .balanced
-                AnimatedBitzCharacterView(state: currentState, showParticles: true)
+                AnimatedBitzCharacterView(
+                    state: currentState,
+                    showParticles: true,
+                    isPaused: !settingsWindowManager.isWindowVisible
+                )
                     .scaleEffect(0.70 * CGFloat(scaleStore.scaleFactor))
                     .frame(height: 140)
                     .opacity(opacityStore.opacityFactor)

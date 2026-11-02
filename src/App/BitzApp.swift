@@ -477,6 +477,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
             }
         )
         let hostingView = NSHostingView(rootView: rootView)
+        // MascotOverlayPanel uses an explicit fixed canvas frame; disable intrinsic sizing queries per tick (#70)
+        hostingView.sizingOptions = []
         let initialSize = MascotOverlayPanel.calculatePanelSize(for: CGFloat(scaleStore.scaleFactor))
         hostingView.frame = NSRect(origin: .zero, size: initialSize)
         panel.contentView = hostingView

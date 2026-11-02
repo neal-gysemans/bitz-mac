@@ -26,8 +26,9 @@ Closes #<!-- Replace with issue/ticket number, e.g. Closes #12 -->
 ---
 
 ### Verification & Testing
-- [ ] Swift unit tests execute cleanly (`swift test` or `/usr/bin/swift test`)
-- [ ] App builds and runs successfully (`./Scripts/package_and_run.sh`)
+- [ ] Swift unit tests execute cleanly (`xcrun swift test`)
+- [ ] App builds and runs successfully (`./Scripts/package_and_run.sh release`)
+- [ ] Desktop idle CPU verified `< 2%` via `top` with Settings closed (required for UI, animation, window, or polling changes; see `AGENTS.md` §2)
 - [ ] Verified on macOS (please specify version): _______________
 
 ---

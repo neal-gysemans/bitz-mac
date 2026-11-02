@@ -56,7 +56,7 @@ public struct SpeechBubbleView: View {
     @ObservedObject public var scaleStore: AvatarScaleStore
     @ObservedObject public var agentMonitor: AgentMonitorService
     @ObservedObject public var updateStore: AppUpdateStore
-    @ObservedObject public var telemetryDashboard: TelemetryDashboardService
+    public let telemetryDashboard: TelemetryDashboardService
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
 
     public init(
@@ -88,21 +88,16 @@ public struct SpeechBubbleView: View {
     @ViewBuilder
     private var bubble: some View {
         let visorColor = MascotOverlayView.visorColor(for: engine.currentState)
-        switch SpeechBubbleContent.current(
-            engine: engine,
-            agentMonitor: agentMonitor,
-            updateStore: updateStore,
-            telemetryDashboard: telemetryDashboard,
-            telemetrySettings: telemetrySettings
-        ) {
-        case .agentPopup(let popup) where popup.kind == .warning:
-            warningBubbleView(popup)
-        case .agentPopup(let popup):
-            let colors = agentPopupColors(for: popup.kind)
-            textBubble(popup.text, fill: colors.fill, stroke: colors.stroke)
-        case .update(let release):
+        if let popup = agentMonitor.activePopup {
+            if popup.kind == .warning {
+                warningBubbleView(popup)
+            } else {
+                let colors = agentPopupColors(for: popup.kind)
+                textBubble(popup.text, fill: colors.fill, stroke: colors.stroke)
+            }
+        } else if updateStore.isSpeechBubbleAlertActive, let release = updateStore.latestRelease {
             updateBubbleView(for: release)
-        case .wellness(let text):
+        } else if let text = engine.activeSpeechBubbleText {
             textBubble(
                 text,
                 fill: engine.currentState == .overheating
@@ -110,9 +105,11 @@ public struct SpeechBubbleView: View {
                     : Color(red: 0.08, green: 0.09, blue: 0.13).opacity(0.94),
                 stroke: visorColor
             )
-        case .carousel(let text):
-            textBubble(text, fill: Color(red: 0.08, green: 0.09, blue: 0.13).opacity(0.94), stroke: visorColor)
-        case nil:
+        } else if telemetrySettings.displayInSpeechBubbleCycle {
+            CarouselSpeechBubbleObserver(telemetryDashboard: telemetryDashboard) { text in
+                textBubble(text, fill: Color(red: 0.08, green: 0.09, blue: 0.13).opacity(0.94), stroke: visorColor)
+            }
+        } else {
             EmptyView()
         }
     }
@@ -233,5 +230,18 @@ private struct BubbleWindowLayout: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: width, height: nil))
+    }
+}
+
+/// Only subscribes to `TelemetryDashboardService` when the speech-bubble telemetry carousel is enabled,
+/// keeping `SpeechBubblePanel` completely quiescent during normal operation (#70).
+private struct CarouselSpeechBubbleObserver<Content: View>: View {
+    @ObservedObject var telemetryDashboard: TelemetryDashboardService
+    @ViewBuilder let content: (String) -> Content
+
+    var body: some View {
+        if let text = telemetryDashboard.currentCarouselMessage {
+            content(text)
+        }
     }
 }
