@@ -25,9 +25,11 @@ public final class AppleSiliconHardwareSensors {
 
     nonisolated(unsafe) private var ioKitHandle: UnsafeMutableRawPointer?
     nonisolated(unsafe) private var cachedClient: AnyObject?
+    nonisolated(unsafe) private var cachedThermalServices: [AnyObject]?
     nonisolated(unsafe) private var copyServices: CopyServicesFn?
     nonisolated(unsafe) private var copyEvent: CopyEventFn?
     nonisolated(unsafe) private var getFloat: GetFloatFn?
+    private var lastTemperatureSample: (celsius: Double, timestamp: TimeInterval)?
 
     public init() {
         // Cache IOHID pointers so we don't dlopen / dlsym every 5 seconds.
@@ -55,6 +57,7 @@ public final class AppleSiliconHardwareSensors {
     }
 
     deinit {
+        self.cachedThermalServices = nil
         self.cachedClient = nil
         self.copyServices = nil
         self.copyEvent = nil
@@ -66,6 +69,7 @@ public final class AppleSiliconHardwareSensors {
 
     /// Queries Apple Silicon `IOHIDEventSystemClient` thermal sensors (`PrimaryUsagePage: 0xFF00`, `PrimaryUsage: 5`)
     /// and returns the maximum active die/SOC temperature in degrees Celsius.
+    /// Caches active thermal service handles and throttles synchronous Mach IPC when the system is cool (#70).
     public func readMaxDieTemperatureCelsius() -> Double? {
         guard let client = cachedClient,
               let copyServices = copyServices,
@@ -74,12 +78,43 @@ public final class AppleSiliconHardwareSensors {
             return nil
         }
 
+        let now = ProcessInfo.processInfo.systemUptime
+        if let cached = lastTemperatureSample {
+            let isNominalAndCool = ProcessInfo.processInfo.thermalState == .nominal && cached.celsius < 70.0
+            let ttl: TimeInterval = isNominalAndCool ? 15.0 : 2.0
+            if now >= cached.timestamp && (now - cached.timestamp) < ttl {
+                return cached.celsius
+            }
+        }
+
+        if let services = cachedThermalServices, !services.isEmpty {
+            var maxTemp: Double?
+            for service in services {
+                if let event = copyEvent(service, 15, 0, 0)?.takeRetainedValue() {
+                    let celsius = getFloat(event, 15 << 16)
+                    if celsius > 15.0 && celsius < 130.0 {
+                        if let currentMax = maxTemp {
+                            if celsius > currentMax { maxTemp = celsius }
+                        } else {
+                            maxTemp = celsius
+                        }
+                    }
+                }
+            }
+            if let resolved = maxTemp {
+                lastTemperatureSample = (resolved, now)
+                return resolved
+            }
+            cachedThermalServices = nil
+        }
+
         guard let servicesRef = copyServices(client)?.takeRetainedValue() else {
             return nil
         }
         let count = CFArrayGetCount(servicesRef)
-        var validTemperatures: [Double] = []
-        validTemperatures.reserveCapacity(count)
+        var discoveredServices: [AnyObject] = []
+        discoveredServices.reserveCapacity(count)
+        var maxTemp: Double?
 
         for index in 0..<count {
             guard let rawPtr = CFArrayGetValueAtIndex(servicesRef, index) else { continue }
@@ -87,11 +122,23 @@ public final class AppleSiliconHardwareSensors {
             if let event = copyEvent(service, 15, 0, 0)?.takeRetainedValue() {
                 let celsius = getFloat(event, 15 << 16)
                 if celsius > 15.0 && celsius < 130.0 {
-                    validTemperatures.append(celsius)
+                    discoveredServices.append(service)
+                    if let currentMax = maxTemp {
+                        if celsius > currentMax { maxTemp = celsius }
+                    } else {
+                        maxTemp = celsius
+                    }
                 }
             }
         }
-        return validTemperatures.max()
+
+        if !discoveredServices.isEmpty {
+            cachedThermalServices = discoveredServices
+        }
+        if let resolved = maxTemp {
+            lastTemperatureSample = (resolved, now)
+        }
+        return maxTemp
     }
 
     /// Reads real-time system-wide CPU load percentage (`0.0 ... 100.0`) from the Mach kernel via `HOST_CPU_LOAD_INFO`.
@@ -207,7 +254,8 @@ public final class AppleSiliconHardwareSensors {
 /// without requiring Accessibility or AppleEvents permissions.
 @MainActor
 public enum BrowserTabTelemetryReader {
-    /// Cached chromium browser profile folder names to avoid repeated array allocation during fast path sampling.
+    private static var cachedFirefoxSession: (path: String, modDate: Date, preferStreaming: Bool, url: String?, title: String?)?
+    private static var cachedChromiumSession: (path: String, modDate: Date, url: String?)?
     private static let chromiumProfileCandidates: [String] = ["Default", "Profile 1", "Profile 2", "Profile 3", ""]
 
     // Cached base directories for chromium browsers
@@ -302,8 +350,16 @@ public enum BrowserTabTelemetryReader {
             }
         }
 
-        guard let sessionFile = latestSessionURL,
-              let raw = try? Data(contentsOf: sessionFile),
+        guard let sessionFile = latestSessionURL else {
+            return (nil, nil)
+        }
+        if let cached = cachedFirefoxSession,
+           cached.path == sessionFile.path,
+           cached.modDate == latestModDate,
+           cached.preferStreaming == preferStreamingTabWhenVideoPlaying {
+            return (cached.url, cached.title)
+        }
+        guard let raw = try? Data(contentsOf: sessionFile),
               let decompressed = decompressMozLZ4(raw),
               let json = try? JSONSerialization.jsonObject(with: decompressed) as? [String: Any],
               let windows = json["windows"] as? [[String: Any]],
@@ -348,10 +404,12 @@ public enum BrowserTabTelemetryReader {
                 }
             }
             if let found = bestStreamingTab {
+                cachedFirefoxSession = (sessionFile.path, latestModDate, preferStreamingTabWhenVideoPlaying, found.url, found.title)
                 return (found.url, found.title)
             }
         }
 
+        cachedFirefoxSession = (sessionFile.path, latestModDate, preferStreamingTabWhenVideoPlaying, selectedURL, selectedTitle)
         return (selectedURL, selectedTitle)
     }
 
@@ -434,11 +492,19 @@ public enum BrowserTabTelemetryReader {
             }
         }
 
-        guard let sessionFile = newestSessionFile,
-              let raw = try? Data(contentsOf: sessionFile),
+        guard let sessionFile = newestSessionFile else {
+            return (nil, nil)
+        }
+        if let cached = cachedChromiumSession,
+           cached.path == sessionFile.path,
+           cached.modDate == newestModDate {
+            return (cached.url, nil)
+        }
+        guard let raw = try? Data(contentsOf: sessionFile),
               let url = extractLatestURLFromChromiumSNSS(raw) else {
             return (nil, nil)
         }
+        cachedChromiumSession = (sessionFile.path, newestModDate, url)
         return (url, nil)
     }
 

@@ -8,7 +8,7 @@ public struct MascotOverlayView: View {
     @ObservedObject public var scaleStore: AvatarScaleStore
     @ObservedObject public var opacityStore: AvatarOpacityStore
     @ObservedObject public var positionStore: AvatarPositionStore
-    @ObservedObject public var telemetryDashboard: TelemetryDashboardService
+    public let telemetryDashboard: TelemetryDashboardService
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
 
     public var onDragChanged: ((NSPoint, NSScreen?) -> Void)?
@@ -123,70 +123,45 @@ public struct MascotOverlayView: View {
     }
 
     public var body: some View {
-        // 30 fps is plenty for breathing/blink; the uncapped display rate cost ~25-30% of a core at idle (#10)
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
-            let _ = telemetryDashboard.fpsTracker.recordFrame(timestamp: t)
+        // Read on the main actor: the geometry transform below is a Sendable closure
+        let canvasSpace = Self.canvasSpace
+        let earOverflow = BitzCharacterView.earOverflow(isLoafPosture: isLoafPosture)
+        let isAnimationPaused = !positionStore.isMascotVisible
 
-            // Periodic natural eye-blink (every ~4.2s for ~0.15s)
-            let blinkRemainder = t.truncatingRemainder(dividingBy: 4.2)
-            let isBlinking = blinkRemainder < 0.16 && !isLoafPosture && engine.currentState != .overheating && !engine.isPetReactionActive
-            // Read on the main actor: the geometry transform below is a Sendable closure
-            let canvasSpace = Self.canvasSpace
-            let earOverflow = BitzCharacterView.earOverflow(isLoafPosture: isLoafPosture)
+        VStack(spacing: 6) {
+            Spacer(minLength: 0)
 
-            VStack(spacing: 6) {
-                Spacer(minLength: 0)
+            // Offload continuous mascot motion to CoreAnimation (`LiveBitzCharacterView`), keeping the main thread
+            // and Cyber HUD quiescent at idle (#70).
+            LiveBitzCharacterView(
+                state: engine.currentState,
+                isPetReactionActive: engine.isPetReactionActive,
+                isLoafPosture: isLoafPosture,
+                showParticles: true,
+                customVisorColor: visorColor,
+                isPaused: isAnimationPaused
+            )
+            .frame(width: 180, height: 140)
+            .opacity(opacityStore.opacityFactor)
+            // Layout frame excludes the breathing offset, so this only fires when the HUD or posture changes
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.frame(in: .named(canvasSpace)).minY - earOverflow
+            } action: { earTop in
+                onEarTopChanged?(earTop)
+            }
 
-                // Mascot Composition with user-selected see-through opacity
-                BitzCharacterView(
-                    state: engine.currentState,
-                    time: t,
-                    isBlinking: isBlinking,
-                    isPetReactionActive: engine.isPetReactionActive,
-                    isLoafPosture: isLoafPosture,
-                    showParticles: true,
-                    customVisorColor: visorColor
+            // Live Cyberpunk Hardware Telemetry & Diagnostics HUD (isolated observer so 3s telemetry ticks
+            // never invalidate MascotOverlayView or LiveBitzCharacterView #70)
+            if telemetrySettings.displayInMascotCyberHUD {
+                MascotCyberHUDContainerView(
+                    telemetryDashboard: telemetryDashboard,
+                    enabledMetrics: telemetrySettings.enabledMetrics,
+                    focusPoints: engine.currentPoints,
+                    visorColor: visorColor,
+                    opacity: showsDragPill ? 0 : max(0.6, opacityStore.opacityFactor)
                 )
-                .opacity(opacityStore.opacityFactor)
-                // Layout frame excludes the breathing offset, so this only fires when the HUD or posture changes
-                .onGeometryChange(for: CGFloat.self) { proxy in
-                    proxy.frame(in: .named(canvasSpace)).minY - earOverflow
-                } action: { earTop in
-                    onEarTopChanged?(earTop)
-                }
-
-                // Live Cyberpunk Hardware Telemetry & Diagnostics HUD
-                if telemetrySettings.displayInMascotCyberHUD {
-                    let hudText = telemetryDashboard.snapshot.hudSummary(
-                        enabledMetrics: telemetrySettings.enabledMetrics,
-                        focusPoints: engine.currentPoints
-                    )
-                    let hasWarning = telemetryDashboard.snapshot.hasActiveWarning
-                    let hudBorderColor = hasWarning ? Color.orange : visorColor
-
-                    Text(hudText)
-                        .font(.system(size: 8.5, weight: .bold, design: .monospaced))
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .foregroundStyle(hudBorderColor)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 7)
-                                .fill(Color(red: 0.05, green: 0.06, blue: 0.08).opacity(0.92))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 7)
-                                .stroke(hudBorderColor.opacity(hasWarning ? 0.95 : 0.65), lineWidth: 1.2)
-                        )
-                        .shadow(color: hudBorderColor.opacity(0.35), radius: 5)
-                        .padding(.bottom, 4)
-                        // Drag pill takes over this slot in drag mode; opacity keeps the layout stable
-                        .opacity(showsDragPill ? 0 : max(0.6, opacityStore.opacityFactor))
-                } else {
-                    Spacer().frame(height: 10)
-                }
+            } else {
+                Spacer().frame(height: 10)
             }
         }
         .frame(width: 250, height: 250)
@@ -357,5 +332,59 @@ public struct MascotOverlayView: View {
             }
         }
         .allowsHitTesting(positionStore.isInteractivityEnabled)
+    }
+}
+
+private struct MascotCyberHUDContainerView: View {
+    @ObservedObject var telemetryDashboard: TelemetryDashboardService
+    let enabledMetrics: Set<TelemetryMetric>
+    let focusPoints: Double
+    let visorColor: Color
+    let opacity: Double
+
+    var body: some View {
+        let hudText = telemetryDashboard.snapshot.hudSummary(
+            enabledMetrics: enabledMetrics,
+            focusPoints: focusPoints
+        )
+        let hasWarning = telemetryDashboard.snapshot.hasActiveWarning
+        let hudBorderColor = hasWarning ? Color.orange : visorColor
+
+        MascotCyberHUDPillView(
+            hudText: hudText,
+            hasWarning: hasWarning,
+            hudBorderColor: hudBorderColor,
+            opacity: opacity
+        )
+        .equatable()
+    }
+}
+
+private struct MascotCyberHUDPillView: View, Equatable {
+    let hudText: String
+    let hasWarning: Bool
+    let hudBorderColor: Color
+    let opacity: Double
+
+    var body: some View {
+        Text(hudText)
+            .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .foregroundStyle(hudBorderColor)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Color(red: 0.05, green: 0.06, blue: 0.08).opacity(0.92))
+                    .shadow(color: hudBorderColor.opacity(0.35), radius: 5)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(hudBorderColor.opacity(hasWarning ? 0.95 : 0.65), lineWidth: 1.2)
+            )
+            .padding(.bottom, 4)
+            // Drag pill takes over this slot in drag mode; opacity keeps the layout stable
+            .opacity(opacity)
     }
 }

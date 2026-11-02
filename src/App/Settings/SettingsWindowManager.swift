@@ -14,6 +14,8 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
 
     private var windowController: NSWindowController?
     @Published public private(set) var isWindowOpen: Bool = false
+    /// True only while the Settings window is open, not miniaturized, and has at least one visible pixel on screen.
+    @Published public private(set) var isWindowVisible: Bool = false
     public var onWindowClosed: (() -> Void)?
 
     public override init() {
@@ -29,23 +31,35 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
     /// If the window is already created, it is activated and brought to the front.
     public func showSettingsWindow<Content: View>(rootView: Content) {
         if let windowController = windowController, let existingWindow = windowController.window {
+            if !isWindowOpen || existingWindow.contentViewController == nil {
+                let contentSize = existingWindow.contentRect(forFrameRect: existingWindow.frame).size
+                let targetSize = NSSize(
+                    width: max(contentSize.width, existingWindow.minSize.width),
+                    height: max(contentSize.height, existingWindow.minSize.height)
+                )
+                existingWindow.contentViewController = makeHostingController(rootView: rootView, size: targetSize)
+                existingWindow.setContentSize(targetSize)
+            }
             existingWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             isWindowOpen = true
+            refreshVisibility(for: existingWindow)
             return
         }
 
-        let hostingController = NSHostingController(rootView: rootView)
+        let initialSize = NSSize(width: 680, height: 580)
+        let hostingController = makeHostingController(rootView: rootView, size: initialSize)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 580),
+            contentRect: NSRect(origin: .zero, size: initialSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.minSize = NSSize(width: 640, height: 520)
+        window.contentViewController = hostingController
+        window.setContentSize(initialSize)
         window.center()
         window.title = "Bitz Settings"
-        window.contentViewController = hostingController
         window.isReleasedWhenClosed = false
         window.delegate = self
 
@@ -55,19 +69,65 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         isWindowOpen = true
+        refreshVisibility(for: window)
     }
 
-    /// Closes the Settings window if open.
+    /// Closes the Settings window if open and detaches its SwiftUI hosting controller so background timelines stop (#70).
     public func closeSettingsWindow() {
+        let wasOpen = isWindowOpen
         windowController?.close()
-        isWindowOpen = false
-        onWindowClosed?()
+        tearDownHostedContent(notifyIfWasOpen: wasOpen)
     }
 
     // MARK: - NSWindowDelegate
 
     public func windowWillClose(_ notification: Notification) {
+        tearDownHostedContent(notifyIfWasOpen: isWindowOpen)
+    }
+
+    public func windowDidChangeOcclusionState(_ notification: Notification) {
+        refreshVisibility(for: window)
+    }
+
+    public func windowDidMiniaturize(_ notification: Notification) {
+        refreshVisibility(for: window)
+    }
+
+    public func windowDidDeminiaturize(_ notification: Notification) {
+        refreshVisibility(for: window)
+    }
+
+    // MARK: - Helpers
+
+    private func makeHostingController<Content: View>(rootView: Content, size: NSSize) -> NSHostingController<Content> {
+        let hostingController = NSHostingController(rootView: rootView)
+        // Window bounds are managed by AppKit; disabling intrinsic/min/max sizing prevents 30 fps ScrollView layout thrash (#70)
+        hostingController.sizingOptions = []
+        hostingController.view.frame = NSRect(origin: .zero, size: size)
+        return hostingController
+    }
+
+    private func tearDownHostedContent(notifyIfWasOpen: Bool) {
+        windowController?.window?.contentViewController = nil
+        if isWindowVisible {
+            isWindowVisible = false
+        }
+        let shouldNotify = notifyIfWasOpen && isWindowOpen
         isWindowOpen = false
-        onWindowClosed?()
+        if shouldNotify {
+            onWindowClosed?()
+        }
+    }
+
+    private func refreshVisibility(for window: NSWindow?) {
+        let visible: Bool
+        if isWindowOpen, let window {
+            visible = !window.isMiniaturized && window.occlusionState.contains(.visible)
+        } else {
+            visible = false
+        }
+        if isWindowVisible != visible {
+            isWindowVisible = visible
+        }
     }
 }
