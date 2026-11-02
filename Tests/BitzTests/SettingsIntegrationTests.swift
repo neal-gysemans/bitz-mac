@@ -210,4 +210,46 @@ final class SettingsIntegrationTests: XCTestCase {
         overlayView.onOpenSettings?()
         XCTAssertTrue(settingsOpened, "onOpenSettings closure must be invokable and update state")
     }
+
+    func testSettingsWindowCloseClearsSimulationOverride() {
+        let suiteName = "SettingsWindowSimulationOverrideTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let riveController = ProductionRiveController()
+        let telemetry = MockTelemetryProvider()
+        let scaleStore = AvatarScaleStore(userDefaults: defaults)
+        let opacityStore = AvatarOpacityStore(userDefaults: defaults)
+        let positionStore = AvatarPositionStore(userDefaults: defaults)
+        let displayStore = DisplayPreferenceStore(userDefaults: defaults)
+        let updateStore = AppUpdateStore(userDefaults: defaults)
+
+        let appDelegate = BitzAppDelegate(
+            riveController: riveController,
+            telemetryProvider: telemetry,
+            scaleStore: scaleStore,
+            opacityStore: opacityStore,
+            positionStore: positionStore,
+            displayStore: displayStore,
+            updateStore: updateStore,
+            userDefaults: defaults
+        )
+
+        // Simulate opening settings window
+        appDelegate.showSettingsWindow()
+        XCTAssertTrue(SettingsWindowManager.shared.isWindowOpen)
+
+        // User starts simulation
+        appDelegate.activityMonitor.startSimulation(points: 20.0, continuousWorkMinutes: 0.0)
+        XCTAssertTrue(appDelegate.activityMonitor.isManualOverrideActive)
+        XCTAssertEqual(appDelegate.engine.currentState, .dopamineSad)
+
+        // Close settings window
+        SettingsWindowManager.shared.closeSettingsWindow()
+        XCTAssertFalse(SettingsWindowManager.shared.isWindowOpen)
+
+        // Simulation override must be automatically cleared
+        XCTAssertFalse(appDelegate.activityMonitor.isManualOverrideActive)
+        XCTAssertNotEqual(appDelegate.engine.currentState, .dopamineSad)
+    }
 }

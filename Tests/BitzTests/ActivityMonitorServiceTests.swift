@@ -484,4 +484,52 @@ final class ActivityMonitorServiceTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(engine.continuousWorkMinutes, 40.0)
         XCTAssertFalse(service.isOnBreak)
     }
+
+    func testSimulationStateSnapshotsAndRestoresPreSimulationPoints() {
+        let engine = WellnessPointEngine(initialPoints: 45.0, initialContinuousWorkMinutes: 12.0)
+        let telemetry = MockTelemetryProvider()
+        let service = ActivityMonitorService(engine: engine, telemetry: telemetry)
+
+        XCTAssertFalse(service.isManualOverrideActive)
+        XCTAssertEqual(engine.currentPoints, 45.0)
+        XCTAssertEqual(engine.continuousWorkMinutes, 12.0)
+        XCTAssertEqual(engine.currentState, .balanced)
+
+        // Begin simulation of Burnout (75 PTS, 95m streak)
+        service.startSimulation(points: 75.0, continuousWorkMinutes: 95.0)
+
+        XCTAssertTrue(service.isManualOverrideActive)
+        XCTAssertEqual(engine.currentPoints, 75.0)
+        XCTAssertEqual(engine.continuousWorkMinutes, 95.0)
+        XCTAssertEqual(engine.currentState, .burnout)
+
+        // While override is active, sample tick does not mutate score
+        service.performSampleTick()
+        XCTAssertEqual(engine.currentPoints, 75.0)
+
+        // Clear simulation override: should restore pre-simulation state + apply sample tick
+        service.clearManualOverride()
+        XCTAssertFalse(service.isManualOverrideActive)
+        // Restored 45.0 + 0.5 (Xcode productive tick) = 45.5
+        XCTAssertEqual(engine.currentPoints, 45.5, accuracy: 0.001)
+        XCTAssertEqual(engine.continuousWorkMinutes, 12.0 + (5.0 / 60.0), accuracy: 0.001)
+        XCTAssertEqual(engine.currentState, .balanced)
+    }
+
+    func testChargingSimulationSnapshotsAndRestores() {
+        let engine = WellnessPointEngine(initialPoints: 50.0, initialContinuousWorkMinutes: 5.0)
+        let telemetry = MockTelemetryProvider()
+        let service = ActivityMonitorService(engine: engine, telemetry: telemetry)
+
+        // Start Charging simulation
+        service.startChargingSimulation()
+        XCTAssertTrue(service.isManualOverrideActive)
+        XCTAssertEqual(engine.currentState, .charging)
+
+        // Clear manual override
+        service.clearManualOverride()
+        XCTAssertFalse(service.isManualOverrideActive)
+        XCTAssertNotEqual(engine.currentState, .charging)
+        XCTAssertEqual(engine.currentPoints, 50.5, accuracy: 0.001)
+    }
 }

@@ -855,7 +855,16 @@ public final class ActivityMonitorService: ObservableObject {
     @Published public private(set) var breakStartedAt: Date? = nil
     @Published public private(set) var isOverheatingActive: Bool = false
     @Published public private(set) var isWatchingMediaOrDistraction: Bool = false
-    @Published public var isManualOverrideActive: Bool = false
+    @Published public var isManualOverrideActive: Bool = false {
+        didSet {
+            if isManualOverrideActive && !oldValue && preSimulationSnapshot == nil {
+                preSimulationSnapshot = (engine.currentPoints, engine.continuousWorkMinutes)
+            } else if !isManualOverrideActive {
+                preSimulationSnapshot = nil
+            }
+        }
+    }
+    private var preSimulationSnapshot: (points: Double, workMinutes: Double)?
 
     @Published public private(set) var lastTemperatureCelsius: Double? = nil
     @Published public private(set) var lastCPULoadPercentage: Double? = nil
@@ -1087,12 +1096,35 @@ public final class ActivityMonitorService: ObservableObject {
         isMonitoring = false
     }
 
+    /// Begins a manual state simulation, snapshotting real wellness points and work streak for restoration.
+    public func startSimulation(points: Double, continuousWorkMinutes: Double = 0.0) {
+        if !isManualOverrideActive {
+            preSimulationSnapshot = (engine.currentPoints, engine.continuousWorkMinutes)
+        }
+        isManualOverrideActive = true
+        engine.setPoints(points, continuousWorkMinutes: continuousWorkMinutes)
+    }
+
+    /// Begins a manual charging state simulation, snapshotting real wellness points and work streak.
+    public func startChargingSimulation() {
+        if !isManualOverrideActive {
+            preSimulationSnapshot = (engine.currentPoints, engine.continuousWorkMinutes)
+        }
+        isManualOverrideActive = true
+        engine.setChargingState(true)
+    }
+
     /// Clears any manual state override and immediately re-evaluates live hardware and activity sensors.
     public func clearManualOverride() {
+        let snapshot = preSimulationSnapshot
+        preSimulationSnapshot = nil
         isManualOverrideActive = false
         isOverheatingActive = false
         engine.triggerThermalWarning(isOverheating: false)
         engine.setChargingState(false)
+        if let snapshot {
+            engine.setPoints(snapshot.points, continuousWorkMinutes: snapshot.workMinutes)
+        }
         performSampleTick()
     }
 

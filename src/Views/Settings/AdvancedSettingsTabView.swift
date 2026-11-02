@@ -55,8 +55,7 @@ public struct AdvancedSettingsTabView: View {
                             icon: "bolt.fill",
                             color: .cyan
                         ) {
-                            activityMonitor.isManualOverrideActive = true
-                            engine.setPoints(90.0, continuousWorkMinutes: 10.0)
+                            activityMonitor.startSimulation(points: 90.0, continuousWorkMinutes: 10.0)
                         }
 
                         simulationButton(
@@ -65,8 +64,7 @@ public struct AdvancedSettingsTabView: View {
                             icon: "circle.circle.fill",
                             color: .blue
                         ) {
-                            activityMonitor.isManualOverrideActive = true
-                            engine.setPoints(50.0, continuousWorkMinutes: 0.0)
+                            activityMonitor.startSimulation(points: 50.0, continuousWorkMinutes: 0.0)
                         }
 
                         simulationButton(
@@ -75,8 +73,7 @@ public struct AdvancedSettingsTabView: View {
                             icon: "moon.fill",
                             color: .purple
                         ) {
-                            activityMonitor.isManualOverrideActive = true
-                            engine.setPoints(20.0, continuousWorkMinutes: 0.0)
+                            activityMonitor.startSimulation(points: 20.0, continuousWorkMinutes: 0.0)
                         }
 
                         simulationButton(
@@ -85,8 +82,7 @@ public struct AdvancedSettingsTabView: View {
                             icon: "flame.fill",
                             color: .orange
                         ) {
-                            activityMonitor.isManualOverrideActive = true
-                            engine.setPoints(75.0, continuousWorkMinutes: 50.0)
+                            activityMonitor.startSimulation(points: 75.0, continuousWorkMinutes: 50.0)
                         }
 
                         simulationButton(
@@ -95,8 +91,7 @@ public struct AdvancedSettingsTabView: View {
                             icon: "exclamationmark.octagon.fill",
                             color: .red
                         ) {
-                            activityMonitor.isManualOverrideActive = true
-                            engine.setPoints(75.0, continuousWorkMinutes: 95.0)
+                            activityMonitor.startSimulation(points: 75.0, continuousWorkMinutes: 95.0)
                         }
 
                         simulationButton(
@@ -105,8 +100,7 @@ public struct AdvancedSettingsTabView: View {
                             icon: "battery.100.bolt",
                             color: .green
                         ) {
-                            activityMonitor.isManualOverrideActive = true
-                            engine.setChargingState(true)
+                            activityMonitor.startChargingSimulation()
                         }
                     }
                 }

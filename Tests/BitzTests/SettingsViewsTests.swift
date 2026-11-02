@@ -181,4 +181,50 @@ final class SettingsViewsTests: XCTestCase {
         )
         _ = tabWithEngine.body
     }
+
+    func testBehaviorTabAndMenuBarRenderSimulationOverrideBanner() {
+        let suiteName = "SimulationOverrideBannerTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let engine = WellnessPointEngine(userDefaults: defaults)
+        let telemetry = MockTelemetryProvider()
+        let activityMonitor = ActivityMonitorService(engine: engine, telemetry: telemetry)
+        let behaviorTab = BehaviorSettingsTabView(engine: engine, activityMonitor: activityMonitor)
+
+        // Renders without override
+        _ = behaviorTab.body
+
+        // Renders with override active
+        activityMonitor.startChargingSimulation()
+        XCTAssertTrue(activityMonitor.isManualOverrideActive)
+        _ = behaviorTab.body
+
+        let scaleStore = AvatarScaleStore(userDefaults: defaults)
+        let opacityStore = AvatarOpacityStore(userDefaults: defaults)
+        let positionStore = AvatarPositionStore(userDefaults: defaults)
+        let displayStore = DisplayPreferenceStore(userDefaults: defaults)
+        let agentMonitor = AgentMonitorService(adapters: [], userDefaults: defaults)
+        let updateStore = AppUpdateStore(userDefaults: defaults)
+        let telemetrySettings = TelemetrySettingsStore(userDefaults: defaults)
+        let telemetryDashboard = TelemetryDashboardService(settingsStore: telemetrySettings)
+
+        let menuView = BitzMenuBarContentView(
+            engine: engine,
+            activityMonitor: activityMonitor,
+            scaleStore: scaleStore,
+            opacityStore: opacityStore,
+            positionStore: positionStore,
+            displayStore: displayStore,
+            agentMonitor: agentMonitor,
+            updateStore: updateStore,
+            telemetryDashboard: telemetryDashboard,
+            telemetrySettings: telemetrySettings
+        )
+        _ = menuView.body
+
+        activityMonitor.clearManualOverride()
+        XCTAssertFalse(activityMonitor.isManualOverrideActive)
+        _ = menuView.body
+    }
 }

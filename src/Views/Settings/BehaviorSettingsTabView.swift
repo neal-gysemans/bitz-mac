@@ -19,6 +19,29 @@ public struct BehaviorSettingsTabView: View {
             // Section 1: Focus & Health Status
             settingsCard(title: "Focus & Wellness Engine", systemImage: "pawprint.fill") {
                 VStack(alignment: .leading, spacing: 12) {
+                    if activityMonitor.isManualOverrideActive {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Manual Simulation Override Active")
+                                    .font(.caption.bold())
+                                Text("Score updates and idle timers are paused.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Resume Live Sensors") {
+                                activityMonitor.clearManualOverride()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        }
+                        .padding(10)
+                        .background(Color.orange.opacity(0.12))
+                        .cornerRadius(8)
+                    }
+
                     HStack {
                         Text("Current State:")
                             .font(.subheadline)

@@ -123,6 +123,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         SettingsWindowManager.shared.onWindowClosed = { [weak self] in
             self?.positionStore.lockPosition()
             self?.updatePanelsInteractivity()
+            self?.activityMonitor.clearManualOverride()
         }
         // An agent popup can cover the update alert's buttons, so re-check on either change
         self.bubbleInteractivityCancellable = Publishers.Merge(
@@ -674,6 +675,22 @@ struct BitzMenuBarContentView: View {
         Text(String(format: "Streak: %.0f min • Focus: %.1f / 100", engine.continuousWorkMinutes, engine.currentPoints))
             .font(.caption)
             .foregroundStyle(.secondary)
+
+        if activityMonitor.isManualOverrideActive {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+                Text("Simulation Override Active")
+                    .font(.caption.bold())
+                    .foregroundStyle(.orange)
+                Spacer()
+                Button("Resume") {
+                    activityMonitor.clearManualOverride()
+                }
+                .controlSize(.small)
+            }
+        }
 
         Button("Pet Bitz (<3)") {
             engine.triggerPetInteraction()
