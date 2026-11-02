@@ -295,4 +295,59 @@ final class CyberAudioIntegrationTests: XCTestCase {
         service.handleStateTransition(from: .superCharged, to: .balanced)
         XCTAssertFalse(service.isPurring)
     }
+
+    func testAgentMonitorDoneEventTriggersAllDoneSoundEvenWhenOtherAgentsAreActive() {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        store.setEnabled(true)
+
+        let clock = TestClock()
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: MockAudioEnvironmentDetector(),
+            dateProvider: { clock.now }
+        )
+        let agentMonitor = AgentMonitorService(clock: { clock.now })
+        service.observe(agentMonitor: agentMonitor)
+
+        // 1. Send needsApproval event -> triggers agentNeedsApproval
+        agentMonitor.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .needsApproval,
+            message: "Needs approval",
+            timestamp: clock.now
+        ))
+        XCTAssertNotNil(service.agentChimeCooldowns["antigravity"])
+
+        // 2. Another background agent starts (e.g. Gemini running in background)
+        clock.advance(by: 2.0)
+        agentMonitor.handleEvent(AgentEvent(
+            agentID: "gemini",
+            agentName: "Gemini",
+            kind: .started,
+            message: "Gemini started",
+            timestamp: clock.now
+        ))
+        XCTAssertTrue(agentMonitor.activeAgents.contains("gemini"))
+
+        // 3. Antigravity finishes tasks (.done) while Gemini is still running
+        clock.advance(by: 2.0)
+        let beforeDone = clock.now
+        agentMonitor.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .done,
+            message: "Antigravity finished!",
+            timestamp: clock.now
+        ))
+
+        // Invariant: allAgentsDone MUST play even if activeAgents is NOT empty
+        XCTAssertFalse(agentMonitor.activeAgents.isEmpty)
+        XCTAssertTrue(agentMonitor.activeAgents.contains("gemini"))
+        XCTAssertEqual(service.lastOneShotPlayedAt, beforeDone)
+    }
 }

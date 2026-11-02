@@ -476,9 +476,7 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             if event.kind == .needsApproval {
                 self.play(.agentNeedsApproval, agentId: event.agentID)
             } else if event.kind == .done {
-                if agentMonitor.activeAgents.isEmpty {
-                    self.play(.allAgentsDone)
-                }
+                self.play(.allAgentsDone)
             }
         }
 
