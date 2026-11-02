@@ -413,15 +413,19 @@ public struct TelemetrySnapshot: Equatable, Sendable {
     }
 
     /// Formats the Cyber HUD readout string displayed underneath the mascot.
-    /// Balances items across 1 or 2 clean, centered lines without trailing bullets.
+    /// Balances items cleanly across 1, 2, or 3 lines without trailing bullets or awkward wraps.
     public func hudSummary(enabledMetrics: Set<TelemetryMetric>, focusPoints: Double) -> String {
         var items: [String] = []
 
-        if enabledMetrics.contains(.cpu), let temp = cpu.temperatureCelsius {
-            if let load = cpu.loadPercentage {
-                items.append(String(format: "%.0f°C (%.0f%%)", temp, load))
-            } else {
-                items.append(String(format: "%.0f°C", temp))
+        if enabledMetrics.contains(.cpu) {
+            if let temp = cpu.temperatureCelsius {
+                if let load = cpu.loadPercentage {
+                    items.append(String(format: "%.0f°C (%.0f%%)", temp, load))
+                } else {
+                    items.append(String(format: "%.0f°C", temp))
+                }
+            } else if let load = cpu.loadPercentage {
+                items.append(String(format: "%.0f%% CPU", load))
             }
         }
         if enabledMetrics.contains(.ram) {
@@ -436,10 +440,14 @@ public struct TelemetrySnapshot: Equatable, Sendable {
         if enabledMetrics.contains(.fps) {
             items.append(fps.compactBadge)
         }
-        if enabledMetrics.contains(.battery), let bat = battery {
-            items.append(bat.compactBadge)
+        if enabledMetrics.contains(.battery) {
+            if let bat = battery {
+                items.append(bat.compactBadge)
+            } else {
+                items.append("AC")
+            }
         }
-        if enabledMetrics.contains(.network) && (network.downloadBytesPerSec > 10240 || network.uploadBytesPerSec > 10240) {
+        if enabledMetrics.contains(.network) {
             items.append(network.compactBadge)
         }
 
@@ -450,11 +458,22 @@ public struct TelemetrySnapshot: Equatable, Sendable {
             return items.joined(separator: " • ")
         }
 
-        // Split into 2 evenly balanced lines
-        let mid = (items.count + 1) / 2
-        let line1 = items[0..<mid].joined(separator: " • ")
-        let line2 = items[mid..<items.count].joined(separator: " • ")
-        return line1 + "\n" + line2
+        // If 4 or 5 items, split evenly into 2 lines
+        if items.count <= 5 {
+            let mid = (items.count + 1) / 2
+            let line1 = items[0..<mid].joined(separator: " • ")
+            let line2 = items[mid..<items.count].joined(separator: " • ")
+            return line1 + "\n" + line2
+        }
+
+        // For 6 or more items, split evenly across 3 balanced lines to avoid width overflow
+        let count = items.count
+        let n1 = (count + 2) / 3
+        let n2 = (count - n1 + 1) / 2
+        let line1 = items[0..<n1].joined(separator: " • ")
+        let line2 = items[n1..<(n1 + n2)].joined(separator: " • ")
+        let line3 = items[(n1 + n2)..<count].joined(separator: " • ")
+        return line1 + "\n" + line2 + "\n" + line3
     }
 
     /// Formats rotating speech bubble carousel messages for Bitz.

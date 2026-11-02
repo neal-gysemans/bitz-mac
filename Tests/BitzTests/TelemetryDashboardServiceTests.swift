@@ -224,6 +224,48 @@ final class TelemetryDashboardServiceTests: XCTestCase {
         XCTAssertTrue(hud.contains("\n"))
     }
 
+    func testSnapshotCyberHUDAllMetricsEnabledFormatsAcrossThreeLinesWithoutDropping() {
+        let disk = DiskTelemetry(freeBytes: 154_618_822_656, totalBytes: 500_000_000_000)
+        let ram = RAMTelemetry(usedBytes: 20_615_843_020, totalBytes: 34_359_738_368)
+        let agents = AgentTelemetry(activeCount: 2, agentNames: ["Claude", "Cursor"], context: AgentContextReading(agentID: "claude", agentName: "Claude", tokens: 200_000, windowTokens: 200_000))
+        let cpu = CPUTelemetry(loadPercentage: 9.0, temperatureCelsius: 52.0)
+        let fps = FPSTelemetry(currentFPS: 120.0)
+        let battery = BatteryTelemetry(percentage: 100, isCharging: false, powerSource: "Battery")
+        let network = NetworkTelemetry(downloadBytesPerSec: 0.0, uploadBytesPerSec: 0.0)
+
+        let snapshot = TelemetrySnapshot(
+            disk: disk,
+            ram: ram,
+            agents: agents,
+            fps: fps,
+            cpu: cpu,
+            network: network,
+            battery: battery
+        )
+
+        let allMetrics = Set(TelemetryMetric.allCases)
+        let hud = snapshot.hudSummary(enabledMetrics: allMetrics, focusPoints: 100.0)
+
+        // All 7 metrics + focusPoints must be present
+        XCTAssertTrue(hud.contains("52°C (9%)"), "CPU must be present")
+        XCTAssertTrue(hud.contains("19.2GB RAM"), "RAM must be present")
+        XCTAssertTrue(hud.contains("2 AGTS · 100%"), "Agents must be present")
+        XCTAssertTrue(hud.contains("144GB"), "Disk must be present")
+        XCTAssertTrue(hud.contains("120 FPS"), "FPS must be present")
+        XCTAssertTrue(hud.contains("100%"), "Battery must be present")
+        XCTAssertTrue(hud.contains("↓ 0 B/s"), "Network speed must be present even when idle")
+        XCTAssertTrue(hud.contains("100 PTS"), "Focus points must be present")
+
+        // Formatted across 3 lines
+        let lines = hud.split(separator: "\n", omittingEmptySubsequences: false)
+        XCTAssertEqual(lines.count, 3, "All 8 items must be balanced across 3 lines")
+        for line in lines {
+            XCTAssertLessThanOrEqual(line.count, 42, "Line must not overflow canvas width: '\(line)'")
+            XCTAssertFalse(line.hasPrefix("•"), "Line must not begin with orphan bullet: '\(line)'")
+            XCTAssertFalse(line.hasSuffix("•"), "Line must not end with orphan bullet: '\(line)'")
+        }
+    }
+
     func testSnapshotSpeechBubbleCarouselMessages() {
         let disk = DiskTelemetry(freeBytes: 107_374_182_400, totalBytes: 536_870_912_000)
         let ram = RAMTelemetry(usedBytes: 17_179_869_184, totalBytes: 34_359_738_368)

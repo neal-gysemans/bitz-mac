@@ -370,7 +370,7 @@ private struct MascotCyberHUDPillView: View, Equatable {
         Text(hudText)
             .font(.system(size: 8.5, weight: .bold, design: .monospaced))
             .multilineTextAlignment(.center)
-            .lineLimit(2)
+            .lineLimit(4)
             .foregroundStyle(hudBorderColor)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
