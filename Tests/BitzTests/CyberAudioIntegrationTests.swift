@@ -1,0 +1,353 @@
+import XCTest
+@testable import BitzCore
+
+private final class AtomicCounter: @unchecked Sendable {
+    private var val: Int = 0
+    private let lock = NSLock()
+
+    func increment() {
+        lock.lock()
+        defer { lock.unlock() }
+        val += 1
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return val
+    }
+}
+
+private final class TestClock: @unchecked Sendable {
+    private var time: Date
+    private let lock = NSLock()
+
+    init(_ initial: Date = Date(timeIntervalSince1970: 1000)) {
+        self.time = initial
+    }
+
+    var now: Date {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return time
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            time = newValue
+        }
+    }
+
+    func advance(by seconds: TimeInterval) {
+        lock.lock()
+        defer { lock.unlock() }
+        time = time.addingTimeInterval(seconds)
+    }
+}
+
+@MainActor
+final class CyberAudioIntegrationTests: XCTestCase {
+
+    func testStateTransitionsTriggerSoundsExclusivelyOnTransition() {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        store.setEnabled(true)
+
+        let clock = TestClock()
+        let mockDetector = MockAudioEnvironmentDetector()
+
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: mockDetector,
+            dateProvider: { clock.now }
+        )
+
+        // 1. Transition into burnout
+        service.handleStateTransition(from: .balanced, to: .burnout)
+        XCTAssertEqual(service.lastObservedState, .burnout)
+        XCTAssertNotNil(service.lastOneShotPlayedAt)
+
+        let burnoutTime = service.lastOneShotPlayedAt
+
+        // 2. Repeat tick in burnout (state unchanged)
+        clock.advance(by: 5.0)
+        service.handleStateTransition(from: .burnout, to: .burnout)
+        // lastOneShotPlayedAt should NOT change because no sound was played on identical state
+        XCTAssertEqual(service.lastOneShotPlayedAt, burnoutTime)
+
+        // 3. Transition into superCharged (starts purring)
+        clock.advance(by: 5.0)
+        service.handleStateTransition(from: .burnout, to: .superCharged)
+        XCTAssertTrue(service.isPurring)
+
+        // 4. Transition out of superCharged (stops purring)
+        clock.advance(by: 5.0)
+        service.handleStateTransition(from: .superCharged, to: .balanced)
+        XCTAssertFalse(service.isPurring)
+    }
+
+    func testAgentChimeCooldownEnforcement() {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        store.setEnabled(true)
+
+        let clock = TestClock()
+        let mockDetector = MockAudioEnvironmentDetector()
+
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: mockDetector,
+            dateProvider: { clock.now }
+        )
+
+        // First chime for agent "claude-1"
+        let check1 = service.canPlay(.agentNeedsApproval, agentId: "claude-1", now: clock.now)
+        XCTAssertTrue(check1.allowed)
+        service.play(.agentNeedsApproval, agentId: "claude-1")
+
+        // Immediate repeat for same agent within 0.5s should be suppressed by global rate limit
+        clock.advance(by: 0.5)
+        let check2 = service.canPlay(.agentNeedsApproval, agentId: "claude-1", now: clock.now)
+        XCTAssertFalse(check2.allowed)
+        XCTAssertEqual(check2.reason, .rateLimited) // hit 1.5s global
+
+        // After global interval (e.g. t = 2.5s), hit per-agent cooldown specifically (< 10s)
+        clock.advance(by: 2.0)
+        let check3 = service.canPlay(.agentNeedsApproval, agentId: "claude-1", now: clock.now)
+        XCTAssertFalse(check3.allowed)
+        XCTAssertEqual(check3.reason, .cooldownActive)
+
+        // After 10s have passed (t = 11.0s), chime is allowed again
+        clock.advance(by: 8.5)
+        let check4 = service.canPlay(.agentNeedsApproval, agentId: "claude-1", now: clock.now)
+        XCTAssertTrue(check4.allowed)
+
+        // Different agent "gemini-2" at t = 13.0s
+        clock.advance(by: 2.0)
+        let checkOtherAgent = service.canPlay(.agentNeedsApproval, agentId: "gemini-2", now: clock.now)
+        XCTAssertTrue(checkOtherAgent.allowed)
+    }
+
+    func testAllDoneFanfareCooldownEnforcement() {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        store.setEnabled(true)
+
+        let clock = TestClock()
+        let mockDetector = MockAudioEnvironmentDetector()
+
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: mockDetector,
+            dateProvider: { clock.now }
+        )
+
+        // First fanfare
+        XCTAssertTrue(service.canPlay(.allAgentsDone, now: clock.now).allowed)
+        service.play(.allAgentsDone)
+
+        // Repeat within 60s should be cooldown suppressed
+        clock.advance(by: 30.0)
+        let check = service.canPlay(.allAgentsDone, now: clock.now)
+        XCTAssertFalse(check.allowed)
+        XCTAssertEqual(check.reason, .cooldownActive)
+
+        // After 61s, allowed again
+        clock.advance(by: 31.0)
+        XCTAssertTrue(service.canPlay(.allAgentsDone, now: clock.now).allowed)
+    }
+
+    func testEnvironmentalSuppressionRules() {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        store.setEnabled(true)
+
+        let mockDetector = MockAudioEnvironmentDetector()
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: mockDetector
+        )
+
+        // 1. Mute suppression
+        mockDetector.isMuted = true
+        let checkMute = service.canPlay(.burnout)
+        XCTAssertFalse(checkMute.allowed)
+        XCTAssertEqual(checkMute.reason, .systemMuted)
+        mockDetector.isMuted = false
+
+        // 2. Microphone / call active suppression
+        mockDetector.isMicActive = true
+        let checkMic = service.canPlay(.burnout)
+        XCTAssertFalse(checkMic.allowed)
+        XCTAssertEqual(checkMic.reason, .callOrScreenSharingActive)
+
+        // Disabling call suppression in settings allows playback during calls
+        store.setCallSuppressionEnabled(false)
+        let checkMicAllowed = service.canPlay(.burnout)
+        XCTAssertTrue(checkMicAllowed.allowed)
+        store.setCallSuppressionEnabled(true)
+        mockDetector.isMicActive = false
+
+        // 3. Do Not Disturb suppression
+        mockDetector.isDNDActive = true
+        let checkDND = service.canPlay(.burnout)
+        XCTAssertFalse(checkDND.allowed)
+        XCTAssertEqual(checkDND.reason, .focusActive)
+    }
+
+    func testPettingInteractionTriggersAndEndsPurrLoop() {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        store.setEnabled(true)
+
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: MockAudioEnvironmentDetector()
+        )
+
+        let engine = WellnessPointEngine(userDefaults: defaults)
+        service.observe(wellnessEngine: engine)
+
+        XCTAssertFalse(service.isPurring)
+
+        // Trigger pet interaction
+        engine.triggerPetInteraction()
+        XCTAssertTrue(engine.isPetReactionActive)
+        XCTAssertTrue(service.isPurring)
+    }
+
+    func testPreviewBypassesCooldownsAndDoesNotAffectLiveCooldownTimers() {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        store.setEnabled(true)
+
+        let clock = TestClock()
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: MockAudioEnvironmentDetector(),
+            dateProvider: { clock.now }
+        )
+
+        // Normal playback enforces 60s cooldown
+        service.play(.allAgentsDone)
+        XCTAssertEqual(service.lastFanfarePlayedAt, clock.now)
+
+        // Repeat within 5s with bypassCooldown = true is allowed!
+        clock.advance(by: 5.0)
+        let checkPreview = service.canPlay(.allAgentsDone, now: clock.now, bypassCooldown: true)
+        XCTAssertTrue(checkPreview.allowed)
+
+        // And normal playback is still rejected due to cooldown
+        let checkNormal = service.canPlay(.allAgentsDone, now: clock.now, bypassCooldown: false)
+        XCTAssertFalse(checkNormal.allowed)
+        XCTAssertEqual(checkNormal.reason, .cooldownActive)
+    }
+
+    func testSuperChargedStateSchedulesPeriodicPurrsAndStopsOnExit() async {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        store.setEnabled(true)
+
+        let counter = AtomicCounter()
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: MockAudioEnvironmentDetector(),
+            randomPurrIntervalProvider: {
+                counter.increment()
+                return 0.05 // 50ms interval for quick test
+            }
+        )
+
+        let engine = WellnessPointEngine(userDefaults: defaults)
+        service.observe(wellnessEngine: engine)
+
+        // 1. Transition into superCharged triggers initial purr
+        service.handleStateTransition(from: .balanced, to: .superCharged)
+        XCTAssertTrue(service.isPurring)
+
+        // 2. Wait for next random interval tick
+        try? await Task.sleep(nanoseconds: 80_000_000)
+        XCTAssertGreaterThanOrEqual(counter.value, 1)
+
+        // 3. Transition out of superCharged halts scheduler
+        service.handleStateTransition(from: .superCharged, to: .balanced)
+        XCTAssertFalse(service.isPurring)
+    }
+
+    func testAgentMonitorDoneEventTriggersAllDoneSoundEvenWhenOtherAgentsAreActive() {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        store.setEnabled(true)
+
+        let clock = TestClock()
+        let service = CyberAudioService(
+            settingsStore: store,
+            environmentDetector: MockAudioEnvironmentDetector(),
+            dateProvider: { clock.now }
+        )
+        let agentMonitor = AgentMonitorService(clock: { clock.now })
+        service.observe(agentMonitor: agentMonitor)
+
+        // 1. Send needsApproval event -> triggers agentNeedsApproval
+        agentMonitor.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .needsApproval,
+            message: "Needs approval",
+            timestamp: clock.now
+        ))
+        XCTAssertNotNil(service.agentChimeCooldowns["antigravity"])
+
+        // 2. Another background agent starts (e.g. Gemini running in background)
+        clock.advance(by: 2.0)
+        agentMonitor.handleEvent(AgentEvent(
+            agentID: "gemini",
+            agentName: "Gemini",
+            kind: .started,
+            message: "Gemini started",
+            timestamp: clock.now
+        ))
+        XCTAssertTrue(agentMonitor.activeAgents.contains("gemini"))
+
+        // 3. Antigravity finishes tasks (.done) while Gemini is still running
+        clock.advance(by: 2.0)
+        let beforeDone = clock.now
+        agentMonitor.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .done,
+            message: "Antigravity finished!",
+            timestamp: clock.now
+        ))
+
+        // Invariant: allAgentsDone MUST play even if activeAgents is NOT empty
+        XCTAssertFalse(agentMonitor.activeAgents.isEmpty)
+        XCTAssertTrue(agentMonitor.activeAgents.contains("gemini"))
+        XCTAssertEqual(service.lastOneShotPlayedAt, beforeDone)
+    }
+}

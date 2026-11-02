@@ -1,59 +1,71 @@
-<!-- spec-kitty intake: ingested from issues/2026-10-30-agent-usage-gauges-warnings.md at 2026-10-30T10:42:10.021006+00:00 -->
-<!-- brief_hash: e0b1a62aba50087d4e89bc0bf598cc2eba07dcadbebedea393cfaae6a8ab9582 -->
+<!-- spec-kitty intake: ingested from issues/2026-10-31-cyber-audio-design.md at 2026-10-31T11:51:11.786560+00:00 -->
+<!-- brief_hash: f0504fecab05450f33758df0b5afa41da3d9f7f9022d6424cdaebdce86fc2fda -->
 
-# Feature Request: AI Agent Usage Gauges, "Almost Done" Milestones & Critical Warnings
+# [Feature]: Cyber Audio Design (purr, state sounds, agent chimes)
 
-Tracks GitHub issue #38.
+**Issue**: refs #21
 
 ## Summary
-Extend Bitz's agent monitoring so the mascot gives an "almost done" heads-up, shows how full an agent's context window is, and raises warnings when an agent is close to its context limit, stuck in a tool-call loop, or stalled.
+Add an optional Cyber Audio layer: low-latency 8-bit / cybernetic sound effects tied to mascot states and agent events.
 
 ## Environment
 - **Product/Service**: bitz-mac (Bitz the Cyber Cat)
-- **Region/Version**: current `main` + speech bubble panel rework (#61 / PR #62)
+- **Region/Version**: current `main`
 - **Browser/OS**: macOS 14.0+ (Apple Silicon)
 
-## Problem / Motivation
-`AgentMonitorService` (`src/Services/AgentMonitorService.swift`) only knows `started`, `working`, `needsApproval` and `done`. During long agent runs the user cannot tell:
+## Problem or Motivation
+Bitz communicates its state today purely visually (Rive animations / visor color driven by `BitzState` in `src/Services/WellnessPointEngine.swift`, and agent popups from `AgentMonitorService` in `src/Services/AgentMonitorService.swift`). When the mascot is out of the user's line of sight (another Space, full-screen editor, second monitor), important moments are missed:
 
-1. **Progress**: whether a task is 10% or 95% done. There is no "almost done" heads-up before the final notification.
-2. **Context depletion**: when the agent's context window is nearly full (quality degrades, auto-compaction kicks in).
-3. **Silent loops and stalls**: an agent repeating the same tool call, or sitting in `working` with no output, burns budget unnoticed.
+- An AI agent hits `.needsApproval` and sits idle waiting for the user.
+- All tracked agents finish (`activeAgents` becomes empty after `.done`).
+- Bitz slides into `.burnout` / `.overheating` — exactly when the user is too heads-down to look at the corner of the screen.
 
-## Data Sources Available Today (verified locally)
-- **Claude Code** session transcripts (`~/.claude/projects/<project>/<session>.jsonl`): assistant lines carry `message.model` and `message.usage` (`input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`) and `tool_use` content blocks (name + input), including the todo list tool.
-- **Antigravity** transcripts (`~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript.jsonl`, already tailed by `AntigravityTranscriptAdapter`): lines carry `input_tokens`, `cache_read_tokens`, `output_tokens`, `step_index` and `tool_calls`.
-- **Drop-box JSON API** (`~/Library/Application Support/Bitz/agent-events/*.json`, `DropboxAgentAdapter`): any hook or script can emit events directly.
-- Neither transcript records the model's context window size, session cost, or rate-limit state.
+A small, tasteful audio layer would make Bitz feel alive (a "cyber cat" that purrs) and make agent hand-offs noticeable, without becoming noisy.
 
-## Expected Behavior
-1. **Almost Done**: when an agent enters the final step of its own task list (e.g. last todo item in progress), Bitz shows an eager "✨ Claude is almost done!" bubble.
-2. **Context gauge**: the existing AI Agents telemetry metric shows the active agent's context usage (e.g. `Claude ctx 74%`) in the Cyber HUD / bubble carousel / menu bar title placements.
-3. **Warnings** (new `.warning` kind):
-   - Context window above a threshold (default 90%): "⚠️ Claude: context at 92%! Consider /compact soon."
-   - Tool loop: the same tool call (name + input) repeated 3+ times in a row.
-   - Stall: an agent in `working` with no new activity for 3+ minutes, while no tool call is pending.
-4. **Mascot**: warning bubbles stay until acknowledged or cleared by the next agent event; the visor turns amber while an agent warning is active.
-5. **Settings**: AI Agents tab gets toggles per warning type, the context threshold, the stall timeout, and the assumed context window size.
+## Proposed Solution / Feature
+Add an optional **Cyber Audio** layer: low-latency 8-bit / cybernetic sound effects tied to mascot states and agent events.
 
-## Scope Decisions (agreed 2026-10-30)
-In scope: event model (`.almostDone`, `.warning`, optional `metadata`), monitor lifecycle, Claude Code transcript adapter, Antigravity usage/loop signals, stall detection, amber visor, context % on the AI Agents metric, settings, unit tests.
+### Sound Map (Initial Set)
 
-Out of scope, to be split into follow-up issues:
-- **Session cost ($)**: transcripts carry no cost; would require a maintained price table.
-- **Rate limit (429) detection**: no verified transcript or hook signal yet.
-- **Runaway CPU alerts**: `ProcessAgentAdapter` does not sample per-process CPU today; needs its own design against the charter's < 2% CPU budget.
-- **Do Not Disturb / Focus integration**: depends on #19 / #22 (not built yet).
-- **Alert sounds**: depends on #21 (not built yet).
+| Trigger | Source | Sound |
+|---|---|---|
+| Flow / petting | `BitzState.superCharged` (and future petting interaction) | Soft looping mechanical purr (fades in/out, very low volume) |
+| Burnout | transition into `BitzState.burnout` | Glitchy "power-down" sweep |
+| Overheating | transition into `BitzState.overheating` | Short fan-whir / thermal alarm glitch |
+| Agent needs attention | `AgentEventKind.needsApproval` in `AgentMonitorService.handleEvent(_:)` | Two-tone chime |
+| All agents finished | `.done` that leaves `activeAgents` empty | Short 8-bit fanfare |
+| (optional) Charging | `BitzState.charging` | Soft "power-up" blip |
+
+### Architecture
+
+- New `src/Services/CyberAudioService.swift` (`@MainActor final class CyberAudioService: ObservableObject`) that:
+  - Uses `AVAudioEngine` + a small pool of `AVAudioPlayerNode`s with **preloaded `AVAudioPCMBuffer`s** (decoded once at launch) for low latency; the purr uses a looping buffer with a gain ramp.
+  - Stops/pauses the engine when nothing is playing so idle CPU ≈ 0 (no running render loop while silent).
+  - Exposes `play(_ event: CyberSoundEvent)` and `setPurring(_ on: Bool)`; observes `WellnessPointEngine`'s published state and `AgentMonitorService`'s `activeAgents` / events via Combine rather than modifying their logic heavily.
+  - Per-event **cooldowns** (e.g. chime ≥ 10 s per agent, fanfare ≥ 60 s, burnout/overheat only on state *transition*, never on repeat evaluations) plus a global rate limit to prevent spam.
+- New `src/Models/CyberAudioSettingsStore.swift` following the existing `AvatarOpacityStore` / `AvatarScaleStore` pattern (UserDefaults-backed `ObservableObject`, owned by the app delegate in `src/App/BitzApp.swift` next to `scaleStore` / `opacityStore` / `positionStore`):
+  - `isEnabled` master toggle — **default off** (or "subtle" preset at low volume if enabled).
+  - `volume` (0.0–1.0, default ~0.3), applied via the engine's main mixer.
+  - Per-event toggles (purr, burnout, overheating, agent chime, all-done fanfare).
+- Menu bar UI in `BitzApp.swift` / Settings window alongside other tabs/menus: Audio settings section with master toggle, volume slider, per-event toggles, and a "Test sounds" action.
+
+### Respecting the User's Context
+- Respect system mute / zero output volume (skip playback rather than queueing).
+- Respect macOS **Focus / Do Not Disturb** when detectable (suppress everything except, optionally, the agent-approval chime behind an explicit opt-in).
+- Suppress sounds while **screen sharing or in a call** when detectable (e.g. microphone/camera in use via CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere`, or known conferencing apps frontmost). If detection isn't reliable, document the limitation and fall back to the user's toggles.
+- Never steal audio focus or duck other apps.
+
+### Assets
+- Small bundled assets (target < 300 KB total), short mono CAF/WAV (or AAC) clips under a `Resources/Sounds/` folder.
+- License-clean only: custom-made (e.g. synthesized with sfxr/jsfxr/ChipTone) or CC0, with a `Resources/Sounds/LICENSE.md` / credits file listing each asset's source and license.
 
 ## Acceptance Criteria
-- [ ] `AgentEventKind` supports `.almostDone` and `.warning`; `AgentEvent` carries optional `metadata: [String: String]` and still decodes old drop-box JSON.
-- [ ] Mascot shows a distinct "Almost Done" bubble when an agent enters its final task step.
-- [ ] Context window usage percentage renders through the existing AI Agents telemetry metric.
-- [ ] Warning alerts trigger for context usage above threshold, repeated tool-call loops, and stalls (> 3 min, configurable).
-- [ ] Mascot visor turns amber while an agent warning is active.
-- [ ] Settings allow toggling each warning type and setting thresholds.
-- [ ] Unit tests cover `AgentMonitorService` handling of `.almostDone` and `.warning` lifecycle transitions and the transcript signal parsing.
-
-## Impact
-**Medium** - Makes long autonomous agent runs observable from the desktop without checking the terminal, and prevents context degradation and runaway loops from going unnoticed.
+- [ ] `CyberAudioService` plays preloaded buffers via `AVAudioEngine` (or `AVAudioPlayer` fallback) with perceptibly instant (< ~50 ms) playback.
+- [ ] Sounds trigger for: purr during `superCharged`/petting, power-down on entering `burnout`, glitch on entering `overheating`, chime on `needsApproval`, fanfare when all active agents are done.
+- [ ] State sounds fire only on state **transitions**; per-event cooldowns and a global rate limit prevent spam (covered by unit tests with an injected clock).
+- [ ] `CyberAudioSettingsStore` persists master toggle (default **off**), volume, and per-event toggles in UserDefaults, following the `AvatarOpacityStore` pattern.
+- [ ] Settings & menu bar exposed: master toggle, volume control, per-event toggles, and a "Test sounds" action.
+- [ ] Playback is skipped when system output is muted, when Focus/DND is active (if detectable), and during calls/screen sharing (if detectable); limitations are documented.
+- [ ] Idle CPU usage is unchanged vs. baseline when no sound is playing (engine paused/stopped when idle).
+- [ ] Bundled assets are small (< 300 KB total) and license-clean (custom or CC0) with a credits/LICENSE file.
+- [ ] Unit tests cover state→sound mapping, cooldowns, settings persistence, and suppression rules using a mock audio player.

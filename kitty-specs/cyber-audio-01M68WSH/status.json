@@ -1,0 +1,92 @@
+{
+  "event_count": 35,
+  "last_event_id": "01M68ZSRN8H4MK9RYW5PGWPTZC",
+  "materialized_at": "2026-10-31T12:43:51.848561+00:00",
+  "mission_number": "",
+  "mission_slug": "cyber-audio-01M68WSH",
+  "mission_type": "",
+  "summary": {
+    "approved": 0,
+    "blocked": 0,
+    "canceled": 0,
+    "claimed": 0,
+    "done": 5,
+    "for_review": 0,
+    "in_progress": 0,
+    "in_review": 0,
+    "planned": 0
+  },
+  "work_packages": {
+    "WP01": {
+      "actor": "merge",
+      "agent": "antigravity",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M68ZSD8PJHF36KVHF40VE13Q",
+      "last_transition_at": "2026-10-31T12:43:40.182445+00:00",
+      "review_result": {
+        "feedback_path": "/Users/akramkasimi/Documents/bitz-mac/kitty-specs/cyber-audio-01M68WSH/tasks/WP01-audio-models-and-settings-store/review-cycle-1.md",
+        "reference": "review-cycle://cyber-audio-01M68WSH/WP01-audio-models-and-settings-store/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "shell_pid": 1580,
+      "shell_pid_created_at": "1793312768.326811"
+    },
+    "WP02": {
+      "actor": "merge",
+      "agent": "antigravity",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M68ZSFYPT8DWYAN5FHV790G3",
+      "last_transition_at": "2026-10-31T12:43:42.934261+00:00",
+      "review_result": {
+        "feedback_path": "/Users/akramkasimi/Documents/bitz-mac/kitty-specs/cyber-audio-01M68WSH/tasks/WP02-sound-assets-and-audio-engine/review-cycle-1.md",
+        "reference": "review-cycle://cyber-audio-01M68WSH/WP02-sound-assets-and-audio-engine/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "shell_pid": 1580,
+      "shell_pid_created_at": "1793312768.326811"
+    },
+    "WP03": {
+      "actor": "merge",
+      "agent": "antigravity",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M68ZSK65HA5D3ATX8JWQX2W0",
+      "last_transition_at": "2026-10-31T12:43:46.245503+00:00",
+      "review_result": {
+        "reference": "review-cycle://cyber-audio-01M68WSH/WP03-event-wiring-cooldowns-and-suppression/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "shell_pid": 1580,
+      "shell_pid_created_at": "1793312768.326811"
+    },
+    "WP04": {
+      "actor": "merge",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M68ZSP0K4759WP05M3CZSAVT",
+      "last_transition_at": "2026-10-31T12:43:49.139430+00:00",
+      "review_result": {
+        "reference": "review-cycle://cyber-audio-01M68WSH/WP04-settings-and-menu-bar-ui/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      }
+    },
+    "WP05": {
+      "actor": "merge",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M68ZSRN8H4MK9RYW5PGWPTZC",
+      "last_transition_at": "2026-10-31T12:43:51.848561+00:00",
+      "review_result": {
+        "reference": "review-cycle://cyber-audio-01M68WSH/WP05-quality-verification-and-packaging/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      }
+    }
+  }
+}

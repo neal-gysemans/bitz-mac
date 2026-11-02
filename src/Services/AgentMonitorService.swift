@@ -64,6 +64,8 @@ public final class AgentMonitorService: ObservableObject {
     private var approvalPopupAgentID: String? = nil
     private let stallSweepInterval: TimeInterval
 
+    public var onEventHandled: (@MainActor (AgentEvent) -> Void)? = nil
+
     private static let customAgentsKey = "Bitz.AgentMonitor.CustomAgents"
     private static let agentDisabledPrefix = "Bitz.AgentMonitor.Disabled."
     private static let popupsEnabledKey = "Bitz.AgentMonitor.PopupsEnabled"
@@ -315,6 +317,7 @@ public final class AgentMonitorService: ObservableObject {
             }
         }
         sessions[id] = session
+        onEventHandled?(event)
     }
 
     /// Raises one stall warning per stall (FR-009). Runs every 5 s while monitoring; public for tests.

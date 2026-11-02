@@ -32,6 +32,44 @@ public struct AgentsSettingsTabView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Simulate Live Agent Alerts & Audio:")
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 10) {
+                            Button {
+                                agentMonitor.handleEvent(AgentEvent(
+                                    agentID: "antigravity",
+                                    agentName: "Antigravity",
+                                    kind: .needsApproval,
+                                    message: "Antigravity has a question for you!",
+                                    timestamp: Date()
+                                ))
+                            } label: {
+                                Label("Question / Chime", systemImage: "questionmark.bubble.fill")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Button {
+                                agentMonitor.handleEvent(AgentEvent(
+                                    agentID: "antigravity",
+                                    agentName: "Antigravity",
+                                    kind: .done,
+                                    message: "Antigravity finished all tasks!",
+                                    timestamp: Date()
+                                ))
+                            } label: {
+                                Label("All Done / Fanfare", systemImage: "checkmark.seal.fill")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
                 }
             }
 

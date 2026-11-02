@@ -1,0 +1,31 @@
+{
+  "accept_commit": "4dc5a1e6c00810138aeb864029819f7a2709814d",
+  "acceptance_history": [
+    {
+      "accept_commit": "4dc5a1e6c00810138aeb864029819f7a2709814d",
+      "acceptance_mode": "pr",
+      "accepted_at": "2026-10-31T12:42:52.361836+00:00",
+      "accepted_by": "akramkasimi",
+      "accepted_from_commit": "c001feb3d8ae484b87140f4c6affd23f827ab2d3"
+    }
+  ],
+  "acceptance_mode": "pr",
+  "accepted_at": "2026-10-31T12:42:52.361836+00:00",
+  "accepted_by": "akramkasimi",
+  "accepted_from_commit": "c001feb3d8ae484b87140f4c6affd23f827ab2d3",
+  "baseline_merge_commit": "47180fb34d560310033b29dd3c18f0c109e0000e",
+  "created_at": "2026-10-31T11:51:19.535395+00:00",
+  "flattened": true,
+  "friendly_name": "cyber audio",
+  "mission_id": "01M68WSH8EMBW0NJ6ZY5Q58JNZ",
+  "mission_number": null,
+  "mission_slug": "cyber-audio-01M68WSH",
+  "mission_type": "software-dev",
+  "purpose_context": "This mission advances cyber audio on feat/issue-21-cyber-audio so stakeholders can track the work from mission creation onward.",
+  "purpose_tldr": "cyber audio",
+  "slug": "cyber-audio-01M68WSH",
+  "status_phase": "1",
+  "target_branch": "feat/issue-21-cyber-audio",
+  "vcs": "git",
+  "vcs_locked_at": "2026-10-31T11:57:41.489251+00:00"
+}

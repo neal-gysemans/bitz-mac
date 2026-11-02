@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "mission_slug": "cyber-audio-01M68WSH",
+  "mission_id": "01M68WSH8EMBW0NJ6ZY5Q58JNZ",
+  "mission_branch": "kitty/mission-cyber-audio-01M68WSH",
+  "target_branch": "feat/issue-21-cyber-audio",
+  "lanes": [
+    {
+      "lane_id": "lane-a",
+      "wp_ids": [
+        "WP01"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/CyberAudioSettingsStoreTests.swift",
+        "src/Models/CyberAudioModels.swift",
+        "src/Models/CyberAudioSettingsStore.swift",
+        "src/Services/CyberAudioPlaying.swift"
+      ],
+      "predicted_surfaces": [
+        "legacy-cleanup"
+      ],
+      "depends_on_lanes": [],
+      "parallel_group": 0
+    },
+    {
+      "lane_id": "lane-b",
+      "wp_ids": [
+        "WP02",
+        "WP03"
+      ],
+      "write_scope": [
+        "Package.swift",
+        "Resources/Sounds/LICENSE.md",
+        "Resources/Sounds/agent_chime.wav",
+        "Resources/Sounds/all_done_fanfare.wav",
+        "Resources/Sounds/burnout_glitch.wav",
+        "Resources/Sounds/overheat_alarm.wav",
+        "Resources/Sounds/purr_loop.wav",
+        "Scripts/package_and_run.sh",
+        "Tests/BitzTests/AudioEnvironmentDetectorTests.swift",
+        "Tests/BitzTests/CyberAudioIntegrationTests.swift",
+        "Tests/BitzTests/CyberAudioServiceTests.swift",
+        "src/Services/AgentMonitorService.swift",
+        "src/Services/AudioEnvironmentDetector.swift",
+        "src/Services/CyberAudioService.swift",
+        "src/Services/WellnessPointEngine.swift"
+      ],
+      "predicted_surfaces": [],
+      "depends_on_lanes": [
+        "lane-a"
+      ],
+      "parallel_group": 1
+    },
+    {
+      "lane_id": "lane-c",
+      "wp_ids": [
+        "WP04"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/AudioSettingsViewsTests.swift",
+        "src/App/BitzApp.swift",
+        "src/Views/Settings/AudioSettingsTabView.swift",
+        "src/Views/Settings/SettingsRootView.swift"
+      ],
+      "predicted_surfaces": [
+        "api"
+      ],
+      "depends_on_lanes": [
+        "lane-a",
+        "lane-b"
+      ],
+      "parallel_group": 2
+    },
+    {
+      "lane_id": "lane-d",
+      "wp_ids": [
+        "WP05"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/MascotOverlayLayoutTests.swift"
+      ],
+      "predicted_surfaces": [],
+      "depends_on_lanes": [
+        "lane-a",
+        "lane-b",
+        "lane-c"
+      ],
+      "parallel_group": 3
+    }
+  ],
+  "computed_at": "2026-10-31T11:56:15.202176+00:00",
+  "computed_from": "dependency_graph+ownership",
+  "planning_artifact_wps": [],
+  "planning_commit_sha": "31d6cc46d720eb7c9ed13de58c020354fe143332",
+  "collapse_report": {
+    "events": [
+      {
+        "wp_a": "WP02",
+        "wp_b": "WP03",
+        "rule": "write_scope_overlap",
+        "evidence": "overlapping globs: 'src/Services/CyberAudioService.swift' vs 'src/Services/CyberAudioService.swift'; WP03 depends on WP02"
+      }
+    ],
+    "total_merges": 1,
+    "independent_wps_collapsed": 0,
+    "by_rule": {
+      "write_scope_overlap": 1
+    }
+  }
+}

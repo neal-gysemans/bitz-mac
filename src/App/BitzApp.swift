@@ -18,6 +18,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
     public let updateStore: AppUpdateStore
     public let telemetrySettings: TelemetrySettingsStore
     public let telemetryDashboard: TelemetryDashboardService
+    public let audioSettings: CyberAudioSettingsStore
+    public let audioService: CyberAudioService
     @Published public private(set) var menuBarTitle: String = "Bitz"
     public private(set) var overlayPanels: [MascotOverlayPanel] = []
     public var overlayPanel: MascotOverlayPanel? { overlayPanels.first }
@@ -54,6 +56,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         updateStore: AppUpdateStore = AppUpdateStore(),
         telemetrySettings: TelemetrySettingsStore? = nil,
         telemetryDashboard: TelemetryDashboardService? = nil,
+        audioSettings: CyberAudioSettingsStore? = nil,
+        audioService: CyberAudioService? = nil,
         userDefaults: UserDefaults = .standard
     ) {
         self.riveController = riveController
@@ -69,6 +73,11 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         self.telemetrySettings = resolvedTelemetrySettings
         self.telemetryDashboard = telemetryDashboard ?? TelemetryDashboardService(settingsStore: resolvedTelemetrySettings)
 
+        let resolvedAudioSettings = audioSettings ?? CyberAudioSettingsStore(userDefaults: userDefaults)
+        self.audioSettings = resolvedAudioSettings
+        let resolvedAudioService = audioService ?? CyberAudioService(settingsStore: resolvedAudioSettings)
+        self.audioService = resolvedAudioService
+
         // Wire agent detection adapters
         let processAdapter = ProcessAgentAdapter()
         let dropboxAdapter = DropboxAgentAdapter()
@@ -78,6 +87,9 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
             adapters: [processAdapter, dropboxAdapter, antigravityAdapter, claudeAdapter],
             userDefaults: userDefaults
         )
+
+        self.audioService.observe(wellnessEngine: self.engine)
+        self.audioService.observe(agentMonitor: self.agentMonitor)
 
         self.telemetryDashboard.bindDependencies(
             agentMonitor: self.agentMonitor,
@@ -250,6 +262,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         NSApp?.setActivationPolicy(.accessory)
         setupApplicationMenu()
         setupOverlayPanel()
+        audioService.preloadBuffers()
         activityMonitor.startMonitoring()
         agentMonitor.startMonitoring()
         telemetryDashboard.start()
@@ -273,6 +286,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         agentMonitor.stopMonitoring()
         telemetryDashboard.stop()
         updateStore.stopPeriodicChecks()
+        audioService.stopAll()
         engine.persistState()
     }
 
@@ -334,7 +348,9 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
                 agentMonitor: agentMonitor,
                 updateStore: updateStore,
                 telemetryDashboard: telemetryDashboard,
-                telemetrySettings: telemetrySettings
+                telemetrySettings: telemetrySettings,
+                audioSettings: audioSettings,
+                audioPlayer: audioService
             )
         )
     }
@@ -482,6 +498,36 @@ struct BitzMenuBarContentView: View {
     @ObservedObject var updateStore: AppUpdateStore
     @ObservedObject var telemetryDashboard: TelemetryDashboardService
     @ObservedObject var telemetrySettings: TelemetrySettingsStore
+    @ObservedObject var audioSettings: CyberAudioSettingsStore
+    var audioService: CyberAudioService? = nil
+
+    public init(
+        engine: WellnessPointEngine,
+        activityMonitor: ActivityMonitorService,
+        scaleStore: AvatarScaleStore,
+        opacityStore: AvatarOpacityStore,
+        positionStore: AvatarPositionStore,
+        displayStore: DisplayPreferenceStore,
+        agentMonitor: AgentMonitorService,
+        updateStore: AppUpdateStore,
+        telemetryDashboard: TelemetryDashboardService,
+        telemetrySettings: TelemetrySettingsStore,
+        audioSettings: CyberAudioSettingsStore = CyberAudioSettingsStore(),
+        audioService: CyberAudioService? = nil
+    ) {
+        self.engine = engine
+        self.activityMonitor = activityMonitor
+        self.scaleStore = scaleStore
+        self.opacityStore = opacityStore
+        self.positionStore = positionStore
+        self.displayStore = displayStore
+        self.agentMonitor = agentMonitor
+        self.updateStore = updateStore
+        self.telemetryDashboard = telemetryDashboard
+        self.telemetrySettings = telemetrySettings
+        self.audioSettings = audioSettings
+        self.audioService = audioService
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -517,7 +563,65 @@ struct BitzMenuBarContentView: View {
 
             Divider()
 
-            // MARK: - 2. Dedicated Settings Entrance
+            // MARK: - 2. Sound Quick Settings Submenu
+            Menu {
+                Toggle("Enable Cyber Audio", isOn: Binding(
+                    get: { audioSettings.isEnabled },
+                    set: { audioSettings.setEnabled($0) }
+                ))
+                Divider()
+                Toggle("Soothing Purr (Petting & High Wellness)", isOn: Binding(
+                    get: { audioSettings.isPurrEnabled },
+                    set: { audioSettings.setPurrEnabled($0) }
+                ))
+                .disabled(!audioSettings.isEnabled)
+                Toggle("Burnout Power-Down", isOn: Binding(
+                    get: { audioSettings.isBurnoutEnabled },
+                    set: { audioSettings.setBurnoutEnabled($0) }
+                ))
+                .disabled(!audioSettings.isEnabled)
+                Toggle("Overheating Thermal Alarm", isOn: Binding(
+                    get: { audioSettings.isOverheatEnabled },
+                    set: { audioSettings.setOverheatEnabled($0) }
+                ))
+                .disabled(!audioSettings.isEnabled)
+                Toggle("Agent Needs Approval Chime", isOn: Binding(
+                    get: { audioSettings.isAgentChimeEnabled },
+                    set: { audioSettings.setAgentChimeEnabled($0) }
+                ))
+                .disabled(!audioSettings.isEnabled)
+                Toggle("All Agents Done Fanfare", isOn: Binding(
+                    get: { audioSettings.isAllDoneFanfareEnabled },
+                    set: { audioSettings.setAllDoneFanfareEnabled($0) }
+                ))
+                .disabled(!audioSettings.isEnabled)
+                Toggle("Charging Blip", isOn: Binding(
+                    get: { audioSettings.isChargingEnabled },
+                    set: { audioSettings.setChargingEnabled($0) }
+                ))
+                .disabled(!audioSettings.isEnabled)
+                Divider()
+                Text("Volume: \(audioSettings.formattedVolumeSummary)")
+                Button("Volume: 25%") { audioSettings.setVolume(0.25) }
+                    .disabled(!audioSettings.isEnabled)
+                Button("Volume: 50%") { audioSettings.setVolume(0.50) }
+                    .disabled(!audioSettings.isEnabled)
+                Button("Volume: 75%") { audioSettings.setVolume(0.75) }
+                    .disabled(!audioSettings.isEnabled)
+                Button("Volume: 100%") { audioSettings.setVolume(1.00) }
+                    .disabled(!audioSettings.isEnabled)
+                Divider()
+                Button("Test Chime") {
+                    audioService?.play(.agentNeedsApproval, bypassCooldown: true)
+                }
+                .disabled(!audioSettings.isEnabled)
+            } label: {
+                Label("Sound", systemImage: audioSettings.isEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+            }
+
+            Divider()
+
+            // MARK: - 3. Dedicated Settings Entrance
             Button("Settings...") {
                 openSettingsWindow()
             }
@@ -551,7 +655,9 @@ struct BitzMenuBarContentView: View {
                 agentMonitor: agentMonitor,
                 updateStore: updateStore,
                 telemetryDashboard: telemetryDashboard,
-                telemetrySettings: telemetrySettings
+                telemetrySettings: telemetrySettings,
+                audioSettings: audioSettings,
+                audioPlayer: audioService
             )
         )
     }
@@ -614,7 +720,9 @@ public struct BitzApp: App {
                 agentMonitor: appDelegate.agentMonitor,
                 updateStore: appDelegate.updateStore,
                 telemetryDashboard: appDelegate.telemetryDashboard,
-                telemetrySettings: appDelegate.telemetrySettings
+                telemetrySettings: appDelegate.telemetrySettings,
+                audioSettings: appDelegate.audioSettings,
+                audioService: appDelegate.audioService
             )
         }
     }
