@@ -93,4 +93,30 @@ final class DropboxAgentAdapterTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "Stale file must be removed")
         adapter.stop()
     }
+
+    func testDropsV2EventWithMetadata() {
+        let adapter = DropboxAgentAdapter(
+            directoryURL: tempDir,
+            clock: { ISO8601DateFormatter().date(from: "2026-10-30T11:00:05Z")! }
+        )
+        let collector = DropboxEventCollector()
+
+        let json = """
+        {
+            "agentID": "claude",
+            "agentName": "Claude",
+            "kind": "usage",
+            "timestamp": "2026-10-30T11:00:00Z",
+            "metadata": { "contextTokens": "1234" }
+        }
+        """
+        try? json.data(using: .utf8)?.write(to: tempDir.appendingPathComponent("v2.json"))
+
+        adapter.start { collector.append($0) }
+        adapter.processPendingFiles()
+        XCTAssertEqual(collector.snapshot.count, 1)
+        XCTAssertEqual(collector.snapshot.first?.kind, .usage)
+        XCTAssertEqual(collector.snapshot.first?.contextTokens, 1234)
+        adapter.stop()
+    }
 }

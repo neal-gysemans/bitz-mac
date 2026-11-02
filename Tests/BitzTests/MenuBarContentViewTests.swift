@@ -133,4 +133,41 @@ final class MenuBarContentViewTests: XCTestCase {
         SettingsWindowManager.shared.closeSettingsWindow()
         XCTAssertFalse(SettingsWindowManager.shared.isWindowOpen)
     }
+
+    /// FR-010 / US3 scenario 7: an active agent warning can be dismissed from the menu bar.
+    func testMenuBarShowsDismissForActiveWarning() {
+        let suiteName = "MenuBarWarningTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let engine = WellnessPointEngine(riveController: ProductionRiveController(), userDefaults: defaults)
+        let telemetrySettings = TelemetrySettingsStore(userDefaults: defaults)
+        let agentMonitor = AgentMonitorService(adapters: [], userDefaults: defaults)
+        let menuView = BitzMenuBarContentView(
+            engine: engine,
+            activityMonitor: ActivityMonitorService(engine: engine, telemetry: MockTelemetryProvider()),
+            scaleStore: AvatarScaleStore(userDefaults: defaults),
+            opacityStore: AvatarOpacityStore(userDefaults: defaults),
+            positionStore: AvatarPositionStore(userDefaults: defaults),
+            displayStore: DisplayPreferenceStore(userDefaults: defaults),
+            agentMonitor: agentMonitor,
+            updateStore: AppUpdateStore(userDefaults: defaults),
+            telemetryDashboard: TelemetryDashboardService(settingsStore: telemetrySettings),
+            telemetrySettings: telemetrySettings
+        )
+        XCTAssertFalse(String(describing: menuView.body).contains("Dismiss Agent Warning"), "No warning, no dismiss item")
+
+        agentMonitor.handleEvent(AgentEvent(
+            agentID: "claude", agentName: "Claude", kind: .warning, message: "⚠️ Claude may be stuck",
+            metadata: [AgentEvent.MetadataKey.reason: "reported"]
+        ))
+        XCTAssertNotNil(agentMonitor.activeWarning)
+        XCTAssertTrue(String(describing: menuView.body).contains("Dismiss Agent Warning"))
+
+        // The Dismiss Agent Warning button's action
+        agentMonitor.acknowledgeWarning()
+        XCTAssertNil(agentMonitor.activeWarning)
+        XCTAssertNil(agentMonitor.activePopup, "Dismissing also clears the warning bubble")
+        XCTAssertFalse(String(describing: menuView.body).contains("Dismiss Agent Warning"))
+    }
 }

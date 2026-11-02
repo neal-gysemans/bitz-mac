@@ -1,0 +1,32 @@
+{
+  "accept_commit": "a5c284c7d72b8a2970180f02c1f6301275449e98",
+  "acceptance_history": [
+    {
+      "accept_commit": "a5c284c7d72b8a2970180f02c1f6301275449e98",
+      "acceptance_mode": "pr",
+      "accepted_at": "2026-10-31T11:54:59.971575+00:00",
+      "accepted_by": "nealgysemans",
+      "accepted_from_commit": "95196468420a53210bfdbc731fb1837d1d55861d"
+    }
+  ],
+  "acceptance_mode": "pr",
+  "accepted_at": "2026-10-31T11:54:59.971575+00:00",
+  "accepted_by": "nealgysemans",
+  "accepted_from_commit": "95196468420a53210bfdbc731fb1837d1d55861d",
+  "baseline_merge_commit": "60ae73638afe3bec28aea0010b01708ba2f32fb1",
+  "created_at": "2026-10-30T10:42:41.836575+00:00",
+  "flattened": true,
+  "friendly_name": "agent usage gauges and warnings",
+  "mission_id": "01M666F5Z5VJTD1R7QXESMDY73",
+  "mission_number": null,
+  "mission_slug": "agent-usage-gauges-warnings-01M666F5",
+  "mission_type": "software-dev",
+  "pr_bound": true,
+  "purpose_context": "This mission advances agent usage gauges, almost-done milestones and critical warnings (GitHub issue #38) on feat/issue-38-agent-gauges-warnings so stakeholders can track the work from mission creation onward.",
+  "purpose_tldr": "agent usage gauges and warnings",
+  "slug": "agent-usage-gauges-warnings-01M666F5",
+  "source_description": "GitHub issue #38 (AkramKs/bitz-mac) via issues/2026-10-30-agent-usage-gauges-warnings.md",
+  "status_phase": "1",
+  "target_branch": "feat/issue-38-agent-gauges-warnings",
+  "vcs": "git"
+}

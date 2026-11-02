@@ -1,0 +1,89 @@
+{
+  "rows": {
+    "#19": {
+      "evidence_ref": "Out of scope per spec Out of Scope: DND/Focus integration remains tracked in #19",
+      "fr": null,
+      "nfr": null,
+      "repo": null,
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "<fill at WP-implementation time>",
+      "verdict": "deferred-with-followup",
+      "wp": null
+    },
+    "#21": {
+      "evidence_ref": "Out of scope per spec Out of Scope: alert sounds remain tracked in #21",
+      "fr": null,
+      "nfr": null,
+      "repo": null,
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "<fill at WP-implementation time>",
+      "verdict": "deferred-with-followup",
+      "wp": null
+    },
+    "#22": {
+      "evidence_ref": "Out of scope per spec Out of Scope: Flow-State Shield/Focus remains tracked in #22",
+      "fr": null,
+      "nfr": null,
+      "repo": null,
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "<fill at WP-implementation time>",
+      "verdict": "deferred-with-followup",
+      "wp": null
+    },
+    "#38": {
+      "evidence_ref": "All 9 WPs approved by independent review; acceptance 2026-10-31 (a5c284c), 14/14 FR pass; 258 tests 0 failures; release walkthrough \u00a71\u2013\u00a75 pass. Upstream issue closes on PR merge (Closes #38).",
+      "fr": null,
+      "nfr": null,
+      "repo": null,
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "<fill at WP-implementation time>",
+      "verdict": "fixed",
+      "wp": "WP09"
+    },
+    "#61": {
+      "evidence_ref": "Base dependency (spec C-006): bubble clipping fixed by open PR #62 that this mission stacks on",
+      "fr": null,
+      "nfr": null,
+      "repo": null,
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "<fill at WP-implementation time>",
+      "verdict": "deferred-with-followup",
+      "wp": null
+    },
+    "#62": {
+      "evidence_ref": "Base dependency (spec C-006): open PR #62 for #61; merges independently before this mission's PR",
+      "fr": null,
+      "nfr": null,
+      "repo": null,
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "<fill at WP-implementation time>",
+      "verdict": "deferred-with-followup",
+      "wp": null
+    },
+    "#63": {
+      "evidence_ref": "Fixed on main by PR #65 (1438ab9, flat {name,args} ask_question lookup); carried into this branch's rewritten AntigravityTranscriptAdapter when upstream/main is merged before the PR.",
+      "fr": null,
+      "nfr": null,
+      "repo": null,
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "<fill at WP-implementation time>",
+      "verdict": "verified-already-fixed",
+      "wp": null
+    }
+  },
+  "schema_version": 1
+}

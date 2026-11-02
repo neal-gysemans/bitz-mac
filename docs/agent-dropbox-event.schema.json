@@ -20,8 +20,8 @@
     },
     "kind": {
       "type": "string",
-      "enum": ["started", "working", "needsApproval", "done"],
-      "description": "Lifecycle transition kind."
+      "enum": ["started", "working", "needsApproval", "done", "almostDone", "warning", "usage"],
+      "description": "Lifecycle transition kind. almostDone = final-phase heads-up; warning = persistent alert (see metadata.reason); usage = context reading / activity heartbeat, never shown."
     },
     "message": {
       "type": "string",
@@ -31,6 +31,11 @@
       "type": "string",
       "format": "date-time",
       "description": "ISO-8601 timestamp when the event was generated."
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "number", "boolean"] },
+      "description": "Optional details. Keys: reason (context|loop|stall|reported), contextTokens, pendingTools, turnActive, seed, source. pendingTools, turnActive, seed and source are written by Bitz's own adapters; the drop-box does not strip them, so a script that sends them is trusted as-is."
     }
   },
   "additionalProperties": false

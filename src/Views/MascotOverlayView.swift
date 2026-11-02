@@ -76,13 +76,22 @@ public struct MascotOverlayView: View {
         }
     }
 
+    /// The warning visor is Amber except while overheating (red wins); mirrors `WellnessPointEngine.syncWithRive()`.
+    public static func visorRGB(for state: BitzState, warningVisorActive: Bool) -> (red: Double, green: Double, blue: Double) {
+        warningVisorActive && state != .overheating ? visorRGB(for: .overworked) : visorRGB(for: state)
+    }
+
     public static func visorColor(for state: BitzState) -> Color {
-        let rgb = visorRGB(for: state)
+        visorColor(for: state, warningVisorActive: false)
+    }
+
+    public static func visorColor(for state: BitzState, warningVisorActive: Bool) -> Color {
+        let rgb = visorRGB(for: state, warningVisorActive: warningVisorActive)
         return Color(red: rgb.red, green: rgb.green, blue: rgb.blue)
     }
 
     private var visorColor: Color {
-        Self.visorColor(for: engine.currentState)
+        Self.visorColor(for: engine.currentState, warningVisorActive: engine.isWarningVisorActive)
     }
 
     private var animationSpeedMultiplier: Double {
@@ -122,6 +131,9 @@ public struct MascotOverlayView: View {
             // Periodic natural eye-blink (every ~4.2s for ~0.15s)
             let blinkRemainder = t.truncatingRemainder(dividingBy: 4.2)
             let isBlinking = blinkRemainder < 0.16 && !isLoafPosture && engine.currentState != .overheating && !engine.isPetReactionActive
+            // Read on the main actor: the geometry transform below is a Sendable closure
+            let canvasSpace = Self.canvasSpace
+            let earOverflow = BitzCharacterView.earOverflow(isLoafPosture: isLoafPosture)
 
             VStack(spacing: 6) {
                 Spacer(minLength: 0)
@@ -139,7 +151,7 @@ public struct MascotOverlayView: View {
                 .opacity(opacityStore.opacityFactor)
                 // Layout frame excludes the breathing offset, so this only fires when the HUD or posture changes
                 .onGeometryChange(for: CGFloat.self) { proxy in
-                    proxy.frame(in: .named(Self.canvasSpace)).minY - BitzCharacterView.earOverflow(isLoafPosture: isLoafPosture)
+                    proxy.frame(in: .named(canvasSpace)).minY - earOverflow
                 } action: { earTop in
                     onEarTopChanged?(earTop)
                 }

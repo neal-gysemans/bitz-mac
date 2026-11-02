@@ -524,10 +524,13 @@ public final class TelemetryDashboardService: ObservableObject {
             .filter { activeAgentIDs.contains($0.id) }
             .map { $0.displayName } ?? []
         let lastAction = agentMonitor?.activePopup?.text
+        // The last reading stays after the turn ends, when context is most worth checking; a new reading replaces it.
+        let context = agentMonitor?.latestContext
         let agentTelemetry = AgentTelemetry(
             activeCount: activeAgentIDs.count,
             agentNames: activeAgentNames,
-            lastActionMessage: lastAction
+            lastActionMessage: lastAction,
+            context: context
         )
 
         // Gather CPU & Thermal metrics

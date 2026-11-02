@@ -13,7 +13,7 @@ All Rive mutations target state machine `"BitzStateMachine"` inside asset `"bitz
 | Input Identifier | Rive Type | Swift Type | Domain Range / Allowed Values | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
 | `speedMultiplier` | `Number` | `Float` | `0.0 ... 2.5` (`2.5`, `2.0`, `1.0`, `0.6`, `0.4`, `0.35`, `0.0`) | Controls idle breathing, ear twitch, paws trot, and tail wag playback speed. |
-| `visorColor` | `Number` | `Float` | `0.0` (Cyan `#00F0FF`), `1.0` (Magenta `#FF007F`), `2.0` (Amber `#FFB000`), `3.0` (Red `#FF1E1E`), `4.0` (Violet `#9D4EDD`), `5.0` (Green `#00FF88`) | Drives LED visor and internal ear/tail neon color blends. |
+| `visorColor` | `Number` | `Float` | `0.0` (Cyan `#00F0FF`), `1.0` (Magenta `#FF007F`), `2.0` (Amber `#FFB000`), `3.0` (Red `#FF1E1E`), `4.0` (Violet `#9D4EDD`), `5.0` (Green `#00FF88`) | Drives LED visor and internal ear/tail neon color blends. Forced to `2.0` while the agent warning visor is active, except when overheating (§8). |
 | `isStandby` | `Boolean` | `Bool` | `true` / `false` | Transitions Bitz into/out of curled loaf sleep/charging mode. |
 | `isGlitching` | `Boolean` | `Bool` | `true` / `false` | Enables/disables cyberpunk chromatic aberration and jitter during CPU thermal spikes. |
 | `triggerPet` | `Trigger` | `Void` | One-shot impulse | Plays the happy purr / `<3` visor reaction when triggered from the Menu Bar. |
@@ -226,3 +226,45 @@ stateDiagram-v2
     Overheating --> SuperCharged: thermals normalize [pts >= 80]
     Overheating --> DopamineSad: thermals normalize [pts < 40]
 ```
+
+---
+
+## 8. Agent Warning Visor (`setWarningVisor(active:)`)
+
+While an agent warning is unacknowledged (#38), the visor turns Amber. This is an engine input layered on top of the state machine: it never changes `currentState`, points, the work streak or any threshold in §3–§5.
+
+| Member | Visibility | Rule |
+| :--- | :--- | :--- |
+| `isWarningVisorActive` | `@Published`, read-only | Set only through `setWarningVisor(active:)`. |
+| `setWarningVisor(active:)` | public | No-op when the value is unchanged; otherwise stores the flag and calls `syncWithRive()`. |
+| `syncWithRive()` | public | Pushes the current state's inputs (§5), then, if `isWarningVisorActive && currentState != .overheating`, pushes `visorColor = 2.0` (Amber `#FFB000`). Only `visorColor` is overridden; `speedMultiplier`, `isStandby` and `isGlitching` follow the state. |
+| `MascotOverlayView.visorRGB(for:warningVisorActive:)` | public | Draws the Amber visor under the same rule, so the drawn visor and the Rive `visorColor` input always match. |
+
+Visor precedence:
+
+| Condition | Rive `visorColor` | Drawn Visor |
+| :--- | :--- | :--- |
+| `.overheating` (flag on or off) | `3.0` (Critical Red `#FF1E1E`) | Red |
+| Flag on, any other state | `2.0` (Amber `#FFB000`) | Amber |
+| Flag off | State colour from §5 | State colour from §5 |
+
+```mermaid
+stateDiagram-v2
+    [*] --> StateColour
+    StateColour --> WarningAmber: setWarningVisor(active: true) [state != overheating]
+    WarningAmber --> StateColour: setWarningVisor(active: false)
+    WarningAmber --> OverheatingRed: state becomes .overheating
+    OverheatingRed --> WarningAmber: thermals normalize [flag still on]
+    OverheatingRed --> StateColour: thermals normalize [flag off]
+    StateColour --> OverheatingRed: state becomes .overheating
+```
+
+- **Source of the flag**: `BitzAppDelegate` maps `agentMonitor.$activeWarning != nil` onto `setWarningVisor(active:)`. The engine receives only this boolean; the warning policy stays in `AgentMonitorService` (`docs/ARCHITECTURE.md` §5).
+- **Same Amber as fatigue**: `.overworked` and `.burnout` already use `2.0`, so the warning visor shows no visible change in those states.
+- **Known limitation**: wellness and carousel speech-bubble borders use the state colour without the flag. With agent speech bubbles off, those borders keep their state colour while the visor is Amber.
+- **Test Verification Method**:
+  - `WellnessPointEngineTests.testWarningVisorDrivesRiveAmberAndMatchesDrawnVisor`
+  - `AgentWarningPresentationTests.testVisorAmberWhileWarningVisorActiveForEveryStateExceptOverheating`
+  - `AgentWarningPresentationTests.testVisorUnchangedWithoutWarningVisor`
+  - `SpeechBubblePanelTests.testWarningBubbleTakesClicksOnlyUntilAcknowledged` (app wiring: a warning turns the visor Amber, acknowledging clears it)
+  - `MascotOverlayLayoutTests.testMascotWithWarningVisorStaysInsidePanel`

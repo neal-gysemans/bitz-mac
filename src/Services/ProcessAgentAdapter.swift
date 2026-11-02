@@ -55,6 +55,8 @@ public final class ProcessAgentAdapter: AgentAdapter, @unchecked Sendable {
     // Key: Agent ID -> (lastSeenDate, isCurrentlyWorking)
     private var trackedAgents: [String: (lastSeen: Date, isWorking: Bool)] = [:]
     private let lock = NSLock()
+    /// Tags every event as app presence (see `AgentEvent.isProcessPresence`).
+    private static let presenceMetadata = [AgentEvent.MetadataKey.source: "process"]
 
     public init(
         provider: ProcessListingProviding = SystemProcessListingProvider(),
@@ -128,7 +130,8 @@ public final class ProcessAgentAdapter: AgentAdapter, @unchecked Sendable {
                         agentName: match.def.displayName,
                         kind: .working,
                         message: "\(match.def.displayName) is working...",
-                        timestamp: now
+                        timestamp: now,
+                        metadata: Self.presenceMetadata
                     ))
                 } else {
                     trackedAgents[agentID] = (lastSeen: now, isWorking: existing.isWorking || match.isWorking)
@@ -142,7 +145,8 @@ public final class ProcessAgentAdapter: AgentAdapter, @unchecked Sendable {
                     agentName: match.def.displayName,
                     kind: isWorking ? .working : .started,
                     message: isWorking ? "\(match.def.displayName) is working..." : "\(match.def.displayName) started",
-                    timestamp: now
+                    timestamp: now,
+                    metadata: Self.presenceMetadata
                 ))
             }
         }
@@ -158,7 +162,8 @@ public final class ProcessAgentAdapter: AgentAdapter, @unchecked Sendable {
                     agentName: agentDef.displayName,
                     kind: .done,
                     message: "\(agentDef.displayName) finished",
-                    timestamp: now
+                    timestamp: now,
+                    metadata: Self.presenceMetadata
                 ))
             }
             trackedAgents.removeValue(forKey: removedID)

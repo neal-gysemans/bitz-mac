@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "mission_slug": "agent-usage-gauges-warnings-01M666F5",
+  "mission_id": "01M666F5Z5VJTD1R7QXESMDY73",
+  "mission_branch": "kitty/mission-agent-usage-gauges-warnings-01M666F5",
+  "target_branch": "feat/issue-38-agent-gauges-warnings",
+  "lanes": [
+    {
+      "lane_id": "lane-a",
+      "wp_ids": [
+        "WP01"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/AgentModelsTests.swift",
+        "Tests/BitzTests/DropboxAgentAdapterTests.swift",
+        "docs/agent-dropbox-event.schema.json",
+        "src/Models/AgentModels.swift"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "artifact-rendering"
+      ],
+      "depends_on_lanes": [],
+      "parallel_group": 0
+    },
+    {
+      "lane_id": "lane-b",
+      "wp_ids": [
+        "WP02"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/AgentMonitorServiceTests.swift",
+        "Tests/BitzTests/AgentSignalPolicyTests.swift",
+        "Tests/BitzTests/ProcessAgentAdapterTests.swift",
+        "src/Services/AgentMonitorService.swift",
+        "src/Services/ProcessAgentAdapter.swift"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "legacy-cleanup"
+      ],
+      "depends_on_lanes": [
+        "lane-a"
+      ],
+      "parallel_group": 1
+    },
+    {
+      "lane_id": "lane-c",
+      "wp_ids": [
+        "WP03"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/AgentSessionTrackerTests.swift",
+        "Tests/BitzTests/SessionLogTailTests.swift",
+        "src/Services/AgentSessionTracker.swift",
+        "src/Services/SessionLogTail.swift"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "legacy-cleanup",
+        "tracker-integration"
+      ],
+      "depends_on_lanes": [
+        "lane-a"
+      ],
+      "parallel_group": 1
+    },
+    {
+      "lane_id": "lane-d",
+      "wp_ids": [
+        "WP04"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/ClaudeCodeTranscriptAdapterTests.swift",
+        "src/Services/ClaudeCodeTranscriptAdapter.swift"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "tracker-integration"
+      ],
+      "depends_on_lanes": [
+        "lane-c"
+      ],
+      "parallel_group": 2
+    },
+    {
+      "lane_id": "lane-e",
+      "wp_ids": [
+        "WP05"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/AntigravityTranscriptAdapterTests.swift",
+        "src/Services/AntigravityTranscriptAdapter.swift"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "tracker-integration"
+      ],
+      "depends_on_lanes": [
+        "lane-c"
+      ],
+      "parallel_group": 2
+    },
+    {
+      "lane_id": "lane-g",
+      "wp_ids": [
+        "WP07"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/TelemetryDashboardServiceTests.swift",
+        "src/Models/TelemetryModels.swift",
+        "src/Services/TelemetryDashboardService.swift"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "artifact-rendering",
+        "dashboard",
+        "tracker-integration"
+      ],
+      "depends_on_lanes": [
+        "lane-b"
+      ],
+      "parallel_group": 2
+    },
+    {
+      "lane_id": "lane-h",
+      "wp_ids": [
+        "WP08"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/SettingsViewsTests.swift",
+        "src/Views/Settings/AgentsSettingsTabView.swift"
+      ],
+      "predicted_surfaces": [
+        "api"
+      ],
+      "depends_on_lanes": [
+        "lane-b"
+      ],
+      "parallel_group": 2
+    },
+    {
+      "lane_id": "lane-f",
+      "wp_ids": [
+        "WP06"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/AgentSignalIntegrationTests.swift",
+        "Tests/BitzTests/AgentWarningPresentationTests.swift",
+        "Tests/BitzTests/MascotOverlayLayoutTests.swift",
+        "Tests/BitzTests/MenuBarContentViewTests.swift",
+        "Tests/BitzTests/OverlayTestFixtures.swift",
+        "Tests/BitzTests/SpeechBubblePanelTests.swift",
+        "Tests/BitzTests/WellnessPointEngineTests.swift",
+        "src/App/BitzApp.swift",
+        "src/Services/WellnessPointEngine.swift",
+        "src/Views/MascotOverlayView.swift",
+        "src/Views/SpeechBubbleView.swift"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "app-shell",
+        "artifact-rendering",
+        "legacy-cleanup",
+        "tests",
+        "tracker-integration"
+      ],
+      "depends_on_lanes": [
+        "lane-b",
+        "lane-d"
+      ],
+      "parallel_group": 3
+    },
+    {
+      "lane_id": "lane-i",
+      "wp_ids": [
+        "WP09"
+      ],
+      "write_scope": [
+        "docs/ACCEPTANCE_CRITERIA.md",
+        "docs/ARCHITECTURE.md",
+        "docs/STATE_MACHINE.md"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "tests",
+        "tracker-integration"
+      ],
+      "depends_on_lanes": [
+        "lane-a",
+        "lane-b",
+        "lane-c",
+        "lane-d",
+        "lane-e",
+        "lane-f",
+        "lane-g",
+        "lane-h"
+      ],
+      "parallel_group": 4
+    }
+  ],
+  "computed_at": "2026-10-30T14:06:31.760313+00:00",
+  "computed_from": "dependency_graph+ownership",
+  "planning_artifact_wps": [],
+  "planning_commit_sha": "998c1e06ad7bdaa161bdbde818693df05775149b"
+}
