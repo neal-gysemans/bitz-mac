@@ -207,4 +207,9 @@ final class AppUpdateServiceTests: XCTestCase {
         await store.checkForUpdates(manual: true)
         XCTAssertTrue(store.isUpdateAvailable)
     }
+
+    func testGitHubUpdateServiceDefaultRepositoryIsBitzReleases() {
+        let service = GitHubUpdateService()
+        XCTAssertEqual(service.repository, "AkramKs/bitz-releases")
+    }
 }

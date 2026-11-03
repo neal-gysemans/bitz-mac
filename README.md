@@ -39,7 +39,7 @@ brew upgrade --cask bitz
 
 ### Direct Download (.DMG)
 
-1. Download the latest `Bitz.dmg` from the [GitHub Releases](https://github.com/AkramKs/bitz-mac/releases/latest) page.
+1. Download the latest `Bitz.dmg` from the [GitHub Releases](https://github.com/AkramKs/bitz-releases/releases/latest) page.
 2. Open `Bitz.dmg` and drag `Bitz.app` into your **Applications** folder.
 3. Launch `Bitz.app` from `/Applications` or Spotlight (`Cmd + Space`).
 

@@ -160,7 +160,7 @@ public final class GitHubUpdateService: UpdateCheckingService {
     private let session: URLSession
 
     public init(
-        repository: String = "AkramKs/bitz-mac",
+        repository: String = "AkramKs/bitz-releases",
         session: URLSession = .shared
     ) {
         self.repository = repository

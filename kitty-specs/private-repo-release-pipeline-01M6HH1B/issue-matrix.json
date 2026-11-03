@@ -1,0 +1,17 @@
+{
+  "rows": {
+    "#105": {
+      "evidence_ref": ".github/workflows/release.yml",
+      "fr": "FR-001",
+      "nfr": "NFR-001",
+      "repo": "AkramKs/bitz-mac",
+      "sc": "SC-001",
+      "scope": "private repo release pipeline",
+      "source_file": "spec.md",
+      "title": "Private Repository Transition with Public Release Distribution Pipeline & Homebrew Support",
+      "verdict": "fixed",
+      "wp": "WP01-WP03"
+    }
+  },
+  "schema_version": 1
+}

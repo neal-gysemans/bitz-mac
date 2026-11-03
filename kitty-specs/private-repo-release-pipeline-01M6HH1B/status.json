@@ -1,0 +1,101 @@
+{
+  "event_count": 21,
+  "last_event_id": "01M6HHJ3Z0RFT549FS44GJ73KX",
+  "materialized_at": "2026-11-03T20:28:11.104388+00:00",
+  "mission_number": "",
+  "mission_slug": "private-repo-release-pipeline-01M6HH1B",
+  "mission_type": "software-dev",
+  "summary": {
+    "approved": 0,
+    "blocked": 0,
+    "canceled": 0,
+    "claimed": 0,
+    "done": 3,
+    "for_review": 0,
+    "in_progress": 0,
+    "in_review": 0,
+    "planned": 0
+  },
+  "work_packages": {
+    "WP01": {
+      "actor": "user",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6HHHHZPZ8JHBQ6SJMVHDQD1",
+      "last_transition_at": "2026-11-03T20:27:52.694131+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "Update service adapted to bitz-releases",
+        "Done override: Implemented and committed"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "reference": "review-cycle://private-repo-release-pipeline-01M6HH1B/WP01-in-app-update-service/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "subtasks": {
+        "T001": "done",
+        "T002": "done",
+        "T003": "done"
+      }
+    },
+    "WP02": {
+      "actor": "user",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6HHHT8P043S4CWZK9CYRRXB",
+      "last_transition_at": "2026-11-03T20:28:01.174035+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "GitHub Actions release workflow configured",
+        "Done override: Implemented and committed"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "reference": "review-cycle://private-repo-release-pipeline-01M6HH1B/WP02-cross-repo-release-pipeline/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "subtasks": {
+        "T004": "done",
+        "T005": "done",
+        "T006": "done",
+        "T007": "done",
+        "T008": "done"
+      }
+    },
+    "WP03": {
+      "actor": "user",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6HHJ3Z0RFT549FS44GJ73KX",
+      "last_transition_at": "2026-11-03T20:28:11.104388+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "Docs and distribution guide created",
+        "Done override: Implemented and committed"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "reference": "review-cycle://private-repo-release-pipeline-01M6HH1B/WP03-documentation-transition-guide/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "subtasks": {
+        "T009": "done",
+        "T010": "done",
+        "T011": "done"
+      }
+    }
+  }
+}

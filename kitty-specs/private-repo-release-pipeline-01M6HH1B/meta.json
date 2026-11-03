@@ -1,0 +1,29 @@
+{
+  "accept_commit": "9191aed4f9128314c6a1d44ee62dd2cf1a6e1daa",
+  "acceptance_history": [
+    {
+      "accept_commit": "9191aed4f9128314c6a1d44ee62dd2cf1a6e1daa",
+      "acceptance_mode": "pr",
+      "accepted_at": "2026-11-03T20:28:56.092615+00:00",
+      "accepted_by": "akram",
+      "accepted_from_commit": "4126ff27481b61a53519f7a815e9aea14c96af31"
+    }
+  ],
+  "acceptance_mode": "pr",
+  "accepted_at": "2026-11-03T20:28:56.092615+00:00",
+  "accepted_by": "akram",
+  "accepted_from_commit": "4126ff27481b61a53519f7a815e9aea14c96af31",
+  "created_at": "2026-11-03T20:19:01.998049+00:00",
+  "flattened": false,
+  "friendly_name": "private repo release pipeline",
+  "mission_id": "01M6HH1BNS9TMQYTANHZJ8K47A",
+  "mission_number": null,
+  "mission_slug": "private-repo-release-pipeline-01M6HH1B",
+  "mission_type": "software-dev",
+  "purpose_context": "This mission advances private repo release pipeline on feat/issue-105-private-repo-release-pipeline so stakeholders can track the work from mission creation onward.",
+  "purpose_tldr": "private repo release pipeline",
+  "slug": "private-repo-release-pipeline-01M6HH1B",
+  "status_phase": "1",
+  "target_branch": "feat/issue-105-private-repo-release-pipeline",
+  "topology": "single_branch"
+}

@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "mission_slug": "private-repo-release-pipeline-01M6HH1B",
+  "mission_id": "01M6HH1BNS9TMQYTANHZJ8K47A",
+  "mission_branch": "kitty/mission-private-repo-release-pipeline-01M6HH1B",
+  "target_branch": "feat/issue-105-private-repo-release-pipeline",
+  "lanes": [
+    {
+      "lane_id": "lane-a",
+      "wp_ids": [
+        "WP01"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/AppUpdateServiceTests.swift",
+        "src/Services/AppUpdateService.swift"
+      ],
+      "predicted_surfaces": [
+        "tests"
+      ],
+      "depends_on_lanes": [],
+      "parallel_group": 0
+    },
+    {
+      "lane_id": "lane-b",
+      "wp_ids": [
+        "WP02"
+      ],
+      "write_scope": [
+        ".github/workflows/release.yml"
+      ],
+      "predicted_surfaces": [],
+      "depends_on_lanes": [
+        "lane-a"
+      ],
+      "parallel_group": 1
+    },
+    {
+      "lane_id": "lane-c",
+      "wp_ids": [
+        "WP03"
+      ],
+      "write_scope": [
+        "README.md",
+        "docs/DISTRIBUTION.md"
+      ],
+      "predicted_surfaces": [
+        "tests"
+      ],
+      "depends_on_lanes": [
+        "lane-a",
+        "lane-b"
+      ],
+      "parallel_group": 2
+    }
+  ],
+  "computed_at": "2026-11-03T20:22:49.016134+00:00",
+  "computed_from": "dependency_graph+ownership",
+  "planning_artifact_wps": [],
+  "planning_commit_sha": "13140d7d3e4c0fce758cc243ba3ddf5f233479dc"
+}
