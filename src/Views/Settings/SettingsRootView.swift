@@ -38,6 +38,8 @@ public struct SettingsRootView: View {
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
     @ObservedObject public var audioSettings: CyberAudioSettingsStore
     public var audioPlayer: (any CyberAudioPlaying)?
+    @ObservedObject public var flowShieldSettings: FlowShieldSettingsStore
+    @ObservedObject public var flowShieldService: FlowShieldService
 
     @State private var selectedTab: SettingsTab = .general
 
@@ -53,7 +55,9 @@ public struct SettingsRootView: View {
         telemetryDashboard: TelemetryDashboardService,
         telemetrySettings: TelemetrySettingsStore,
         audioSettings: CyberAudioSettingsStore = CyberAudioSettingsStore(),
-        audioPlayer: (any CyberAudioPlaying)? = nil
+        audioPlayer: (any CyberAudioPlaying)? = nil,
+        flowShieldSettings: FlowShieldSettingsStore? = nil,
+        flowShieldService: FlowShieldService? = nil
     ) {
         self.engine = engine
         self.activityMonitor = activityMonitor
@@ -67,6 +71,9 @@ public struct SettingsRootView: View {
         self.telemetrySettings = telemetrySettings
         self.audioSettings = audioSettings
         self.audioPlayer = audioPlayer
+        let resolvedFlowShieldSettings = flowShieldSettings ?? FlowShieldSettingsStore()
+        self.flowShieldSettings = resolvedFlowShieldSettings
+        self.flowShieldService = flowShieldService ?? FlowShieldService(settingsStore: resolvedFlowShieldSettings)
     }
 
     public var body: some View {
@@ -192,7 +199,9 @@ public struct SettingsRootView: View {
         case .behaviors:
             BehaviorSettingsTabView(
                 engine: engine,
-                activityMonitor: activityMonitor
+                activityMonitor: activityMonitor,
+                flowShieldSettings: flowShieldSettings,
+                flowShieldService: flowShieldService
             )
         case .agents:
             AgentsSettingsTabView(

@@ -20,6 +20,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
     public let telemetryDashboard: TelemetryDashboardService
     public let audioSettings: CyberAudioSettingsStore
     public let audioService: CyberAudioService
+    public let flowShieldSettings: FlowShieldSettingsStore
+    public let flowShieldService: FlowShieldService
     @Published public private(set) var menuBarTitle: String = "Bitz"
     public private(set) var overlayPanels: [MascotOverlayPanel] = []
     public var overlayPanel: MascotOverlayPanel? { overlayPanels.first }
@@ -58,6 +60,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         telemetryDashboard: TelemetryDashboardService? = nil,
         audioSettings: CyberAudioSettingsStore? = nil,
         audioService: CyberAudioService? = nil,
+        flowShieldSettings: FlowShieldSettingsStore? = nil,
+        flowShieldService: FlowShieldService? = nil,
         userDefaults: UserDefaults = .standard
     ) {
         self.riveController = riveController
@@ -78,6 +82,11 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         let resolvedAudioService = audioService ?? CyberAudioService(settingsStore: resolvedAudioSettings)
         self.audioService = resolvedAudioService
 
+        let resolvedFlowShieldSettings = flowShieldSettings ?? FlowShieldSettingsStore(userDefaults: userDefaults)
+        self.flowShieldSettings = resolvedFlowShieldSettings
+        let resolvedFlowShieldService = flowShieldService ?? FlowShieldService(settingsStore: resolvedFlowShieldSettings)
+        self.flowShieldService = resolvedFlowShieldService
+
         // Wire agent detection adapters
         let processAdapter = ProcessAgentAdapter()
         let dropboxAdapter = DropboxAgentAdapter()
@@ -90,6 +99,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
 
         self.audioService.observe(wellnessEngine: self.engine)
         self.audioService.observe(agentMonitor: self.agentMonitor)
+        self.flowShieldService.observe(wellnessEngine: self.engine)
 
         self.telemetryDashboard.bindDependencies(
             agentMonitor: self.agentMonitor,
@@ -368,7 +378,9 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
                 telemetryDashboard: telemetryDashboard,
                 telemetrySettings: telemetrySettings,
                 audioSettings: audioSettings,
-                audioPlayer: audioService
+                audioPlayer: audioService,
+                flowShieldSettings: flowShieldSettings,
+                flowShieldService: flowShieldService
             )
         )
     }
@@ -629,6 +641,8 @@ struct BitzMenuBarContentView: View {
     @ObservedObject var telemetrySettings: TelemetrySettingsStore
     @ObservedObject var audioSettings: CyberAudioSettingsStore
     var audioService: CyberAudioService? = nil
+    @ObservedObject var flowShieldSettings: FlowShieldSettingsStore
+    @ObservedObject var flowShieldService: FlowShieldService
 
     public init(
         engine: WellnessPointEngine,
@@ -642,7 +656,9 @@ struct BitzMenuBarContentView: View {
         telemetryDashboard: TelemetryDashboardService,
         telemetrySettings: TelemetrySettingsStore,
         audioSettings: CyberAudioSettingsStore = CyberAudioSettingsStore(),
-        audioService: CyberAudioService? = nil
+        audioService: CyberAudioService? = nil,
+        flowShieldSettings: FlowShieldSettingsStore? = nil,
+        flowShieldService: FlowShieldService? = nil
     ) {
         self.engine = engine
         self.activityMonitor = activityMonitor
@@ -656,6 +672,9 @@ struct BitzMenuBarContentView: View {
         self.telemetrySettings = telemetrySettings
         self.audioSettings = audioSettings
         self.audioService = audioService
+        let resolvedFlowShieldSettings = flowShieldSettings ?? FlowShieldSettingsStore()
+        self.flowShieldSettings = resolvedFlowShieldSettings
+        self.flowShieldService = flowShieldService ?? FlowShieldService(settingsStore: resolvedFlowShieldSettings)
     }
 
     var body: some View {
@@ -692,7 +711,43 @@ struct BitzMenuBarContentView: View {
 
             Divider()
 
-            // MARK: - 2. Sound Quick Settings Submenu
+            // MARK: - 2. Flow Shield Quick Controls
+            if flowShieldService.isFlowShieldActive {
+                Button("🛡 Break Shield (Disable Focus)") {
+                    flowShieldService.activateBreakShieldOverride()
+                }
+            }
+
+            Menu {
+                Text("Status: \(flowShieldService.currentStatus.displayTitle)")
+                Toggle("Enable Auto Flow Shield", isOn: Binding(
+                    get: { flowShieldSettings.isEnabled },
+                    set: { flowShieldSettings.setEnabled($0) }
+                ))
+                Divider()
+                Button(
+                    flowShieldSettings.isBreakShieldOverrideActive
+                        ? "Resume Auto Flow Shield"
+                        : "Break Shield (Disable Focus)"
+                ) {
+                    flowShieldService.toggleBreakShieldOverride()
+                }
+                .disabled(!flowShieldSettings.isEnabled)
+                Divider()
+                Text("Streak Threshold: \(flowShieldSettings.formattedStreakSummary)")
+                Button("Streak: 15 min") { flowShieldSettings.setStreakMinutesThreshold(15.0) }
+                    .disabled(!flowShieldSettings.isEnabled)
+                Button("Streak: 20 min") { flowShieldSettings.setStreakMinutesThreshold(20.0) }
+                    .disabled(!flowShieldSettings.isEnabled)
+                Button("Streak: 30 min") { flowShieldSettings.setStreakMinutesThreshold(30.0) }
+                    .disabled(!flowShieldSettings.isEnabled)
+                Button("Streak: 45 min") { flowShieldSettings.setStreakMinutesThreshold(45.0) }
+                    .disabled(!flowShieldSettings.isEnabled)
+            } label: {
+                Label("Flow Shield", systemImage: flowShieldService.currentStatus.systemImage)
+            }
+
+            // MARK: - 3. Sound Quick Settings Submenu
             Menu {
                 Toggle("Enable Cyber Audio", isOn: Binding(
                     get: { audioSettings.isEnabled },
@@ -819,7 +874,9 @@ struct BitzMenuBarContentView: View {
                 telemetryDashboard: telemetryDashboard,
                 telemetrySettings: telemetrySettings,
                 audioSettings: audioSettings,
-                audioPlayer: audioService
+                audioPlayer: audioService,
+                flowShieldSettings: flowShieldSettings,
+                flowShieldService: flowShieldService
             )
         )
     }
@@ -900,7 +957,9 @@ public struct BitzApp: App {
                 telemetryDashboard: appDelegate.telemetryDashboard,
                 telemetrySettings: appDelegate.telemetrySettings,
                 audioSettings: appDelegate.audioSettings,
-                audioService: appDelegate.audioService
+                audioService: appDelegate.audioService,
+                flowShieldSettings: appDelegate.flowShieldSettings,
+                flowShieldService: appDelegate.flowShieldService
             )
         }
     }

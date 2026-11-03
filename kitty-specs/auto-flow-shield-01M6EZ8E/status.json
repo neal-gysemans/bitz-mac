@@ -1,0 +1,112 @@
+{
+  "event_count": 21,
+  "last_event_id": "01M6F08VY5Y2H8AGMFVMB9NQ58",
+  "materialized_at": "2026-11-02T20:47:33.317425+00:00",
+  "mission_number": "",
+  "mission_slug": "auto-flow-shield-01M6EZ8E",
+  "mission_type": "software-dev",
+  "summary": {
+    "approved": 0,
+    "blocked": 0,
+    "canceled": 0,
+    "claimed": 0,
+    "done": 3,
+    "for_review": 0,
+    "in_progress": 0,
+    "in_review": 0,
+    "planned": 0
+  },
+  "work_packages": {
+    "WP01": {
+      "actor": "merge",
+      "agent": "antigravity:gemini:reviewer:reviewer",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6F08T5XXPJ14B9F49FH3DGP",
+      "last_transition_at": "2026-11-02T20:47:31.517172+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "Implemented FlowShieldModels, FlowShieldSettingsStore, and 5 deterministic XCTest cases; all 310 tests pass",
+        "Review passed: opt-in defaults, clamping, and isolated UserDefaults tests verified"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "feedback_path": "/Users/akramkasimi/.gemini/antigravity/worktrees/9d029ed9-8ece-48f8-9635-6cce8bb24f93/subagent-Flow-Shield-Mission-Lead---22--self-37acec92/kitty-specs/auto-flow-shield-01M6EZ8E/tasks/WP01-flow-shield-models-and-settings-store/review-cycle-1.md",
+        "reference": "review-cycle://auto-flow-shield-01M6EZ8E/WP01-flow-shield-models-and-settings-store/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "shell_pid": 84095,
+      "shell_pid_created_at": "1793651759.336815",
+      "subtasks": {
+        "T001": "done",
+        "T002": "done",
+        "T003": "done"
+      }
+    },
+    "WP02": {
+      "actor": "merge",
+      "agent": "antigravity:gemini:reviewer:reviewer",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6F08V2GXE3H0AMYB2XNAFV8",
+      "last_transition_at": "2026-11-02T20:47:32.432731+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "Implemented ShortcutsRunning, ProcessShortcutsRunner, SpyShortcutsRunner, FlowShieldService, and 7 XCTest cases; all 317 tests pass",
+        "Review passed: non-blocking runner, once-per-streak activation, post-break deactivation, and Break Shield override verified"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "feedback_path": "/Users/akramkasimi/.gemini/antigravity/worktrees/9d029ed9-8ece-48f8-9635-6cce8bb24f93/subagent-Flow-Shield-Mission-Lead---22--self-37acec92/kitty-specs/auto-flow-shield-01M6EZ8E/tasks/WP02-shortcuts-runner-and-flow-shield-service/review-cycle-1.md",
+        "reference": "review-cycle://auto-flow-shield-01M6EZ8E/WP02-shortcuts-runner-and-flow-shield-service/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "shell_pid": 86048,
+      "shell_pid_created_at": "1793651967.373823",
+      "subtasks": {
+        "T004": "done",
+        "T005": "done",
+        "T006": "done"
+      }
+    },
+    "WP03": {
+      "actor": "merge",
+      "agent": "antigravity:gemini:reviewer:reviewer",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6F08VY5Y2H8AGMFVMB9NQ58",
+      "last_transition_at": "2026-11-02T20:47:33.317425+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "Implemented BehaviorSettingsTabView card, SettingsRootView forwarding, BitzAppDelegate + BitzMenuBarContentView wiring, and FlowShieldViewsTests; all 319 tests pass",
+        "Review passed: backward-compatible Settings card and Menu Bar Break Shield controls verified"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "feedback_path": "/Users/akramkasimi/.gemini/antigravity/worktrees/9d029ed9-8ece-48f8-9635-6cce8bb24f93/subagent-Flow-Shield-Mission-Lead---22--self-37acec92/kitty-specs/auto-flow-shield-01M6EZ8E/tasks/WP03-settings-and-menu-bar-integration/review-cycle-1.md",
+        "reference": "review-cycle://auto-flow-shield-01M6EZ8E/WP03-settings-and-menu-bar-integration/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "shell_pid": 88670,
+      "shell_pid_created_at": "1793652188.932897",
+      "subtasks": {
+        "T007": "done",
+        "T008": "done",
+        "T009": "done",
+        "T010": "done"
+      }
+    }
+  }
+}

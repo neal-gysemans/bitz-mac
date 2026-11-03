@@ -5,13 +5,20 @@ import AppKit
 public struct BehaviorSettingsTabView: View {
     @ObservedObject public var engine: WellnessPointEngine
     @ObservedObject public var activityMonitor: ActivityMonitorService
+    @ObservedObject public var flowShieldSettings: FlowShieldSettingsStore
+    @ObservedObject public var flowShieldService: FlowShieldService
 
     public init(
         engine: WellnessPointEngine,
-        activityMonitor: ActivityMonitorService
+        activityMonitor: ActivityMonitorService,
+        flowShieldSettings: FlowShieldSettingsStore? = nil,
+        flowShieldService: FlowShieldService? = nil
     ) {
         self.engine = engine
         self.activityMonitor = activityMonitor
+        let resolvedSettings = flowShieldSettings ?? FlowShieldSettingsStore()
+        self.flowShieldSettings = resolvedSettings
+        self.flowShieldService = flowShieldService ?? FlowShieldService(settingsStore: resolvedSettings)
     }
 
     public var body: some View {
@@ -76,7 +83,10 @@ public struct BehaviorSettingsTabView: View {
                 }
             }
 
-            // Section 2: Application Classification Rules
+            // Section 2: Auto Flow Shield (macOS Focus)
+            flowShieldCard
+
+            // Section 3: Application Classification Rules
             settingsCard(title: "Application Productivity Rules", systemImage: "app.badge.checkmark") {
                 VStack(alignment: .leading, spacing: 12) {
                     if let frontmost = activityMonitor.lastFrontmostAppName {
@@ -165,6 +175,175 @@ public struct BehaviorSettingsTabView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Auto Flow Shield Card
+
+    private var flowShieldCard: some View {
+        settingsCard(title: "Auto Flow Shield (macOS Focus)", systemImage: "shield.checkered") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Toggle(
+                        "Enable Auto Flow Shield",
+                        isOn: Binding(
+                            get: { flowShieldSettings.isEnabled },
+                            set: { flowShieldSettings.setEnabled($0) }
+                        )
+                    )
+                    .font(.subheadline.weight(.medium))
+
+                    Spacer()
+
+                    flowShieldStatusBadge
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Deep-Work Streak Threshold:")
+                            .font(.subheadline)
+                        Spacer()
+                        Stepper(
+                            value: Binding(
+                                get: { flowShieldSettings.streakMinutesThreshold },
+                                set: { flowShieldSettings.setStreakMinutesThreshold($0) }
+                            ),
+                            in: FlowShieldSettingsStore.minStreakMinutesThreshold...FlowShieldSettingsStore.maxStreakMinutesThreshold,
+                            step: 5.0
+                        ) {
+                            Text(flowShieldSettings.formattedStreakSummary)
+                                .font(.subheadline.monospacedDigit().bold())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { min(flowShieldSettings.streakMinutesThreshold, 90.0) },
+                            set: { flowShieldSettings.setStreakMinutesThreshold($0) }
+                        ),
+                        in: 5.0...90.0,
+                        step: 5.0
+                    )
+                }
+                .disabled(!flowShieldSettings.isEnabled)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Text("Start Focus Shortcut:")
+                            .font(.subheadline)
+                            .frame(width: 150, alignment: .leading)
+                        TextField(
+                            "Start Focus",
+                            text: Binding(
+                                get: { flowShieldSettings.startFocusShortcutName },
+                                set: { flowShieldSettings.setStartFocusShortcutName($0) }
+                            )
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        Button("Test Start") {
+                            Task {
+                                await flowShieldService.testStartShortcut()
+                            }
+                        }
+                        .controlSize(.small)
+                    }
+
+                    HStack(spacing: 8) {
+                        Text("Stop Focus Shortcut:")
+                            .font(.subheadline)
+                            .frame(width: 150, alignment: .leading)
+                        TextField(
+                            "Stop Focus",
+                            text: Binding(
+                                get: { flowShieldSettings.stopFocusShortcutName },
+                                set: { flowShieldSettings.setStopFocusShortcutName($0) }
+                            )
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        Button("Test Stop") {
+                            Task {
+                                await flowShieldService.testStopShortcut()
+                            }
+                        }
+                        .controlSize(.small)
+                    }
+                }
+                .disabled(!flowShieldSettings.isEnabled)
+
+                Text("Setup: Open macOS Shortcuts.app and create two 1-action Shortcuts using \"Set Focus\" — \"Start Focus\" (Turn Do Not Disturb On until Turned Off) and \"Stop Focus\" (Turn Do Not Disturb Off).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if flowShieldSettings.isEnabled {
+                    HStack(spacing: 10) {
+                        Button {
+                            flowShieldService.toggleBreakShieldOverride()
+                        } label: {
+                            Label(
+                                flowShieldSettings.isBreakShieldOverrideActive
+                                    ? "Resume Auto Flow Shield"
+                                    : "Break Shield (Disable Focus)",
+                                systemImage: flowShieldSettings.isBreakShieldOverrideActive
+                                    ? "shield.checkered"
+                                    : "shield.slash.fill"
+                            )
+                        }
+                        .buttonStyle(.bordered)
+
+                        if flowShieldSettings.isBreakShieldOverrideActive {
+                            Text("Focus auto-activation paused until resumed or next session.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+
+                if let errorMessage = flowShieldService.lastErrorMessage {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Dismiss") {
+                            flowShieldService.clearError()
+                        }
+                        .controlSize(.mini)
+                    }
+                    .padding(8)
+                    .background(Color.orange.opacity(0.12))
+                    .cornerRadius(8)
+                }
+            }
+        }
+    }
+
+    private var flowShieldStatusBadge: some View {
+        let status = flowShieldService.currentStatus
+        let badgeColor: Color = {
+            switch status {
+            case .active:
+                return .green
+            case .standby:
+                return .cyan
+            case .breakShieldOverride:
+                return .orange
+            case .disabled:
+                return .secondary
+            }
+        }()
+
+        return Label(status.displayTitle, systemImage: status.systemImage)
+            .font(.caption.bold())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(badgeColor.opacity(0.15))
+            .foregroundStyle(badgeColor)
+            .cornerRadius(6)
     }
 
     // MARK: - Helpers

@@ -1,0 +1,32 @@
+{
+  "accept_commit": "1ed27846c858d6a4fd409a585a7d104df83bbf10",
+  "acceptance_history": [
+    {
+      "accept_commit": "1ed27846c858d6a4fd409a585a7d104df83bbf10",
+      "acceptance_mode": "pr",
+      "accepted_at": "2026-11-02T20:47:20.266467+00:00",
+      "accepted_by": "antigravity",
+      "accepted_from_commit": "47f22efbe41cac46de59d75288151bb4c46d33d4"
+    }
+  ],
+  "acceptance_mode": "pr",
+  "accepted_at": "2026-11-02T20:47:20.266467+00:00",
+  "accepted_by": "antigravity",
+  "accepted_from_commit": "47f22efbe41cac46de59d75288151bb4c46d33d4",
+  "baseline_merge_commit": "8bcdfc7d34773017779bc6019079a62c643faa61",
+  "created_at": "2026-11-02T20:29:50.591008+00:00",
+  "flattened": false,
+  "friendly_name": "auto flow shield",
+  "mission_id": "01M6EZ8E2N366DTP5Q3KD557YT",
+  "mission_number": null,
+  "mission_slug": "auto-flow-shield-01M6EZ8E",
+  "mission_type": "software-dev",
+  "purpose_context": "This mission advances auto flow shield on feat/issue-22-auto-flow-shield so stakeholders can track the work from mission creation onward.",
+  "purpose_tldr": "auto flow shield",
+  "slug": "auto-flow-shield-01M6EZ8E",
+  "status_phase": "1",
+  "target_branch": "feat/issue-22-auto-flow-shield",
+  "topology": "lanes",
+  "vcs": "git",
+  "vcs_locked_at": "2026-11-02T20:33:58.760868+00:00"
+}

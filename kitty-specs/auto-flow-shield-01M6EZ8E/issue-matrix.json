@@ -1,0 +1,17 @@
+{
+  "rows": {
+    "#22": {
+      "evidence_ref": "Tests/BitzTests/FlowShieldServiceTests.swift",
+      "fr": null,
+      "nfr": null,
+      "repo": null,
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "<fill at WP-implementation time>",
+      "verdict": "fixed",
+      "wp": "WP03"
+    }
+  },
+  "schema_version": 1
+}
