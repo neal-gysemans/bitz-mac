@@ -143,7 +143,6 @@ public final class PersonalitySettingsStore: ObservableObject {
         normalizeDailyCounter(for: date)
         commentsGeneratedToday += 1
         userDefaults.set(commentsGeneratedToday, forKey: Self.commentsGeneratedTodayKey)
-        onSettingsChanged?()
     }
 
     public func resetDailyCounter() {

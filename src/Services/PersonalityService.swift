@@ -51,7 +51,7 @@ public final class PersonalityService: ObservableObject {
     /// When `isBubbleIdle` is `false`, Bitz is actively presenting an agent popup,
     /// a critical warning, or a transient notification; personality commentary
     /// strictly defers to avoid visual clutter or priority inversion.
-    public func tick(context: PersonalityContext, isBubbleIdle: Bool) async {
+    public func tick(context: PersonalityContext, isBubbleIdle: Bool, bypassRateLimit: Bool = false) async {
         // FR-001: Opt-in requirement; strictly no-op when disabled
         guard settingsStore.isEnabled else { return }
 
@@ -71,13 +71,15 @@ public final class PersonalityService: ObservableObject {
         }
 
         // FR-007: Rate limiting (cooldown interval and daily cap)
-        let rateDecision = rateLimiter.evaluate(
-            now: now,
-            minIntervalMinutes: settingsStore.minIntervalMinutes,
-            dailyCap: settingsStore.dailyCap
-        )
-        guard rateDecision.isAllowed else { return }
         guard settingsStore.canGenerateCommentToday(for: now) else { return }
+        if !bypassRateLimit {
+            let rateDecision = rateLimiter.evaluate(
+                now: now,
+                minIntervalMinutes: settingsStore.minIntervalMinutes,
+                dailyCap: settingsStore.dailyCap
+            )
+            guard rateDecision.isAllowed else { return }
+        }
 
         isGenerating = true
         defer { isGenerating = false }

@@ -234,4 +234,39 @@ final class PersonalityIntegrationTests: XCTestCase {
         XCTAssertNil(appDelegate.engine.idleCommentaryText)
         XCTAssertNil(appDelegate.engine.displayedSpeechBubbleText)
     }
+
+    func testTogglingPersonalityEnabledTriggersImmediateTickAndDisplaysCommentary() async {
+        let (defaults, suite) = makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let personalitySettings = PersonalitySettingsStore(userDefaults: defaults)
+        personalitySettings.setEnabled(false)
+
+        let stub = StubCommentaryGenerator(stubbedResult: .success("Instant commentary on toggle!"))
+        let personalityService = PersonalityService(
+            primaryGenerator: stub,
+            fallbackGenerator: stub,
+            settingsStore: personalitySettings
+        )
+
+        let appDelegate = BitzAppDelegate(
+            personalitySettings: personalitySettings,
+            personalityService: personalityService,
+            userDefaults: defaults
+        )
+
+        XCTAssertFalse(appDelegate.personalitySettings.isEnabled)
+        XCTAssertNil(appDelegate.engine.displayedSpeechBubbleText)
+
+        // Toggle enabled on shared store
+        appDelegate.personalitySettings.setEnabled(true)
+
+        // Allow async Task on MainActor to complete
+        for _ in 0..<10 {
+            if appDelegate.engine.displayedSpeechBubbleText != nil { break }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTAssertEqual(appDelegate.engine.displayedSpeechBubbleText, "Instant commentary on toggle!")
+    }
 }
