@@ -19,6 +19,9 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
     private var tracker = AgentSessionTracker(agentID: "claude", agentName: "Claude", startsTurnOnPrompt: false)
 
     private static let interruptMarker = "[Request interrupted"
+    private static let usageTokenKeys = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
+    private static let contentModDateKeyArray: [URLResourceKey] = [.contentModificationDateKey]
+    private static let contentModDateKeySet: Set<URLResourceKey> = [.contentModificationDateKey]
 
     public static var defaultProjectsURL: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
@@ -71,9 +74,9 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
         let fileManager = FileManager.default
         let projects = (try? fileManager.contentsOfDirectory(at: projectsURL, includingPropertiesForKeys: nil)) ?? []
         return projects.flatMap { project -> [(url: URL, modified: Date)] in
-            let files = (try? fileManager.contentsOfDirectory(at: project, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+            let files = (try? fileManager.contentsOfDirectory(at: project, includingPropertiesForKeys: Self.contentModDateKeyArray)) ?? []
             return files.filter { $0.pathExtension == "jsonl" }.compactMap { url in
-                (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate).map { (url, $0) }
+                (try? url.resourceValues(forKeys: Self.contentModDateKeySet).contentModificationDate).map { (url, $0) }
             }
         }
     }
@@ -116,7 +119,7 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
             // `<synthetic>` placeholders (interrupts, API errors) carry all-zero usage and are not model output.
             guard let message, message["model"] as? String != "<synthetic>" else { return [] }
             let tokens = (message["usage"] as? [String: Any]).map { usage in
-                ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"].reduce(0) { $0 + (usage[$1] as? Int ?? 0) }
+                Self.usageTokenKeys.reduce(0) { $0 + (usage[$1] as? Int ?? 0) }
             }
             let toolCalls: [SessionLogEntry] = (message["content"] as? [[String: Any]] ?? []).compactMap { block in
                 guard block["type"] as? String == "tool_use" else { return nil }

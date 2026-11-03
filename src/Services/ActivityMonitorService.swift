@@ -266,6 +266,8 @@ public enum BrowserTabTelemetryReader {
     private static let vivaldiBaseDirs = ["Vivaldi"]
     private static let chromeBaseDirs = ["Google/Chrome", "Google/Chrome Canary", "Chromium"]
 
+    private static let modificationDateKeys: [URLResourceKey] = [.contentModificationDateKey]
+
     /// Decompresses a Mozilla `mozLz40\0` LZ4 block into raw JSON `Data`.
     public static func decompressMozLZ4(_ data: Data) -> Data? {
         guard data.count > 12 else { return nil }
@@ -478,7 +480,7 @@ public enum BrowserTabTelemetryReader {
                 let sessionsDir = prof.isEmpty
                     ? baseDir.appendingPathComponent("Sessions")
                     : baseDir.appendingPathComponent(prof).appendingPathComponent("Sessions")
-                guard let files = try? fm.contentsOfDirectory(at: sessionsDir, includingPropertiesForKeys: [.contentModificationDateKey]) else {
+                guard let files = try? fm.contentsOfDirectory(at: sessionsDir, includingPropertiesForKeys: Self.modificationDateKeys) else {
                     continue
                 }
                 for file in files where file.lastPathComponent.hasPrefix("Session_") {
