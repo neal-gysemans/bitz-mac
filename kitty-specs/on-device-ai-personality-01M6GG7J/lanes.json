@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "mission_slug": "on-device-ai-personality-01M6GG7J",
+  "mission_id": "01M6GG7JHW4XPFG4DHGYKSA17M",
+  "mission_branch": "kitty/mission-on-device-ai-personality-01M6GG7J",
+  "target_branch": "feat/20-on-device-ai-personality",
+  "lanes": [
+    {
+      "lane_id": "lane-a",
+      "wp_ids": [
+        "WP01"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/PersonalityCoreTests.swift",
+        "src/Models/PersonalityModels.swift",
+        "src/Models/PersonalitySettingsStore.swift",
+        "src/Services/CommentaryGenerating.swift"
+      ],
+      "predicted_surfaces": [
+        "legacy-cleanup",
+        "tracker-integration"
+      ],
+      "depends_on_lanes": [],
+      "parallel_group": 0
+    },
+    {
+      "lane_id": "lane-b",
+      "wp_ids": [
+        "WP02"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/PersonalityGuardRailTests.swift",
+        "src/Services/CommentarySanitizer.swift",
+        "src/Services/PersonalityGate.swift",
+        "src/Services/PersonalityRateLimiter.swift"
+      ],
+      "predicted_surfaces": [],
+      "depends_on_lanes": [
+        "lane-a"
+      ],
+      "parallel_group": 1
+    },
+    {
+      "lane_id": "lane-d",
+      "wp_ids": [
+        "WP04"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/FoundationModelsAvailabilityTests.swift",
+        "src/Services/FoundationModelsCommentaryGenerator.swift"
+      ],
+      "predicted_surfaces": [
+        "api"
+      ],
+      "depends_on_lanes": [
+        "lane-a"
+      ],
+      "parallel_group": 1
+    },
+    {
+      "lane_id": "lane-g",
+      "wp_ids": [
+        "WP07"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/GitActivityProviderTests.swift",
+        "src/Services/GitActivityProvider.swift",
+        "src/Views/Settings/GitReposPickerView.swift"
+      ],
+      "predicted_surfaces": [
+        "api"
+      ],
+      "depends_on_lanes": [
+        "lane-a"
+      ],
+      "parallel_group": 1
+    },
+    {
+      "lane_id": "lane-c",
+      "wp_ids": [
+        "WP03"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/PersonalityServiceTests.swift",
+        "src/Services/PersonalityService.swift",
+        "src/Services/TemplatedCommentaryGenerator.swift"
+      ],
+      "predicted_surfaces": [
+        "artifact-rendering"
+      ],
+      "depends_on_lanes": [
+        "lane-a",
+        "lane-b"
+      ],
+      "parallel_group": 2
+    },
+    {
+      "lane_id": "lane-f",
+      "wp_ids": [
+        "WP06"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/PersonalitySettingsTabTests.swift",
+        "src/Views/Settings/PersonalitySettingsTabView.swift",
+        "src/Views/Settings/SettingsRootView.swift"
+      ],
+      "predicted_surfaces": [
+        "api"
+      ],
+      "depends_on_lanes": [
+        "lane-a",
+        "lane-g"
+      ],
+      "parallel_group": 2
+    },
+    {
+      "lane_id": "lane-e",
+      "wp_ids": [
+        "WP05"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/PersonalityIntegrationTests.swift",
+        "src/App/BitzApp.swift",
+        "src/Services/WellnessPointEngine.swift"
+      ],
+      "predicted_surfaces": [],
+      "depends_on_lanes": [
+        "lane-c"
+      ],
+      "parallel_group": 3
+    },
+    {
+      "lane_id": "lane-h",
+      "wp_ids": [
+        "WP08"
+      ],
+      "write_scope": [
+        "docs/ARCHITECTURE.md",
+        "docs/PERSONALITY_BACKEND_DECISION.md"
+      ],
+      "predicted_surfaces": [],
+      "depends_on_lanes": [
+        "lane-d",
+        "lane-e",
+        "lane-f",
+        "lane-g"
+      ],
+      "parallel_group": 4
+    }
+  ],
+  "computed_at": "2026-11-03T10:58:23.838194+00:00",
+  "computed_from": "dependency_graph+ownership",
+  "planning_artifact_wps": [],
+  "planning_commit_sha": "3e93188685d67d23d1ae3e1f518334322a647670"
+}

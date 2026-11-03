@@ -25,6 +25,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
     public let interactionSettings: MascotInteractionSettingsStore
     public let fileDropService: FileDropInboxService
     public let paletteStore: AvatarPaletteStore
+    public let personalitySettings: PersonalitySettingsStore
+    public let personalityService: PersonalityService
     @Published public private(set) var menuBarTitle: String = "Bitz"
     public private(set) var overlayPanels: [MascotOverlayPanel] = []
     public var overlayPanel: MascotOverlayPanel? { overlayPanels.first }
@@ -37,6 +39,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
     nonisolated(unsafe) private var globalKeyMonitor: Any?
     private var bubbleInteractivityCancellable: AnyCancellable?
     private var warningVisorCancellable: AnyCancellable?
+    private var personalityTickCancellable: AnyCancellable?
+    private var personalityEnabledCancellable: AnyCancellable?
     private var screenReconfigTask: Task<Void, Never>?
 
     public override convenience init() {
@@ -68,9 +72,19 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         interactionSettings: MascotInteractionSettingsStore? = nil,
         fileDropService: FileDropInboxService? = nil,
         paletteStore: AvatarPaletteStore? = nil,
+        personalitySettings: PersonalitySettingsStore? = nil,
+        personalityService: PersonalityService? = nil,
         userDefaults: UserDefaults = .standard
     ) {
         self.paletteStore = paletteStore ?? AvatarPaletteStore(userDefaults: userDefaults)
+        let resolvedPersonalitySettings = personalitySettings ?? PersonalitySettingsStore(userDefaults: userDefaults)
+        self.personalitySettings = resolvedPersonalitySettings
+        let resolvedPersonalityService = personalityService ?? PersonalityService(
+            primaryGenerator: FoundationModelsCommentaryGenerator(),
+            fallbackGenerator: TemplatedCommentaryGenerator(),
+            settingsStore: resolvedPersonalitySettings
+        )
+        self.personalityService = resolvedPersonalityService
         self.interactionSettings = interactionSettings ?? MascotInteractionSettingsStore(userDefaults: userDefaults)
         self.fileDropService = fileDropService ?? FileDropInboxService()
         self.riveController = riveController
@@ -161,6 +175,59 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] active in
                 self?.engine.setWarningVisor(active: active)
+            }
+
+        self.engine.warningRephraser = { [weak self] warning, state in
+            guard let self else { return warning }
+            let context = PersonalityContext(
+                wellnessState: state,
+                currentPoints: self.engine.currentPoints,
+                continuousWorkMinutes: self.engine.continuousWorkMinutes,
+                temperatureCelsius: self.activityMonitor.lastTemperatureCelsius,
+                cpuLoadPercentage: self.activityMonitor.lastCPULoadPercentage,
+                frontmostAppName: self.activityMonitor.lastFrontmostAppName,
+                activeAgentNames: Array(self.agentMonitor.activeAgents),
+                recentCommitCount: nil
+            )
+            return await self.personalityService.rephraseWarning(warning, context: context)
+        }
+
+        self.personalityTickCancellable = self.telemetryDashboard.$snapshot
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                guard self.personalitySettings.isEnabled else {
+                    if self.engine.idleCommentaryText != nil {
+                        self.engine.setIdleCommentaryText(nil)
+                    }
+                    return
+                }
+                let isBubbleIdle = self.agentMonitor.activePopup == nil
+                    && !self.updateStore.isSpeechBubbleAlertActive
+                    && self.engine.activeSpeechBubbleText == nil
+                let context = PersonalityContext(
+                    wellnessState: self.engine.currentState,
+                    currentPoints: self.engine.currentPoints,
+                    continuousWorkMinutes: self.engine.continuousWorkMinutes,
+                    temperatureCelsius: self.activityMonitor.lastTemperatureCelsius,
+                    cpuLoadPercentage: self.activityMonitor.lastCPULoadPercentage,
+                    frontmostAppName: self.activityMonitor.lastFrontmostAppName,
+                    activeAgentNames: Array(self.agentMonitor.activeAgents),
+                    recentCommitCount: nil
+                )
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    await self.personalityService.tick(context: context, isBubbleIdle: isBubbleIdle)
+                    self.engine.setIdleCommentaryText(self.personalityService.activeCommentary)
+                }
+            }
+
+        self.personalityEnabledCancellable = self.personalitySettings.$isEnabled
+            .filter { !$0 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.engine.setIdleCommentaryText(nil)
+                self?.personalityService.clearCommentary()
             }
         self.displayStore.onDisplayPreferenceChanged = { [weak self] in
             self?.syncOverlayPanels()
@@ -283,6 +350,11 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         telemetryDashboard.stop()
         updateStore.stopPeriodicChecks()
         audioService.stopAll()
+        personalityTickCancellable = nil
+        personalityEnabledCancellable = nil
+        Task { [personalityService] in
+            await personalityService.unloadBackend()
+        }
         engine.persistState()
     }
 

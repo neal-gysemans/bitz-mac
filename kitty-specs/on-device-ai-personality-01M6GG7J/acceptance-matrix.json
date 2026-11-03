@@ -1,0 +1,139 @@
+{
+  "mission_slug": "on-device-ai-personality-01M6GG7J",
+  "mission_number": "",
+  "mission_type": "software-dev",
+  "overall_verdict": "pass",
+  "criteria": [
+    {
+      "criterion_id": "FR-001",
+      "description": "Opt-in toggle disabled by default and controllable via Settings",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/PersonalityCoreTests.swift::testPersonalitySettingsStoreDefaultsAndPersistence, Tests/BitzTests/PersonalitySettingsTabTests.swift::testMasterToggleDisablesAllControlsWhenOff",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-03T12:55:00+00:00",
+      "notes": "Feature defaults to disabled; toggling persists to UserDefaults."
+    },
+    {
+      "criterion_id": "FR-002",
+      "description": "CommentaryGenerating protocol with swappable backends (Foundation Models, Templated, and Stub)",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/PersonalityCoreTests.swift::testStubCommentaryGeneratorExecution, Tests/BitzTests/FoundationModelsAvailabilityTests.swift::testFoundationModelsGeneratorAvailabilityOnOSVersion, Tests/BitzTests/PersonalityServiceTests.swift::testServiceDispatchesToAvailableBackend",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-03T12:55:00+00:00",
+      "notes": "Protocol contracts and mock/production implementations verified."
+    },
+    {
+      "criterion_id": "FR-003",
+      "description": "PersonalityContext captures wellness, streak, thermals, app, agent, and git signals",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/PersonalityCoreTests.swift::testPersonalityContextCreationAndEncoding",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-03T12:55:00+00:00",
+      "notes": "Immutable context struct properly serializes and encodes all live telemetry."
+    },
+    {
+      "criterion_id": "FR-004",
+      "description": "Idle-only display that never interrupts active agent popups or warning bubbles",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/PersonalityIntegrationTests.swift::testIdleCommentaryDoesNotInterruptAgentPopup, Tests/BitzTests/PersonalityIntegrationTests.swift::testActiveSpeechBubbleSupersedesIdleCommentary",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-03T12:55:00+00:00",
+      "notes": "SpeechBubbleView priority ordering verified byte-for-byte."
+    },
+    {
+      "criterion_id": "FR-005",
+      "description": "Critical warnings (thermal, burnout, overworked) are preserved and never lost",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/PersonalityIntegrationTests.swift::testCriticalWarningTakesPrecedenceOverIdleCommentary, Tests/BitzTests/PersonalityIntegrationTests.swift::testWarningRephraserPreservesCoreMeaning",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-03T12:55:00+00:00",
+      "notes": "Static warnings set synchronously first; optional async rephrase only safely augments."
+    },
+    {
+      "criterion_id": "FR-006",
+      "description": "Silent degradation and fallback to templated generator on error or 2s timeout",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/PersonalityServiceTests.swift::testFallbackToTemplatedOnBackendFailure, Tests/BitzTests/PersonalityServiceTests.swift::testTimeoutEnforcesTwoSecondsLimitAndFallsBack",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-03T12:55:00+00:00",
+      "notes": "Service times out at 2.0s without throwing or blocking UI."
+    },
+    {
+      "criterion_id": "FR-007",
+      "description": "Rate limiting with configurable minimum interval and daily cap",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/PersonalityGuardRailTests.swift::testRateLimiterIntervalAndDailyCapEnforcement, Tests/BitzTests/PersonalityGuardRailTests.swift::testRateLimiterDailyCapMidnightRollover",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-03T12:55:00+00:00",
+      "notes": "Interval and daily caps enforced and reset at midnight."
+    },
+    {
+      "criterion_id": "FR-008",
+      "description": "Resource gating stops generation on low battery, Low Power Mode, or serious thermal state",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/PersonalityGuardRailTests.swift::testGateBlocksOnLowBatteryAndHighThermalState, Tests/BitzTests/PersonalityGuardRailTests.swift::testGateBlocksOnLowPowerMode",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-03T12:55:00+00:00",
+      "notes": "Gate decisions prevent running inference under constrained power conditions."
+    },
+    {
+      "criterion_id": "FR-009",
+      "description": "Snarky / Supportive / Cute presets change tone guides and generation instructions",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/PersonalityCoreTests.swift::testPresetPromptsAndToneGuides, Tests/BitzTests/PersonalitySettingsTabTests.swift::testPresetPickerPersistsSelection",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-03T12:55:00+00:00",
+      "notes": "All 3 presets provide unique system prompts and guidelines."
+    },
+    {
+      "criterion_id": "FR-010",
+      "description": "Output sanitization enforces 80 character cap, strips markdown/formatting, and redacts window titles/URLs",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/PersonalityGuardRailTests.swift::testSanitizerTruncatesAndStripsFormatting, Tests/BitzTests/PersonalityGuardRailTests.swift::testSanitizerDropsURLsAndRedactsActiveAppEcho",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-03T12:55:00+00:00",
+      "notes": "Single-line sanitized output guaranteed."
+    },
+    {
+      "criterion_id": "FR-011",
+      "description": "Lazy model loading and memory release on idle timeout / app termination",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/PersonalityServiceTests.swift::testUnloadBackendReleasesResources, Tests/BitzTests/FoundationModelsAvailabilityTests.swift::testUnloadFreesSession",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-03T12:55:00+00:00",
+      "notes": "Model session deallocated when unloaded."
+    },
+    {
+      "criterion_id": "FR-012",
+      "description": "Opt-in git activity signal using local git log with zero execution when unconfigured",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/GitActivityProviderTests.swift::testWatchedReposCountCommitsAndNoOpWhenEmpty, Tests/BitzTests/GitActivityProviderTests.swift::testGitActivityProviderCachesResultsWithinTTL",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-03T12:55:00+00:00",
+      "notes": "Runs 0 git commands if no repos configured; caches with 60s TTL."
+    },
+    {
+      "criterion_id": "FR-013",
+      "description": "Comprehensive backend decision document comparing Foundation Models vs MLX vs llama.cpp vs Ollama",
+      "proof_type": "automated_test",
+      "evidence": "docs/PERSONALITY_BACKEND_DECISION.md, docs/ARCHITECTURE.md Section 6",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-03T12:55:00+00:00",
+      "notes": "Complete decision document and architecture docs written and verified."
+    }
+  ],
+  "negative_invariants": []
+}

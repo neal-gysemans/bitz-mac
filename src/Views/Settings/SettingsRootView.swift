@@ -6,6 +6,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
     case general = "General"
     case behaviors = "Behaviors"
     case agents = "AI Agents"
+    case personality = "Personality"
     case audio = "Audio"
     case telemetry = "Telemetry"
     case advanced = "Advanced"
@@ -17,6 +18,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return "paintbrush.fill"
         case .behaviors: return "pawprint.fill"
         case .agents: return "cpu.fill"
+        case .personality: return "sparkles"
         case .audio: return "speaker.wave.2.fill"
         case .telemetry: return "chart.xyaxis.line"
         case .advanced: return "gearshape.2.fill"
@@ -43,6 +45,7 @@ public struct SettingsRootView: View {
     @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
     public var inboxDirectoryURL: URL
     @ObservedObject public var paletteStore: AvatarPaletteStore
+    @ObservedObject public var personalitySettings: PersonalitySettingsStore
 
     @State private var selectedTab: SettingsTab = .general
 
@@ -63,11 +66,13 @@ public struct SettingsRootView: View {
         flowShieldService: FlowShieldService? = nil,
         interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
         inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory,
-        paletteStore: AvatarPaletteStore = AvatarPaletteStore()
+        paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
+        personalitySettings: PersonalitySettingsStore? = nil
     ) {
         self.interactionSettings = interactionSettings
         self.inboxDirectoryURL = inboxDirectoryURL
         self.paletteStore = paletteStore
+        self.personalitySettings = personalitySettings ?? PersonalitySettingsStore()
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.scaleStore = scaleStore
@@ -218,6 +223,10 @@ public struct SettingsRootView: View {
         case .agents:
             AgentsSettingsTabView(
                 agentMonitor: agentMonitor
+            )
+        case .personality:
+            PersonalitySettingsTabView(
+                settingsStore: personalitySettings
             )
         case .audio:
             AudioSettingsTabView(

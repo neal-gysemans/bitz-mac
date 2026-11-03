@@ -169,3 +169,62 @@ Shared behaviour (`SessionLogTail`, `AgentSessionTracker`):
 | Warning visor | `BitzAppDelegate` maps `agentMonitor.$activeWarning != nil` (deduplicated, main queue) to `engine.setWarningVisor(active:)`. The engine receives only this flag, never agent policy. |
 
 Bitz adds no new hooks and never writes to the Claude Code settings file for these signals. There are no cost, rate-limit or CPU alerts, because those signals lack a verified data source.
+
+---
+
+## 6. On-Device AI Personality Subsystem (#20)
+
+Bitz includes an opt-in, 100% on-device AI personality that generates short (≤ 80 characters) contextual commentary lines based on live telemetry (wellness state, focus streak, CPU load/temperature, frontmost application, active agents, and optional git commit activity).
+
+```mermaid
+flowchart TD
+    subgraph Signals["Context Signals"]
+        Eng["WellnessPointEngine (state, points, streak)"]
+        Act["ActivityMonitorService (CPU, temp, active app)"]
+        Ag["AgentMonitorService (active agents)"]
+        Git["GitActivityProvider (opt-in commit count)"]
+    end
+
+    subgraph Service["Personality Coordination"]
+        Ctx["PersonalityContext"]
+        Gate["PersonalityGate (LPM, battery, thermal)"]
+        Limiter["PersonalityRateLimiter (cooldown, daily cap)"]
+        Coord["PersonalityService (@MainActor coordinator)"]
+    end
+
+    subgraph Backends["Inference Backends"]
+        FM["FoundationModelsCommentaryGenerator (Apple Foundation Models)"]
+        Tmpl["TemplatedCommentaryGenerator (Zero-latency offline fallback)"]
+    end
+
+    subgraph Presentation["Presentation & Safety"]
+        San["CommentarySanitizer (≤80 chars, strips formatting)"]
+        Bubble["WellnessPointEngine.displayedSpeechBubbleText"]
+    end
+
+    Eng --> Ctx
+    Act --> Ctx
+    Ag --> Ctx
+    Git --> Ctx
+
+    Ctx --> Coord
+    Coord --> Gate
+    Coord --> Limiter
+    Gate -->|"allowed"| Backends
+    Backends -->|"primary (>2s timeout) / fallback"| San
+    San --> Bubble
+```
+
+### 6.1 Architectural Contracts & Guarantees
+
+| Concern | Architectural Rule |
+| :--- | :--- |
+| **Strict Opt-In (`FR-001`)** | Disabled by default (`isEnabled = false`). When disabled, zero background tasks or LLM sessions run. |
+| **Backend Fallback (`FR-006`)** | Primary backend: Apple Foundation Models (`#if canImport(FoundationModels)` and `@available(macOS 26.0, *)`). Universal fallback: `TemplatedCommentaryGenerator` running on macOS 14–25, or whenever the LLM times out (> 2.0s) or errors. |
+| **Warning Precedence (`C-002`)** | `WellnessPointEngine.displayedSpeechBubbleText` = `activeSpeechBubbleText ?? idleCommentaryText ?? transientBubbleText`. Deterministic critical warnings (thermal, burnout, overworked) ALWAYS override idle commentary. Critical warnings are set synchronously first; optional AI rephrasing runs asynchronously and preserves the core warning. |
+| **Bubble Priority (`FR-004`)** | AI commentary strictly defers when an Agent Monitor popup (`.agentPopup`) or app update alert (`.update`) is active. |
+| **Hardware Gating (`FR-008`)** | `PersonalityGate` suppresses generation during Low Power Mode, battery < 20%, thermal state serious/critical, or overheating. |
+| **Sanitization (`FR-005`)** | Output is sanitized: single-line, quotes stripped, URLs and markdown removed, echoes of active apps rejected, truncated at word boundaries to ≤ 80 characters. |
+| **Zero Network Egress (`NFR-004`)** | The personality subsystem has zero `URLSession` or `Network` framework imports. All inference and prompt synthesis occur entirely on-device. |
+| **Opt-in Git Activity (`FR-012`)** | `GitActivityProvider` queries only user-specified local repository paths off-main with a 60s TTL cache. When no repositories are selected, zero processes are spawned. |
+

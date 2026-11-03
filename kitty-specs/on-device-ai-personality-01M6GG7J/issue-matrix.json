@@ -1,0 +1,17 @@
+{
+  "rows": {
+    "#20": {
+      "evidence_ref": "Tests/BitzTests/PersonalityCoreTests.swift",
+      "fr": "FR-001",
+      "nfr": "NFR-004",
+      "repo": "AkramKs/bitz-mac",
+      "sc": "SC-001",
+      "scope": "on-device ai personality",
+      "source_file": "spec.md",
+      "title": "On-Device AI Personality for Bitz",
+      "verdict": "fixed",
+      "wp": "WP01-WP08"
+    }
+  },
+  "schema_version": 1
+}

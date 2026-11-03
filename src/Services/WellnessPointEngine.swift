@@ -193,6 +193,8 @@ public final class WellnessPointEngine: ObservableObject {
     @Published public private(set) var continuousWorkMinutes: Double = 0.0
     @Published public private(set) var currentState: BitzState = .balanced
     @Published public private(set) var activeSpeechBubbleText: String? = nil
+    /// On-device AI or templated idle commentary line; displayed only when activeSpeechBubbleText is nil.
+    @Published public private(set) var idleCommentaryText: String? = nil
     @Published public private(set) var isPetReactionActive: Bool = false
     /// Short-lived confirmation text (e.g. a file-drop copy); loses to every deterministic wellness/thermal line.
     @Published public private(set) var transientBubbleText: String? = nil
@@ -352,6 +354,7 @@ public final class WellnessPointEngine: ObservableObject {
             currentState = .overheating
             activeSpeechBubbleText = customOverheatingMessage
             syncWithRive()
+            scheduleOptionalRephrase(for: .overheating)
         } else {
             isOverheatingOverride = false
             customOverheatingMessage = nil
@@ -418,9 +421,18 @@ public final class WellnessPointEngine: ObservableObject {
         }
     }
 
-    /// Wellness/thermal text first, then any transient confirmation.
+    /// Optional closure allowing personality commentary to rephrase static critical warnings in the active preset voice.
+    /// The static warning is ALWAYS set synchronously first to guarantee prompt and deterministic warning delivery.
+    public var warningRephraser: ((_ warning: String, _ state: BitzState) async -> String)?
+
+    /// Wellness/thermal text first, then idle commentary, then any transient confirmation.
     public var displayedSpeechBubbleText: String? {
-        activeSpeechBubbleText ?? transientBubbleText
+        activeSpeechBubbleText ?? idleCommentaryText ?? transientBubbleText
+    }
+
+    /// Sets or clears the current idle commentary line.
+    public func setIdleCommentaryText(_ text: String?) {
+        self.idleCommentaryText = text
     }
 
     /// Sets `currentPoints` and optional `continuousWorkMinutes` directly, clears thermal/charging overrides,
@@ -444,6 +456,7 @@ public final class WellnessPointEngine: ObservableObject {
             currentState = .overheating
             activeSpeechBubbleText = customOverheatingMessage ?? Self.thermalWarningText
             syncWithRive()
+            scheduleOptionalRephrase(for: .overheating)
             return
         }
 
@@ -458,6 +471,7 @@ public final class WellnessPointEngine: ObservableObject {
             currentState = .burnout
             activeSpeechBubbleText = Self.burnoutWarningText
             syncWithRive()
+            scheduleOptionalRephrase(for: .burnout)
             return
         }
 
@@ -465,6 +479,7 @@ public final class WellnessPointEngine: ObservableObject {
             currentState = .overworked
             activeSpeechBubbleText = Self.overworkedWarningText
             syncWithRive()
+            scheduleOptionalRephrase(for: .overworked)
             return
         }
 
@@ -480,10 +495,22 @@ public final class WellnessPointEngine: ObservableObject {
         switch newState {
         case .dopamineSad:
             activeSpeechBubbleText = Self.dopamineSadText
+            scheduleOptionalRephrase(for: .dopamineSad)
         case .superCharged, .balanced, .overworked, .burnout, .charging, .overheating:
             activeSpeechBubbleText = nil
         }
         syncWithRive()
+    }
+
+    private func scheduleOptionalRephrase(for state: BitzState) {
+        guard let rephraser = warningRephraser, let currentStatic = activeSpeechBubbleText else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.currentState == state else { return }
+            let rephrased = await rephraser(currentStatic, state)
+            if self.currentState == state {
+                self.activeSpeechBubbleText = rephrased
+            }
+        }
     }
 
     /// Pure threshold mapping from `points` (`0.0...100.0`) when not on a continuous-work burnout streak:
