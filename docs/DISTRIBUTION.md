@@ -37,45 +37,19 @@ This document describes the distribution architecture used to keep the core Bitz
 
 ---
 
-## 🚀 One-Time Setup Instructions
+## 🚀 Configured Architecture Status
 
-Follow these steps once to configure the automated release pipeline:
+The automated release and distribution pipeline is fully configured and active:
 
-### Step 1: Create the Public Distribution Sink Repository
-Create an empty public repository under your GitHub account:
-- **Repository Name**: `bitz-releases`
-- **Owner**: `AkramKs`
-- **Visibility**: **Public** (Do NOT make this private; release assets must be downloadable without auth)
-- **Description**: `Public distribution repository for Bitz the Cyber Cat macOS releases and DMGs`
-
-Via GitHub CLI:
-```bash
-gh repo create AkramKs/bitz-releases --public --description "Public distribution repository for Bitz the Cyber Cat macOS releases and DMGs"
-```
-
-### Step 2: Create a GitHub Personal Access Token (PAT)
-The CI/CD pipeline running in the private `bitz-mac` repository needs permission to:
-1. Create releases and upload `.dmg` assets in `AkramKs/bitz-releases`.
-2. Push commits to `AkramKs/homebrew-tap` to update `Casks/bitz.rb`.
-
-1. Go to **GitHub Settings** -> **Developer Settings** -> **Personal Access Tokens** -> **Tokens (classic)** (or Fine-grained tokens with access to `bitz-releases` and `homebrew-tap`).
-2. Generate a token with:
-   - Name: `Bitz Release Distribution Token`
-   - Scope: `repo` (Full control of private and public repositories)
-3. Copy the generated token string (starts with `ghp_...`).
-
-### Step 3: Add the Token Secret to `bitz-mac`
-1. Go to `AkramKs/bitz-mac` on GitHub.
-2. Navigate to **Settings** -> **Secrets and variables** -> **Actions**.
-3. Click **New repository secret**:
-   - **Name**: `RELEASE_DISTRIBUTION_TOKEN`
-   - **Secret**: *Paste your PAT from Step 2*
-4. Click **Add secret**.
-
-### Step 4: Toggle `bitz-mac` to Private
-1. In `AkramKs/bitz-mac`, go to **Settings** -> **General** (scroll to the bottom **Danger Zone**).
-2. Click **Change repository visibility** -> **Make private**.
-3. Confirm the change.
+- **Public Distribution Sink**: [`AkramKs/bitz-releases`](https://github.com/AkramKs/bitz-releases) (Public)
+  - Hosts published `.dmg` binaries and release notes.
+  - Public JSON API for unauthenticated in-app update checks via `AppUpdateService.swift`.
+- **Private Source Repository**: [`AkramKs/bitz-mac`](https://github.com/AkramKs/bitz-mac) (Private)
+  - Houses the proprietary Swift/SwiftUI mascot engine.
+  - Contains repository secret `RELEASE_DISTRIBUTION_TOKEN` for pushing releases and cask updates.
+- **Homebrew Tap**: [`AkramKs/homebrew-tap`](https://github.com/AkramKs/homebrew-tap) (Public)
+  - `Casks/bitz.rb` points to release assets in `bitz-releases`.
+  - Automatically bumped on every release.
 
 ---
 

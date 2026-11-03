@@ -2,7 +2,7 @@
 
 Thank you for your interest in contributing to **Bitz the Cyber Cat**! 🐱⚡
 
-To maintain repository security, code quality, and organized project tracking, we follow a strict **"Ticket First + Pull Request"** contribution model. **Direct pushes or accidental commits to `main` are strictly blocked.**
+To maintain repository security, code quality, and organized project tracking, we follow a strict **"Ticket First + Pull Request"** contribution model. The core `AkramKs/bitz-mac` repository is private, while public binary releases are served via `AkramKs/bitz-releases` (see [DISTRIBUTION.md](docs/DISTRIBUTION.md)). **Direct pushes to `main` are strictly forbidden.**
 
 ---
 

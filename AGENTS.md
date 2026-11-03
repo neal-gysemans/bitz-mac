@@ -39,7 +39,8 @@ This file is the **single source of truth** for all AI coding agents (Antigravit
 
 ### Key Docs & Packaging Scripts
 - `docs/ARCHITECTURE.md` (system design & NFR budgets), `docs/STATE_MACHINE.md` (PTS math & edge cases), `docs/ACCEPTANCE_CRITERIA.md` (FR/NFR specs).
-- `Scripts/package_and_run.sh [debug|release]` (builds, signs ad-hoc `build/Bitz.app`, kills old instance, launches), `Scripts/create_dmg.sh` (release DMG builder).
+- `docs/DISTRIBUTION.md` — Private repo distribution architecture (`AkramKs/bitz-mac` private source, `AkramKs/bitz-releases` public release sink, `AkramKs/homebrew-tap` Cask sync).
+- `Scripts/package_and_run.sh [debug|release]` (builds, signs ad-hoc `build/Bitz.app`, kills old instance, launches with SDK fallback), `Scripts/create_dmg.sh` (release DMG builder).
 
 ---
 
@@ -76,6 +77,8 @@ Bitz sits on the user's desktop all day alongside heavy IDEs and LLM agents. Reg
 ---
 
 ## 🔒 3. Issue Ticket & PR Lifecycle (STRICT)
+
+> **Private Repository Note**: `AkramKs/bitz-mac` is private. On GitHub Free accounts, branch protection rulesets are unavailable for private repos. Therefore, **all contributors and AI agents must strictly honor the PR and CI check lifecycle without exception**—never pushing directly to `main`.
 
 ### Rule 3.1: Ticket First
 - Never write code or open a PR without an associated GitHub Issue ticket.
@@ -140,6 +143,7 @@ Bitz sits on the user's desktop all day alongside heavy IDEs and LLM agents. Reg
    - Every store or service test must use an isolated `UserDefaults(suiteName:)` domain with cleanup in `defer { defaults.removePersistentDomain(...) }`.
 3. **Local Packaging**:
    - Test packaging and run locally with `./Scripts/package_and_run.sh release` to confirm signing and live AppKit execution.
+   - The script automatically checks active Command Line Tools and falls back to `MacOSX26.5.sdk` if the active SDK is a preview seed (e.g. 27.x) missing standalone SwiftUI macro binaries.
 
 ---
 

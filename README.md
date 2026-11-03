@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Privacy-Zero%20Keylogging-34C759?style=flat-square" alt="Privacy First" />
 </p>
 
-**Bitz the Cyber Cat** is a native, lightweight macOS cyberpunk desktop companion built with **Swift**, **SwiftUI**, and **AppKit**. Bitz sits quietly in the bottom-right corner of your screen inside a 100% click-through floating overlay (`NSPanel`), rendered with a procedural 60 FPS SwiftUI vector rig (`TimelineView`) that reacts in real time to your **coding focus**, **offline breaks**, and **live Apple Silicon hardware sensors** (CPU die temperature in `°C` and Mach kernel CPU load `%`).
+**Bitz the Cyber Cat** is a native, lightweight macOS cyberpunk desktop companion built with **Swift**, **SwiftUI**, and **AppKit**. Bitz sits quietly in the bottom-right corner of your screen inside a 100% click-through floating overlay (`NSPanel`), rendered with an out-of-process CoreAnimation vector mascot engine (0% idle CPU) and SwiftUI floating HUD that reacts in real time to your **coding focus**, **offline breaks**, and **live Apple Silicon hardware sensors** (CPU die temperature in `°C` and Mach kernel CPU load `%`).
 
 ---
 
@@ -212,11 +212,13 @@ A warning stays until **GOT IT**, menu bar **Dismiss Agent Warning**, or the sam
 - **Xcode 15.4+** / Xcode Command Line Tools (`/usr/bin/swift`)
 
 ### 1. Build, Package & Launch `Bitz.app`
-Run the included packaging script to compile the executable, bundle `build/Bitz.app` with its `LSUIElement` `Info.plist`, ad-hoc sign it, and launch it:
+Run the included packaging script to compile the executable, bundle `build/Bitz.app` with its `LSUIElement` `Info.plist`, ad-hoc sign it, and launch it (with automatic CommandLineTools SDK fallback):
 
 ```bash
-./Scripts/package_and_run.sh
+./Scripts/package_and_run.sh release
 ```
+
+For release distribution architecture and pipeline details, see [DISTRIBUTION.md](docs/DISTRIBUTION.md).
 
 Once launched:
 1. Look at the **bottom-right corner** of your screen to see Bitz and the live hardware HUD pill (`°C • CPU % • PTS`).
