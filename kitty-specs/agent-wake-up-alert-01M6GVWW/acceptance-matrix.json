@@ -1,0 +1,89 @@
+{
+  "mission_slug": "agent-wake-up-alert-01M6GVWW",
+  "mission_number": "",
+  "mission_type": "software-dev",
+  "overall_verdict": "pass",
+  "criteria": [
+    {
+      "criterion_id": "FR-001",
+      "description": "AgentEventKind.failed end-to-end support across models, monitor, and adapters",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/AgentEventFailedTests.swift::testFailedEventKindInitializationAndEncoding, Tests/BitzTests/AgentEventFailedTests.swift::testAgentMonitorServiceReceivesFailedEventAndUpdatesActivePopup",
+      "pass_fail": "pass",
+      "verified_by": "implement-command",
+      "verified_at": "2026-11-03T15:15:00+00:00",
+      "notes": "Failed event is correctly dispatched, updates active popup, and cleans up active session."
+    },
+    {
+      "criterion_id": "FR-002",
+      "description": "Failure speech bubble styling with crimson background, red border, and 6s auto-dismiss",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/AgentEventFailedTests.swift::testFailedPopupSpeechBubbleStylingAndTiming",
+      "pass_fail": "pass",
+      "verified_by": "implement-command",
+      "verified_at": "2026-11-03T15:15:00+00:00",
+      "notes": "SpeechBubbleView renders crimson styling and sets autoDismissDelay to 6s."
+    },
+    {
+      "criterion_id": "FR-003",
+      "description": "Paw-tap attention cue on .needsApproval using out-of-process CoreAnimation",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/PawTapAttentionTests.swift::testPawTapMotionBridgeConfiguration, Tests/BitzTests/PawTapAttentionTests.swift::testMascotOverlayPassesAttentionCueToLiveCharacter",
+      "pass_fail": "pass",
+      "verified_by": "implement-command",
+      "verified_at": "2026-11-03T15:25:00+00:00",
+      "notes": "CALayerMotionBridge applies pawTap animation with 3pt amplitude and 0.22s half-period at 0% CPU."
+    },
+    {
+      "criterion_id": "FR-004",
+      "description": "Quick-action HUD: Jump to Terminal via AppActivating protocol seam",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/QuickActionHUDTests.swift::testWorkspaceAppActivatorWithMockRunningApp",
+      "pass_fail": "pass",
+      "verified_by": "implement-command",
+      "verified_at": "2026-11-03T15:40:00+00:00",
+      "notes": "WorkspaceAppActivator brings target application forward without stealing keyboard focus."
+    },
+    {
+      "criterion_id": "FR-005",
+      "description": "Quick-action HUD: View Diff via DiffViewing protocol seam",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/QuickActionHUDTests.swift::testSystemDiffViewerInvokesGitDiffOffMainThread",
+      "pass_fail": "pass",
+      "verified_by": "implement-command",
+      "verified_at": "2026-11-03T15:40:00+00:00",
+      "notes": "SystemDiffViewer spawns git diff off the main thread."
+    },
+    {
+      "criterion_id": "FR-006",
+      "description": "Safe hook-based approval channel dispatching single-use decision without keystroke injection",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/AgentApprovalStoreTests.swift::testSubmitDecisionDispatchesToChannelAndConsumesToken, Tests/BitzTests/AgentApprovalStoreTests.swift::testNoKeystrokeInjection",
+      "pass_fail": "pass",
+      "verified_by": "implement-command",
+      "verified_at": "2026-11-03T16:00:00+00:00",
+      "notes": "Decisions write directly to explicit response channels and never use synthetic typing."
+    },
+    {
+      "criterion_id": "FR-007",
+      "description": "Approval token store managing single-use consumption and automatic TTL expiry",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/AgentApprovalStoreTests.swift::testRegisterAndConsumeToken, Tests/BitzTests/AgentApprovalStoreTests.swift::testExpiredTokenRejection",
+      "pass_fail": "pass",
+      "verified_by": "implement-command",
+      "verified_at": "2026-11-03T16:00:00+00:00",
+      "notes": "Single-use invalidation prevents double approvals; expired tokens reject approval."
+    },
+    {
+      "criterion_id": "FR-008",
+      "description": "Interactive bubble window click routing while maintaining mascot overlay click-through",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/QuickActionHUDTests.swift::testSpeechBubbleInteractivityForApprovalPopup, Tests/BitzTests/AgentApprovalStoreTests.swift::testBindingDismissesPopupOnApproval",
+      "pass_fail": "pass",
+      "verified_by": "implement-command",
+      "verified_at": "2026-11-03T16:00:00+00:00",
+      "notes": "SpeechBubblePanel enables mouse clicks when buttons are visible and reverts to click-through."
+    }
+  ],
+  "negative_invariants": []
+}

@@ -1,0 +1,39 @@
+{
+  "accept_commit": "517229da8c77cfdcc4e8ff2fbe044bd8d7b26694",
+  "acceptance_history": [
+    {
+      "accept_commit": "77f5420bdebcd73b6831b54ed5656eb645b9301d",
+      "acceptance_mode": "pr",
+      "accepted_at": "2026-11-03T15:16:21.057015+00:00",
+      "accepted_by": "implement-command",
+      "accepted_from_commit": "a720df599a34423a45ce729684557670064f5739"
+    },
+    {
+      "accept_commit": "517229da8c77cfdcc4e8ff2fbe044bd8d7b26694",
+      "acceptance_mode": "pr",
+      "accepted_at": "2026-11-03T15:20:26.337773+00:00",
+      "accepted_by": "reviewer",
+      "accepted_from_commit": "fed8fe568295d3f748a5cf3c656c21dfdb1a27f9"
+    }
+  ],
+  "acceptance_mode": "pr",
+  "accepted_at": "2026-11-03T15:20:26.337773+00:00",
+  "accepted_by": "reviewer",
+  "accepted_from_commit": "fed8fe568295d3f748a5cf3c656c21dfdb1a27f9",
+  "baseline_merge_commit": "60d11561bfaa6cacec7baa1e581970f277af63bc",
+  "created_at": "2026-11-03T14:09:35.861395+00:00",
+  "flattened": false,
+  "friendly_name": "agent wake up alert",
+  "mission_id": "01M6GVWW1BCE5WH210KAVD1ZDK",
+  "mission_number": null,
+  "mission_slug": "agent-wake-up-alert-01M6GVWW",
+  "mission_type": "software-dev",
+  "purpose_context": "This mission advances agent wake up alert on feat/issue-19-agent-wake-up-alert so stakeholders can track the work from mission creation onward.",
+  "purpose_tldr": "agent wake up alert",
+  "slug": "agent-wake-up-alert-01M6GVWW",
+  "status_phase": "1",
+  "target_branch": "feat/issue-19-agent-wake-up-alert",
+  "topology": "lanes",
+  "vcs": "git",
+  "vcs_locked_at": "2026-11-03T14:23:33.505381+00:00"
+}

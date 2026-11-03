@@ -10,6 +10,8 @@ public enum AgentEventKind: String, Codable, Sendable, CaseIterable {
     case warning
     /// Context reading / activity heartbeat; never shown as a bubble.
     case usage
+    /// Unrecoverable task failure or error exit.
+    case failed
 }
 
 /// A structured event emitted by an agent adapter when an agent state transition occurs.
@@ -101,6 +103,13 @@ extension AgentEvent {
         public static let seed = "seed"
         /// `process` on `ProcessAgentAdapter` events (app presence).
         public static let source = "source"
+        public static let approvalRequestID = "approvalRequestID"
+        public static let approvalChannel = "approvalChannel"
+        public static let toolName = "toolName"
+        public static let commandSummary = "commandSummary"
+        public static let owningPID = "owningPID"
+        public static let bundleID = "bundleID"
+        public static let workingDir = "workingDir"
     }
 
     /// Latest turn's input tokens; `nil` when absent, non-numeric or negative.
@@ -116,6 +125,14 @@ extension AgentEvent {
 
     /// App-presence event from `ProcessAgentAdapter`; its `done` never clears a warning or ends a turn.
     public var isProcessPresence: Bool { metadata?[MetadataKey.source] == "process" }
+
+    public var approvalRequestID: String? { metadata?[MetadataKey.approvalRequestID] }
+    public var approvalChannel: String? { metadata?[MetadataKey.approvalChannel] }
+    public var toolName: String? { metadata?[MetadataKey.toolName] }
+    public var commandSummary: String? { metadata?[MetadataKey.commandSummary] }
+    public var owningPID: Int? { nonNegativeInt(MetadataKey.owningPID) }
+    public var bundleID: String? { metadata?[MetadataKey.bundleID] }
+    public var workingDir: String? { metadata?[MetadataKey.workingDir] }
 
     public var warningReason: AgentWarningReason {
         metadata?[MetadataKey.reason].flatMap { AgentWarningReason(rawValue: $0) } ?? .reported

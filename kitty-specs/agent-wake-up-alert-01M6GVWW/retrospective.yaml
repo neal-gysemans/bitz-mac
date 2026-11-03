@@ -1,0 +1,82 @@
+schema_version: 1
+mission_id: 01M6GVWW1BCE5WH210KAVD1ZDK
+mission_slug: agent-wake-up-alert-01M6GVWW
+mission_number:
+friendly_name: agent wake up alert
+mission_type: software-dev
+target_branch: feat/issue-19-agent-wake-up-alert
+created_at: '2026-11-03T15:20:36.278000+00:00'
+created_by:
+  kind: runtime
+  id: spec-kitty-generator
+  display: Spec Kitty Generator
+provenance:
+  kind: runtime_post_completion
+  invoked_at: '2026-11-03T15:20:36.278000+00:00'
+  policy_resolved_from:
+    enabled: <default>
+    timing: <default>
+    failure_policy: <default>
+    write_record: <default>
+    generate_proposals: <default>
+    apply_proposals: <default>
+    permissions.write_record: <default>
+    permissions.inspect_mission_artifacts: <default>
+    permissions.propose_glossary_changes: <default>
+    permissions.propose_drg_changes: <default>
+    permissions.propose_doctrine_changes: <default>
+    permissions.apply_low_risk_changes: <default>
+    permissions.apply_structural_changes: <default>
+    precedence: <default>
+    generator: <default>
+policy_source:
+  enabled: <default>
+  timing: <default>
+  failure_policy: <default>
+  write_record: <default>
+  generate_proposals: <default>
+  apply_proposals: <default>
+  permissions.write_record: <default>
+  permissions.inspect_mission_artifacts: <default>
+  permissions.propose_glossary_changes: <default>
+  permissions.propose_drg_changes: <default>
+  permissions.propose_doctrine_changes: <default>
+  permissions.apply_low_risk_changes: <default>
+  permissions.apply_structural_changes: <default>
+  precedence: <default>
+  generator: <default>
+findings_status: ran_no_findings
+helped: []
+not_helpful: []
+gaps: []
+proposals: []
+evidence_refs:
+- id: e-001
+  kind: file
+  path: kitty-specs/agent-wake-up-alert-01M6GVWW/meta.json
+- id: e-002
+  kind: file
+  path: kitty-specs/agent-wake-up-alert-01M6GVWW/spec.md
+- id: e-003
+  kind: file
+  path: kitty-specs/agent-wake-up-alert-01M6GVWW/plan.md
+- id: e-004
+  kind: file
+  path: kitty-specs/agent-wake-up-alert-01M6GVWW/tasks.md
+- id: e-005
+  kind: file
+  path: kitty-specs/agent-wake-up-alert-01M6GVWW/tasks/WP01-agent-failure-event.md
+- id: e-006
+  kind: file
+  path: kitty-specs/agent-wake-up-alert-01M6GVWW/tasks/WP02-paw-tap-attention-cue.md
+- id: e-007
+  kind: file
+  path: kitty-specs/agent-wake-up-alert-01M6GVWW/tasks/WP03-quick-action-bubble-hud.md
+- id: e-008
+  kind: file
+  path: kitty-specs/agent-wake-up-alert-01M6GVWW/tasks/WP04-safe-hook-approval.md
+- id: e-009
+  kind: file
+  path: kitty-specs/agent-wake-up-alert-01M6GVWW/status.events.jsonl
+generator_version: '1.0'
+provenance_history: []

@@ -1,0 +1,5 @@
+source_id,title,type,locator,retrieved_at
+SRC-001,"GitHub Issue #19: Agent Wake-Up Alert & 1-Click Approval",issue,"https://github.com/AkramKs/bitz-mac/issues/19",2026-11-03
+SRC-002,"SpeechBubblePanel click routing",code,"src/App/Window/SpeechBubblePanel.swift",2026-11-03
+SRC-003,"CALayerMotionBridge CoreAnimation engine",code,"src/Views/BitzCharacterView.swift",2026-11-03
+SRC-004,"macOS AppKit NSRunningApplication",api,"AppKit/NSRunningApplication.h",2026-11-03

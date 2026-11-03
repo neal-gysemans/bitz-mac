@@ -19,6 +19,10 @@ public struct AgentHookInstaller {
         """
     }
 
+    public static func failureCommand(agentID: String = "claude", agentName: String = "Claude", message: String = "Claude encountered a failure!") -> String {
+        dropEventScript(agentID: agentID, agentName: agentName, kind: AgentEventKind.failed.rawValue, message: message)
+    }
+
     /// Generates Claude Code notification/stop hooks snippet for ~/.claude/settings.json
     public static func claudeSettingsSnippet() -> [String: Any] {
         let dir = DropboxAgentAdapter.defaultDirectoryURL.path

@@ -1,0 +1,5 @@
+id,source_id,finding,confidence,notes
+EV-001,SRC-001,"#19 remaining scope specifies .failed event kind, paw-tap attention cue, quick-action HUD, and safe hook approval",high,"Extracted directly from GitHub Issue #19"
+EV-002,SRC-002,"SpeechBubblePanel already handles interactive clicks with non-activating child panel without focus stealing",high,"Shipped in PR #62 & PR #71"
+EV-003,SRC-003,"CALayerMotionBridge executes out-of-process in WindowServer at 0% idle CPU",high,"Validated in AGENTS.md performance invariants"
+EV-004,SRC-004,"NSRunningApplication.activate requires no special entitlements or TCC prompts",high,"AppKit standard API"

@@ -144,6 +144,9 @@ public struct SpeechBubbleView: View {
         case .warning:
             // Warning Amber (#FFB000), the same colour as the warning visor
             return (MascotOverlayView.visorColor(for: .overworked), Color(red: 0.45, green: 0.12, blue: 0.04).opacity(0.96))
+        case .failed:
+            // High-contrast crimson on red stroke for critical failure
+            return (Color.red, Color(red: 0.65, green: 0.08, blue: 0.12).opacity(0.96))
         case .started, .working, .usage:
             // `.usage` never reaches the bubble
             return (Color.cyan, Color(red: 0.12, green: 0.45, blue: 0.85).opacity(0.96))

@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "mission_slug": "agent-wake-up-alert-01M6GVWW",
+  "mission_id": "01M6GVWW1BCE5WH210KAVD1ZDK",
+  "mission_branch": "kitty/mission-agent-wake-up-alert-01M6GVWW",
+  "target_branch": "feat/issue-19-agent-wake-up-alert",
+  "lanes": [
+    {
+      "lane_id": "lane-a",
+      "wp_ids": [
+        "WP01"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/AgentEventFailedTests.swift",
+        "src/Models/AgentModels.swift",
+        "src/Services/AgentHookInstaller.swift",
+        "src/Services/AgentMonitorService.swift",
+        "src/Views/SpeechBubbleView.swift"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "artifact-rendering",
+        "legacy-cleanup"
+      ],
+      "depends_on_lanes": [],
+      "parallel_group": 0
+    },
+    {
+      "lane_id": "lane-b",
+      "wp_ids": [
+        "WP02"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/PawTapAttentionTests.swift",
+        "src/Views/BitzCharacterView.swift",
+        "src/Views/MascotOverlayView.swift"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "app-shell"
+      ],
+      "depends_on_lanes": [],
+      "parallel_group": 0
+    },
+    {
+      "lane_id": "lane-c",
+      "wp_ids": [
+        "WP03"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/QuickActionHUDTests.swift",
+        "src/App/Window/SpeechBubblePanel.swift",
+        "src/Services/AppActivator.swift",
+        "src/Services/DiffViewer.swift"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "workspace"
+      ],
+      "depends_on_lanes": [],
+      "parallel_group": 0
+    },
+    {
+      "lane_id": "lane-d",
+      "wp_ids": [
+        "WP04"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/AgentApprovalStoreTests.swift",
+        "src/App/BitzApp.swift",
+        "src/Models/AgentApprovalStore.swift",
+        "src/Views/AgentApprovalHUDView.swift"
+      ],
+      "predicted_surfaces": [
+        "api"
+      ],
+      "depends_on_lanes": [
+        "lane-a",
+        "lane-c"
+      ],
+      "parallel_group": 1
+    }
+  ],
+  "computed_at": "2026-11-03T14:28:33.146246+00:00",
+  "computed_from": "dependency_graph+ownership",
+  "planning_artifact_wps": [],
+  "planning_commit_sha": "1493b2b163667dbe466e97a57948b981d34d18fa"
+}

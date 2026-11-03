@@ -28,6 +28,9 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
     public let personalitySettings: PersonalitySettingsStore
     public let personalityService: PersonalityService
     public let gitActivityProvider: any GitActivityProviding
+    public let approvalStore: AgentApprovalStore
+    public let appActivator: any AppActivating
+    public let diffViewer: any DiffViewing
     @Published public private(set) var menuBarTitle: String = "Bitz"
     public private(set) var overlayPanels: [MascotOverlayPanel] = []
     public var overlayPanel: MascotOverlayPanel? { overlayPanels.first }
@@ -77,8 +80,15 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         personalitySettings: PersonalitySettingsStore? = nil,
         personalityService: PersonalityService? = nil,
         gitActivityProvider: (any GitActivityProviding)? = nil,
+        approvalStore: AgentApprovalStore? = nil,
+        appActivator: (any AppActivating)? = nil,
+        diffViewer: (any DiffViewing)? = nil,
         userDefaults: UserDefaults = .standard
     ) {
+        let resolvedApprovalStore = approvalStore ?? AgentApprovalStore()
+        self.approvalStore = resolvedApprovalStore
+        self.appActivator = appActivator ?? WorkspaceAppActivator()
+        self.diffViewer = diffViewer ?? SystemDiffViewer()
         self.paletteStore = paletteStore ?? AvatarPaletteStore(userDefaults: userDefaults)
         let resolvedPersonalitySettings = personalitySettings ?? PersonalitySettingsStore(userDefaults: userDefaults)
         self.personalitySettings = resolvedPersonalitySettings
@@ -127,6 +137,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         self.audioService.observe(wellnessEngine: self.engine)
         self.audioService.observe(agentMonitor: self.agentMonitor)
         self.flowShieldService.observe(wellnessEngine: self.engine)
+        self.approvalStore.bind(agentMonitor: self.agentMonitor)
 
         self.telemetryDashboard.bindDependencies(
             agentMonitor: self.agentMonitor,
@@ -163,10 +174,11 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
             self?.activityMonitor.clearManualOverride()
             self?.paletteStore.cancelPreview()
         }
-        // An agent popup can cover the update alert's buttons, so re-check on either change
-        self.bubbleInteractivityCancellable = Publishers.Merge(
+        // An agent popup or pending approval can cover the update alert's buttons, so re-check on all changes
+        self.bubbleInteractivityCancellable = Publishers.Merge3(
             self.updateStore.$isSpeechBubbleAlertActive.map { _ in () },
-            self.agentMonitor.$activePopup.map { _ in () }
+            self.agentMonitor.$activePopup.map { _ in () },
+            self.approvalStore.$activeRequest.map { _ in () }
         )
         .receive(on: DispatchQueue.main)
         .sink { [weak self] in
@@ -301,13 +313,14 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
 
     /// Mascot panel takes clicks only while dragging; the bubble panel only while the bubble on screen has buttons.
     public func updatePanelsInteractivity() {
-        let bubbleIsInteractive = SpeechBubbleContent.current(
+        let currentContent = SpeechBubbleContent.current(
             engine: engine,
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings
-        )?.isInteractive ?? false
+        )
+        let bubbleIsInteractive = (currentContent?.isInteractive ?? false) || approvalStore.activeRequest != nil
         overlayPanels.forEach { panel in
             panel.ignoresMouseEvents = !positionStore.isInteractivityEnabled
             panel.speechBubblePanel.ignoresMouseEvents = !bubbleIsInteractive
@@ -694,14 +707,20 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
     private func createConfiguredPanel() -> MascotOverlayPanel {
         let panel = MascotOverlayPanel()
         panel.speechBubblePanel.contentView = NSHostingView(
-            rootView: SpeechBubbleView(
-                engine: engine,
-                scaleStore: scaleStore,
+            rootView: SpeechBubbleHostView(
+                speechBubbleView: SpeechBubbleView(
+                    engine: engine,
+                    scaleStore: scaleStore,
+                    agentMonitor: agentMonitor,
+                    updateStore: updateStore,
+                    telemetryDashboard: telemetryDashboard,
+                    telemetrySettings: telemetrySettings,
+                    paletteStore: paletteStore
+                ),
+                approvalStore: approvalStore,
                 agentMonitor: agentMonitor,
-                updateStore: updateStore,
-                telemetryDashboard: telemetryDashboard,
-                telemetrySettings: telemetrySettings,
-                paletteStore: paletteStore
+                appActivator: appActivator,
+                diffViewer: diffViewer
             )
         )
         panel.onRightMouseDown = { [weak self] in
@@ -761,6 +780,50 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         hostingView.frame = NSRect(origin: .zero, size: initialSize)
         panel.contentView = hostingView
         return panel
+    }
+}
+
+/// Host view inside `SpeechBubblePanel`, rendering `SpeechBubbleView` and the
+/// interactive quick-action HUD (`AgentApprovalHUDView`) during `.needsApproval` status (FR-004, FR-005, FR-006, FR-008).
+public struct SpeechBubbleHostView: View {
+    public let speechBubbleView: SpeechBubbleView
+    @ObservedObject public var approvalStore: AgentApprovalStore
+    @ObservedObject public var agentMonitor: AgentMonitorService
+    public let appActivator: any AppActivating
+    public let diffViewer: any DiffViewing
+
+    public init(
+        speechBubbleView: SpeechBubbleView,
+        approvalStore: AgentApprovalStore,
+        agentMonitor: AgentMonitorService,
+        appActivator: any AppActivating,
+        diffViewer: any DiffViewing
+    ) {
+        self.speechBubbleView = speechBubbleView
+        self.approvalStore = approvalStore
+        self.agentMonitor = agentMonitor
+        self.appActivator = appActivator
+        self.diffViewer = diffViewer
+    }
+
+    public var body: some View {
+        VStack(spacing: 4) {
+            speechBubbleView
+
+            if let request = approvalStore.activeRequest, agentMonitor.activePopup?.kind == .needsApproval {
+                AgentApprovalHUDView(
+                    request: request,
+                    appActivator: appActivator,
+                    diffViewer: diffViewer,
+                    onApprove: {
+                        approvalStore.submitDecision(.approve, for: request.id)
+                        agentMonitor.dismissPopup()
+                    }
+                )
+                .padding(.horizontal, 8)
+                .padding(.bottom, 6)
+            }
+        }
     }
 }
 

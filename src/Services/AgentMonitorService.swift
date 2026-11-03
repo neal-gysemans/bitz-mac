@@ -284,6 +284,20 @@ public final class AgentMonitorService: ObservableObject {
             } else {
                 restoreWarningBubble(ifOverriddenBy: id)
             }
+        case .failed:
+            activeAgents.remove(id)
+            if !event.isProcessPresence {
+                session.turnActive = false
+                session.awaitingApproval = false
+                session.pendingTools = 0
+                if activeWarning?.agentID == id { acknowledgeWarning() }
+            }
+            if activeWarning == nil {
+                let text = event.message ?? "❌ \(name) failed!"
+                displayPopupIfEnabled(text: text, kind: .failed, agentName: name, durationSeconds: 6.0)
+            } else {
+                restoreWarningBubble(ifOverriddenBy: id)
+            }
         case .warning:
             let reason = event.warningReason
             if signalSettings.isEnabled(reason) {

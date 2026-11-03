@@ -418,6 +418,7 @@ public struct LiveBitzCharacterView: View {
     public let customVisorColor: Color?
     public let isPaused: Bool
     public let palette: AvatarResolvedPalette
+    public let isAttentionCueActive: Bool
 
     @State private var isBlinking: Bool = false
 
@@ -425,6 +426,7 @@ public struct LiveBitzCharacterView: View {
         let state: BitzState
         let isLoafPosture: Bool
         let showParticles: Bool
+        let isAttentionCueActive: Bool
     }
 
     public init(
@@ -434,7 +436,8 @@ public struct LiveBitzCharacterView: View {
         showParticles: Bool = true,
         customVisorColor: Color? = nil,
         isPaused: Bool = false,
-        palette: AvatarResolvedPalette = .cyberpunkClassic
+        palette: AvatarResolvedPalette = .cyberpunkClassic,
+        isAttentionCueActive: Bool = false
     ) {
         self.palette = palette
         self.state = state
@@ -443,6 +446,7 @@ public struct LiveBitzCharacterView: View {
         self.showParticles = showParticles
         self.customVisorColor = customVisorColor
         self.isPaused = isPaused
+        self.isAttentionCueActive = isAttentionCueActive
     }
 
     private var visorColor: Color {
@@ -477,9 +481,10 @@ public struct LiveBitzCharacterView: View {
                     isLoafPosture: isLoafPosture,
                     showParticles: showParticles,
                     visorColor: visorColor,
-                    palette: palette
+                    palette: palette,
+                    isAttentionCueActive: isAttentionCueActive
                 )
-                .id(MotionStageKey(state: state, isLoafPosture: isLoafPosture, showParticles: showParticles))
+                .id(MotionStageKey(state: state, isLoafPosture: isLoafPosture, showParticles: showParticles, isAttentionCueActive: isAttentionCueActive))
             }
         }
         .frame(width: 180, height: 140)
@@ -506,6 +511,7 @@ private struct LiveMotionStageView: View {
     let showParticles: Bool
     let visorColor: Color
     let palette: AvatarResolvedPalette
+    let isAttentionCueActive: Bool
 
     private var speedMultiplier: Double {
         switch state {
@@ -548,7 +554,7 @@ private struct LiveMotionStageView: View {
                 .equatable()
                 .frame(width: isLoafPosture ? 136 : 108, height: isLoafPosture ? 54 : 68)
 
-            // Front Paws (sway in opposite phase via out-of-process CALayer translation animations)
+            // Front Paws (sway in opposite phase via out-of-process CALayer translation animations, or paw-tap on .needsApproval)
             if !isLoafPosture {
                 HStack(spacing: 28) {
                     Capsule()
@@ -557,7 +563,9 @@ private struct LiveMotionStageView: View {
                         .overlay(Capsule().stroke(palette.trim(over: visorColor).opacity(0.65), lineWidth: 1))
                         .background(
                             CALayerMotionBridge(
-                                kind: hasMotion ? .verticalSway(amplitude: 1.8, halfPeriod: 1.05 / speed) : .none
+                                kind: isAttentionCueActive
+                                    ? .pawTap(amplitude: 3.0, halfPeriod: 0.22)
+                                    : (hasMotion ? .verticalSway(amplitude: 1.8, halfPeriod: 1.05 / speed) : .none)
                             )
                         )
                         .compositingGroup()
@@ -568,7 +576,9 @@ private struct LiveMotionStageView: View {
                         .overlay(Capsule().stroke(palette.trim(over: visorColor).opacity(0.65), lineWidth: 1))
                         .background(
                             CALayerMotionBridge(
-                                kind: hasMotion ? .verticalSway(amplitude: -1.8, halfPeriod: 1.05 / speed) : .none
+                                kind: isAttentionCueActive
+                                    ? .pawTap(amplitude: -3.0, halfPeriod: 0.22)
+                                    : (hasMotion ? .verticalSway(amplitude: -1.8, halfPeriod: 1.05 / speed) : .none)
                             )
                         )
                         .compositingGroup()
@@ -616,12 +626,13 @@ private struct LiveMotionStageView: View {
 
 /// Attaches pure CoreAnimation `CABasicAnimation`s directly onto the enclosing `.compositingGroup()` backing `CALayer`,
 /// bypassing SwiftUI's `AttributeGraph` / `NSDisplayLink` so WindowServer interpolates at 0% app CPU (#70).
-private struct CALayerMotionBridge: NSViewRepresentable {
+struct CALayerMotionBridge: NSViewRepresentable {
     enum Kind: Equatable {
         case none
         case breathing(liftY: CGFloat, halfPeriod: Double, glitchAmplitudeX: CGFloat)
         case verticalSway(amplitude: CGFloat, halfPeriod: Double)
         case tailWag(halfPeriod: Double, deltaRadians: CGFloat, center: CGPoint)
+        case pawTap(amplitude: CGFloat, halfPeriod: Double)
     }
 
     let kind: Kind
@@ -700,6 +711,17 @@ private struct CALayerMotionBridge: NSViewRepresentable {
                 wag.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 wag.isRemovedOnCompletion = false
                 layer.add(wag, forKey: "bitz.motion.primary")
+
+            case let .pawTap(amplitude, halfPeriod):
+                let tap = CABasicAnimation(keyPath: "transform.translation.y")
+                tap.fromValue = -amplitude
+                tap.toValue = amplitude
+                tap.duration = halfPeriod
+                tap.autoreverses = true
+                tap.repeatCount = .infinity
+                tap.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                tap.isRemovedOnCompletion = false
+                layer.add(tap, forKey: "bitz.motion.primary")
             }
         }
     }

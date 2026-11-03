@@ -73,4 +73,35 @@ public final class SpeechBubblePanel: NSPanel {
     public override var canBecomeMain: Bool {
         false
     }
+
+    /// Determines whether the given bubble content requires mouse interactivity (buttons clickable, FR-008).
+    nonisolated public static func isInteractiveContent(_ content: SpeechBubbleContent?) -> Bool {
+        guard let content else { return false }
+        switch content {
+        case .update:
+            return true
+        case .agentPopup(let popup):
+            return popup.kind == .warning || popup.kind == .needsApproval
+        case .wellness, .carousel:
+            return false
+        }
+    }
+
+    /// Whether this panel is currently configured to accept mouse events.
+    public var isInteractive: Bool {
+        get { !ignoresMouseEvents }
+        set { ignoresMouseEvents = !newValue }
+    }
+
+    /// Updates this panel's `ignoresMouseEvents` based on whether the content has interactive buttons (FR-008).
+    public func updateInteractivity(for content: SpeechBubbleContent?) {
+        self.ignoresMouseEvents = !Self.isInteractiveContent(content)
+    }
+}
+
+extension SpeechBubbleContent {
+    /// Extended interactivity check supporting `.needsApproval` action buttons (FR-008).
+    public var isQuickActionInteractive: Bool {
+        SpeechBubblePanel.isInteractiveContent(self)
+    }
 }

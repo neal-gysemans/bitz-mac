@@ -18,6 +18,13 @@ public struct MascotOverlayView: View {
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
     @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
     @ObservedObject public var paletteStore: AvatarPaletteStore
+    @ObservedObject public var agentMonitor: AgentMonitorService
+
+    private let explicitAttentionCue: Bool?
+
+    public var isAttentionCueActive: Bool {
+        explicitAttentionCue ?? (agentMonitor.activePopup?.kind == .needsApproval)
+    }
 
     public var onFilesDropped: (([URL]) -> Void)?
     public var onDragChanged: ((NSPoint, NSScreen?) -> Void)?
@@ -43,6 +50,8 @@ public struct MascotOverlayView: View {
         telemetrySettings: TelemetrySettingsStore = TelemetrySettingsStore(),
         interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
+        agentMonitor: AgentMonitorService = AgentMonitorService(),
+        isAttentionCueActive: Bool? = nil,
         onFilesDropped: (([URL]) -> Void)? = nil,
         onDragChanged: ((NSPoint, NSScreen?) -> Void)? = nil,
         onDragEnded: ((NSPoint, NSScreen?) -> Void)? = nil,
@@ -59,6 +68,8 @@ public struct MascotOverlayView: View {
         self.telemetrySettings = telemetrySettings
         self.interactionSettings = interactionSettings
         self.paletteStore = paletteStore
+        self.agentMonitor = agentMonitor
+        self.explicitAttentionCue = isAttentionCueActive
         self.onFilesDropped = onFilesDropped
         self.onDragChanged = onDragChanged
         self.onDragEnded = onDragEnded
@@ -168,7 +179,8 @@ public struct MascotOverlayView: View {
                 showParticles: true,
                 customVisorColor: visorColor,
                 isPaused: isAnimationPaused,
-                palette: paletteStore.resolvedPalette
+                palette: paletteStore.resolvedPalette,
+                isAttentionCueActive: isAttentionCueActive
             )
             .frame(width: 180, height: 140)
             .opacity(opacityStore.opacityFactor)

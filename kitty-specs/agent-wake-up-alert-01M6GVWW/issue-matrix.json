@@ -1,0 +1,89 @@
+{
+  "rows": {
+    "#19": {
+      "evidence_ref": "Tests/BitzTests/AgentEventFailedTests.swift",
+      "fr": "FR-001",
+      "nfr": "NFR-004",
+      "repo": "AkramKs/bitz-mac",
+      "sc": "SC-001",
+      "scope": "agent wake up alert",
+      "source_file": "spec.md",
+      "title": "Agent Wake-Up Alert & 1-Click Approval",
+      "verdict": "in-mission",
+      "wp": "WP01-WP04"
+    },
+    "#21": {
+      "evidence_ref": "Shipped in PR #76 (CyberAudioService chime on .needsApproval and fanfare on .done)",
+      "fr": null,
+      "nfr": null,
+      "repo": "AkramKs/bitz-mac",
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "Agent Chimes & Focus/DND Mute Gating",
+      "verdict": "verified-already-fixed",
+      "wp": null
+    },
+    "#38": {
+      "evidence_ref": "Shipped in PR #71 (Warning Alerts & GOT IT Dismissal)",
+      "fr": null,
+      "nfr": null,
+      "repo": "AkramKs/bitz-mac",
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "Agent Usage Gauges & Warnings",
+      "verdict": "verified-already-fixed",
+      "wp": null
+    },
+    "#61": {
+      "evidence_ref": "Shipped in PR #62 (Dedicated Clickable SpeechBubblePanel)",
+      "fr": null,
+      "nfr": null,
+      "repo": "AkramKs/bitz-mac",
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "Speech bubble sizing and positioning",
+      "verdict": "verified-already-fixed",
+      "wp": null
+    },
+    "#62": {
+      "evidence_ref": "Merged into main (SpeechBubblePanel dynamic sizing)",
+      "fr": null,
+      "nfr": null,
+      "repo": "AkramKs/bitz-mac",
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "SpeechBubblePanel implementation",
+      "verdict": "verified-already-fixed",
+      "wp": null
+    },
+    "#71": {
+      "evidence_ref": "Merged into main (Agent gauges and warning alerts)",
+      "fr": null,
+      "nfr": null,
+      "repo": "AkramKs/bitz-mac",
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "Warning Alerts & Interactive Dismiss",
+      "verdict": "verified-already-fixed",
+      "wp": null
+    },
+    "#76": {
+      "evidence_ref": "Merged into main (CyberAudioService and AudioEnvironmentDetector)",
+      "fr": null,
+      "nfr": null,
+      "repo": "AkramKs/bitz-mac",
+      "sc": null,
+      "scope": null,
+      "source_file": "spec.md",
+      "title": "Cyber Audio integration",
+      "verdict": "verified-already-fixed",
+      "wp": null
+    }
+  },
+  "schema_version": 1
+}
