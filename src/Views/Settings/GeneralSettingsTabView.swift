@@ -187,6 +187,7 @@ public struct GeneralSettingsTabView: View {
                                 Label("Lock Position [⎋ Esc]", systemImage: "lock.fill")
                             }
                             .buttonStyle(.borderedProminent)
+                            .accessibilityLabel("Lock Position")
                         } else {
                             Button {
                                 positionStore.unlockPosition()

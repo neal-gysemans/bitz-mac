@@ -80,6 +80,7 @@ public struct BehaviorSettingsTabView: View {
                         Label("Pet Bitz (<3)", systemImage: "heart.fill")
                     }
                     .buttonStyle(.bordered)
+                    .accessibilityLabel("Pet Bitz")
                 }
             }
 

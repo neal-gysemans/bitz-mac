@@ -383,6 +383,7 @@ public struct MascotOverlayView: View {
                 } label: {
                     Label("Lock Position [⎋ Esc]", systemImage: "lock.fill")
                 }
+                .accessibilityLabel("Lock Position")
             } else {
                 Button {
                     positionStore.unlockPosition()
