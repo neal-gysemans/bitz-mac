@@ -309,7 +309,8 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             }
         }
 
-        let playerNode = oneShotNodes.first { !$0.isPlaying } ?? oneShotNodes[0]
+        let playerIndex = oneShotNodes.firstIndex { !$0.isPlaying } ?? 0
+        let playerNode = oneShotNodes[playerIndex]
 
         if playerNode.isPlaying {
             playerNode.stop()
@@ -320,10 +321,13 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             engine.connect(playerNode, to: mixerNode, format: buffer.format)
         }
 
-        playerNode.scheduleBuffer(buffer, at: nil, options: []) { [weak self, weak playerNode] in
+        playerNode.scheduleBuffer(buffer, at: nil, options: []) { [weak self] in
             Task { @MainActor [weak self] in
-                playerNode?.stop()
-                self?.evaluateIdlePowerGating()
+                guard let self else { return }
+                if playerIndex < self.oneShotNodes.count {
+                    self.oneShotNodes[playerIndex].stop()
+                }
+                self.evaluateIdlePowerGating()
             }
         }
 
@@ -382,10 +386,10 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
         purrFadeTask?.cancel()
 
         purrNode.volume = 0.50
-        purrNode.scheduleBuffer(buffer, at: nil, options: []) { [weak self, weak purrNode] in
+        purrNode.scheduleBuffer(buffer, at: nil, options: []) { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                purrNode?.stop()
+                self.purrNode.stop()
                 self.isPurring = false
                 self.evaluateIdlePowerGating()
             }

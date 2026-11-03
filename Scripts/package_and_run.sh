@@ -12,6 +12,14 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 BUILD_CONFIG="${1:-release}"
 
+if [[ -z "${SDKROOT:-}" && -d "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk" ]]; then
+    # Fallback if default SDK is 27.x seed lacking standalone SwiftUI macro binaries
+    CURRENT_SDK="$(readlink -f "$(xcrun --show-sdk-path 2>/dev/null || echo "")" 2>/dev/null || echo "")"
+    if [[ "$CURRENT_SDK" == *"MacOSX27"* ]]; then
+        export SDKROOT="/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk"
+    fi
+fi
+
 echo "==> Building ${APP_NAME} (${BUILD_CONFIG}) with Xcode Swift toolchain..."
 /usr/bin/swift build -c "$BUILD_CONFIG" --product "$APP_NAME"
 BIN_PATH="$(/usr/bin/swift build -c "$BUILD_CONFIG" --show-bin-path)/${APP_NAME}"
