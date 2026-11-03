@@ -34,7 +34,7 @@ public enum SpeechBubbleContent {
         if updateStore.isSpeechBubbleAlertActive, let release = updateStore.latestRelease {
             return .update(release)
         }
-        if let text = engine.activeSpeechBubbleText {
+        if let text = engine.displayedSpeechBubbleText {
             return .wellness(text)
         }
         if telemetrySettings.displayInSpeechBubbleCycle, let text = telemetryDashboard.currentCarouselMessage {
@@ -97,7 +97,7 @@ public struct SpeechBubbleView: View {
             }
         } else if updateStore.isSpeechBubbleAlertActive, let release = updateStore.latestRelease {
             updateBubbleView(for: release)
-        } else if let text = engine.activeSpeechBubbleText {
+        } else if let text = engine.displayedSpeechBubbleText {
             textBubble(
                 text,
                 fill: engine.currentState == .overheating

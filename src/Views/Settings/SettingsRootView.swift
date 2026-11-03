@@ -40,6 +40,8 @@ public struct SettingsRootView: View {
     public var audioPlayer: (any CyberAudioPlaying)?
     @ObservedObject public var flowShieldSettings: FlowShieldSettingsStore
     @ObservedObject public var flowShieldService: FlowShieldService
+    @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
+    public var inboxDirectoryURL: URL
 
     @State private var selectedTab: SettingsTab = .general
 
@@ -57,8 +59,12 @@ public struct SettingsRootView: View {
         audioSettings: CyberAudioSettingsStore = CyberAudioSettingsStore(),
         audioPlayer: (any CyberAudioPlaying)? = nil,
         flowShieldSettings: FlowShieldSettingsStore? = nil,
-        flowShieldService: FlowShieldService? = nil
+        flowShieldService: FlowShieldService? = nil,
+        interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
+        inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory
     ) {
+        self.interactionSettings = interactionSettings
+        self.inboxDirectoryURL = inboxDirectoryURL
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.scaleStore = scaleStore
@@ -194,7 +200,9 @@ public struct SettingsRootView: View {
                 opacityStore: opacityStore,
                 positionStore: positionStore,
                 displayStore: displayStore,
-                engine: engine
+                engine: engine,
+                interactionSettings: interactionSettings,
+                inboxDirectoryURL: inboxDirectoryURL
             )
         case .behaviors:
             BehaviorSettingsTabView(

@@ -9,14 +9,20 @@ public struct GeneralSettingsTabView: View {
     @ObservedObject public var displayStore: DisplayPreferenceStore
     @ObservedObject private var settingsWindowManager: SettingsWindowManager = .shared
     public var engine: WellnessPointEngine?
+    @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
+    public var inboxDirectoryURL: URL
 
     public init(
         scaleStore: AvatarScaleStore,
         opacityStore: AvatarOpacityStore,
         positionStore: AvatarPositionStore,
         displayStore: DisplayPreferenceStore,
-        engine: WellnessPointEngine? = nil
+        engine: WellnessPointEngine? = nil,
+        interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
+        inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory
     ) {
+        self.interactionSettings = interactionSettings
+        self.inboxDirectoryURL = inboxDirectoryURL
         self.scaleStore = scaleStore
         self.opacityStore = opacityStore
         self.positionStore = positionStore
@@ -196,7 +202,7 @@ public struct GeneralSettingsTabView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "info.circle")
                             .foregroundStyle(.secondary)
-                        Text("Hold ⌥ Option anytime to freely drag Bitz anywhere on screen.")
+                        Text("Hold \(interactionSettings.holdModifier.displayName) anytime to freely drag Bitz anywhere on screen.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -210,6 +216,39 @@ public struct GeneralSettingsTabView: View {
                         }
                     }
                     .pickerStyle(.menu)
+                }
+            }
+
+            // Section 3b: Interaction, Petting & File Drop-Zone
+            settingsCard(title: "Interaction, Petting & File Drop-Zone", systemImage: "hand.tap.fill") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("Hold a key to interact with Bitz", isOn: $interactionSettings.isHoldToInteractEnabled)
+                        .font(.subheadline)
+
+                    Picker("Hold-to-interact key", selection: $interactionSettings.holdModifier) {
+                        ForEach(HoldModifierKey.allCases) { key in
+                            Text(key.displayName).tag(key)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(!interactionSettings.isHoldToInteractEnabled)
+
+                    Toggle("Stroke Bitz with the cursor to pet him", isOn: $interactionSettings.isStrokeToPetEnabled)
+                        .font(.subheadline)
+                    Text("While interactive, sweep the cursor back and forth over Bitz. Petting gives a small, capped focus boost.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Toggle("Drop files on Bitz to copy their path", isOn: $interactionSettings.isFileDropEnabled)
+                        .font(.subheadline)
+
+                    Toggle("Also write a JSON entry to the agent inbox", isOn: $interactionSettings.isInboxHandoffEnabled)
+                        .font(.subheadline)
+                        .disabled(!interactionSettings.isFileDropEnabled)
+                    Text(inboxDirectoryURL.path)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
             }
 

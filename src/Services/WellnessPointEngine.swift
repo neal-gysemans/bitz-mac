@@ -177,6 +177,13 @@ public final class WellnessPointEngine: ObservableObject {
     public static let pointsUserDefaultsKey = "bitz_current_points"
     public static let workMinutesUserDefaultsKey = "bitz_continuous_work_minutes"
     public static let lastSavedTimeUserDefaultsKey = "bitz_last_saved_time"
+    public static let petBoostDayKeyUserDefaultsKey = "bitz_pet_boost_day"
+    public static let petBoostGrantedTodayUserDefaultsKey = "bitz_pet_boost_granted_today"
+
+    /// Petting grants `+2.0` PTS at most once per `60s`, capped at `+10.0` PTS per local calendar day (#18).
+    public static let petBoostAmount: Double = 2.0
+    public static let petBoostCooldownSeconds: TimeInterval = 60.0
+    public static let petBoostDailyCap: Double = 10.0
 
     /// Continuous work duration thresholds (in minutes without a break) that trigger `.overworked` and `.burnout`.
     public static let overworkedWorkMinutesThreshold: Double = 45.0
@@ -187,6 +194,8 @@ public final class WellnessPointEngine: ObservableObject {
     @Published public private(set) var currentState: BitzState = .balanced
     @Published public private(set) var activeSpeechBubbleText: String? = nil
     @Published public private(set) var isPetReactionActive: Bool = false
+    /// Short-lived confirmation text (e.g. a file-drop copy); loses to every deterministic wellness/thermal line.
+    @Published public private(set) var transientBubbleText: String? = nil
     @Published public private(set) var lastTickWasProductive: Bool = true
     @Published public var latestTemperatureCelsius: Double? = nil
     @Published public var latestCPULoadPercentage: Double? = nil
@@ -202,6 +211,10 @@ public final class WellnessPointEngine: ObservableObject {
     private var customOverheatingMessage: String? = nil
     private var isChargingOverride: Bool = false
     private var petReactionTask: Task<Void, Never>?
+    private var transientBubbleTask: Task<Void, Never>?
+    private var lastPetBoostDate: Date?
+    private var petBoostDayKey: String?
+    private var petBoostGrantedToday: Double = 0.0
 
     public init(
         initialPoints: Double? = nil,
@@ -236,6 +249,8 @@ public final class WellnessPointEngine: ObservableObject {
         self.currentPoints = clamped
         self.continuousWorkMinutes = Self.sanitizeWorkMinutes(resolvedMinutes)
         self.lastTickWasProductive = clamped >= 40.0
+        self.petBoostDayKey = userDefaults?.string(forKey: Self.petBoostDayKeyUserDefaultsKey)
+        self.petBoostGrantedToday = userDefaults?.double(forKey: Self.petBoostGrantedTodayUserDefaultsKey) ?? 0.0
         evaluateState()
 
         // Check elapsed time since last save if restoring from disk
@@ -344,8 +359,9 @@ public final class WellnessPointEngine: ObservableObject {
         }
     }
 
-    /// Fires the Rive `"triggerPet"` interaction input and activates a brief `<3` visor reaction.
-    public func triggerPetInteraction() {
+    /// Fires the Rive `"triggerPet"` interaction input, activates a brief `<3` visor reaction and
+    /// applies the capped wellness boost (`applyPetBoost`).
+    public func triggerPetInteraction(now: Date = Date()) {
         riveController?.triggerInput(BitzRiveInputName.triggerPet)
         isPetReactionActive = true
         petReactionTask?.cancel()
@@ -354,6 +370,57 @@ public final class WellnessPointEngine: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.isPetReactionActive = false
         }
+        applyPetBoost(now: now)
+    }
+
+    /// Grants a small Focus Point boost for petting, limited by a per-boost cooldown and a daily cap.
+    /// - Returns: the points actually granted (`0.0` on cooldown, at the daily cap, or when already at max).
+    @discardableResult
+    public func applyPetBoost(now: Date = Date()) -> Double {
+        let dayKey = Self.petBoostDayString(for: now)
+        if petBoostDayKey != dayKey {
+            petBoostDayKey = dayKey
+            petBoostGrantedToday = 0.0
+        }
+        if let last = lastPetBoostDate, now.timeIntervalSince(last) < Self.petBoostCooldownSeconds {
+            return 0.0
+        }
+        let remainingCap = max(0.0, Self.petBoostDailyCap - petBoostGrantedToday)
+        let headroom = max(0.0, maxPoints - currentPoints)
+        let granted = min(Self.petBoostAmount, remainingCap, headroom)
+        guard granted > 0.0 else { return 0.0 }
+
+        lastPetBoostDate = now
+        petBoostGrantedToday += granted
+        currentPoints = Self.sanitizePoints(currentPoints + granted)
+        if !isOverheatingOverride {
+            evaluateState()
+        }
+        userDefaults?.set(petBoostDayKey, forKey: Self.petBoostDayKeyUserDefaultsKey)
+        userDefaults?.set(petBoostGrantedToday, forKey: Self.petBoostGrantedTodayUserDefaultsKey)
+        persistState()
+        return granted
+    }
+
+    private static func petBoostDayString(for date: Date) -> String {
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return "\(c.year ?? 0)-\(c.month ?? 0)-\(c.day ?? 0)"
+    }
+
+    /// Shows a short confirmation bubble for `duration` seconds (never replaces warnings or wellness lines).
+    public func showTransientBubble(_ text: String, duration: TimeInterval = 4.0) {
+        transientBubbleText = text
+        transientBubbleTask?.cancel()
+        transientBubbleTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(duration))
+            guard !Task.isCancelled else { return }
+            self?.transientBubbleText = nil
+        }
+    }
+
+    /// Wellness/thermal text first, then any transient confirmation.
+    public var displayedSpeechBubbleText: String? {
+        activeSpeechBubbleText ?? transientBubbleText
     }
 
     /// Sets `currentPoints` and optional `continuousWorkMinutes` directly, clears thermal/charging overrides,

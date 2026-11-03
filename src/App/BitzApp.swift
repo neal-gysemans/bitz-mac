@@ -22,6 +22,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
     public let audioService: CyberAudioService
     public let flowShieldSettings: FlowShieldSettingsStore
     public let flowShieldService: FlowShieldService
+    public let interactionSettings: MascotInteractionSettingsStore
+    public let fileDropService: FileDropInboxService
     @Published public private(set) var menuBarTitle: String = "Bitz"
     public private(set) var overlayPanels: [MascotOverlayPanel] = []
     public var overlayPanel: MascotOverlayPanel? { overlayPanels.first }
@@ -62,8 +64,12 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         audioService: CyberAudioService? = nil,
         flowShieldSettings: FlowShieldSettingsStore? = nil,
         flowShieldService: FlowShieldService? = nil,
+        interactionSettings: MascotInteractionSettingsStore? = nil,
+        fileDropService: FileDropInboxService? = nil,
         userDefaults: UserDefaults = .standard
     ) {
+        self.interactionSettings = interactionSettings ?? MascotInteractionSettingsStore(userDefaults: userDefaults)
+        self.fileDropService = fileDropService ?? FileDropInboxService()
         self.riveController = riveController
         self.engine = WellnessPointEngine(riveController: riveController, userDefaults: userDefaults)
         self.activityMonitor = ActivityMonitorService(engine: self.engine, telemetry: telemetryProvider)
@@ -178,15 +184,16 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         self.localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            let optionHeld = event.modifierFlags.contains(.option)
-            self?.positionStore.setModifierHeld(optionHeld)
+            let held = self?.interactionSettings.isHoldActive(for: event.modifierFlags) ?? false
+            self?.positionStore.setModifierHeld(held)
             return event
         }
 
         self.globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            let optionHeld = event.modifierFlags.contains(.option)
+            let flags = event.modifierFlags
             Task { @MainActor [weak self] in
-                self?.positionStore.setModifierHeld(optionHeld)
+                let held = self?.interactionSettings.isHoldActive(for: flags) ?? false
+                self?.positionStore.setModifierHeld(held)
             }
         }
 
@@ -380,7 +387,9 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
                 audioSettings: audioSettings,
                 audioPlayer: audioService,
                 flowShieldSettings: flowShieldSettings,
-                flowShieldService: flowShieldService
+                flowShieldService: flowShieldService,
+                interactionSettings: interactionSettings,
+                inboxDirectoryURL: fileDropService.inboxDirectoryURL
             )
         )
     }
@@ -591,6 +600,19 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
             positionStore: positionStore,
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
+            interactionSettings: interactionSettings,
+            onFilesDropped: { [weak self] urls in
+                guard let self else { return }
+                do {
+                    let result = try self.fileDropService.handleDrop(
+                        urls: urls,
+                        writeInbox: self.interactionSettings.isInboxHandoffEnabled
+                    )
+                    self.engine.showTransientBubble(result.message)
+                } catch {
+                    self.engine.showTransientBubble("⚠️ Couldn't copy that file path")
+                }
+            },
             onDragChanged: { [weak panel] origin, _ in
                 panel?.setFrameOrigin(origin)
             },

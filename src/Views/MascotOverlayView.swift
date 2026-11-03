@@ -1,4 +1,10 @@
 import SwiftUI
+import UniformTypeIdentifiers
+
+/// Non-observable holder so hover samples never invalidate the mascot view (#70).
+final class PetStrokeTracker {
+    var detector = PetStrokeDetector()
+}
 
 /// SwiftUI view hosted inside `MascotOverlayPanel`, rendering the transparent
 /// cyberpunk mascot canvas, reactive LED visor glow, and standby `"ZZZ"` badge (`FR-001`, `FR-003`).
@@ -10,7 +16,9 @@ public struct MascotOverlayView: View {
     @ObservedObject public var positionStore: AvatarPositionStore
     public let telemetryDashboard: TelemetryDashboardService
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
+    @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
 
+    public var onFilesDropped: (([URL]) -> Void)?
     public var onDragChanged: ((NSPoint, NSScreen?) -> Void)?
     public var onDragEnded: ((NSPoint, NSScreen?) -> Void)?
     public var onGetOrigin: (() -> NSPoint?)?
@@ -21,6 +29,7 @@ public struct MascotOverlayView: View {
 
     @State private var dragInitialOrigin: NSPoint? = nil
     @State private var isHovering: Bool = false
+    @State private var strokeTracker = PetStrokeTracker()
 
     private static let canvasSpace = "mascotCanvas"
 
@@ -31,6 +40,8 @@ public struct MascotOverlayView: View {
         positionStore: AvatarPositionStore = AvatarPositionStore(),
         telemetryDashboard: TelemetryDashboardService = TelemetryDashboardService(),
         telemetrySettings: TelemetrySettingsStore = TelemetrySettingsStore(),
+        interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
+        onFilesDropped: (([URL]) -> Void)? = nil,
         onDragChanged: ((NSPoint, NSScreen?) -> Void)? = nil,
         onDragEnded: ((NSPoint, NSScreen?) -> Void)? = nil,
         onGetOrigin: (() -> NSPoint?)? = nil,
@@ -44,6 +55,8 @@ public struct MascotOverlayView: View {
         self.positionStore = positionStore
         self.telemetryDashboard = telemetryDashboard
         self.telemetrySettings = telemetrySettings
+        self.interactionSettings = interactionSettings
+        self.onFilesDropped = onFilesDropped
         self.onDragChanged = onDragChanged
         self.onDragEnded = onDragEnded
         self.onGetOrigin = onGetOrigin
@@ -226,6 +239,51 @@ public struct MascotOverlayView: View {
                     NSCursor.pop()
                 }
             }
+        }
+        .onContinuousHover(coordinateSpace: .local) { phase in
+            guard interactionSettings.isStrokeToPetEnabled, positionStore.isInteractivityEnabled else {
+                strokeTracker.detector.reset()
+                return
+            }
+            switch phase {
+            case .active(let location):
+                if strokeTracker.detector.feed(
+                    x: Double(location.x),
+                    at: ProcessInfo.processInfo.systemUptime,
+                    mouseButtonsPressed: Int(NSEvent.pressedMouseButtons)
+                ) {
+                    engine.triggerPetInteraction()
+                }
+            case .ended:
+                strokeTracker.detector.reset()
+            }
+        }
+        .onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in
+            guard interactionSettings.isFileDropEnabled, positionStore.isInteractivityEnabled else { return false }
+            final class URLAccumulator: @unchecked Sendable {
+                private let lock = NSLock()
+                private(set) var urls: [URL] = []
+                func append(_ url: URL) {
+                    lock.lock()
+                    urls.append(url)
+                    lock.unlock()
+                }
+            }
+            let accumulator = URLAccumulator()
+            let group = DispatchGroup()
+            for provider in providers where provider.canLoadObject(ofClass: URL.self) {
+                group.enter()
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    if let url, url.isFileURL {
+                        accumulator.append(url)
+                    }
+                    group.leave()
+                }
+            }
+            group.notify(queue: .main) {
+                if !accumulator.urls.isEmpty { onFilesDropped?(accumulator.urls) }
+            }
+            return !providers.isEmpty
         }
         .gesture(
             DragGesture(minimumDistance: 1, coordinateSpace: .global)
