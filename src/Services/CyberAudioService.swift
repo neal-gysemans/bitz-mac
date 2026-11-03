@@ -26,6 +26,9 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
 
     @Published public private(set) var isPurring: Bool = false
     @Published public private(set) var isEngineRunning: Bool = false
+    /// Last sound the environment muted (mic in use, system mute), so the UI can say why Bitz stayed silent (#95).
+    /// Cleared by the next played sound or any settings change.
+    @Published public private(set) var lastEnvironmentSuppression: (reason: AudioSuppressionReason, date: Date)?
 
     // Cooldown & Rate Limiting state
     public private(set) var lastOneShotPlayedAt: Date?
@@ -94,6 +97,13 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
                 if !enabled {
                     self.stopAll()
                 }
+            }
+            .store(in: &cancellables)
+
+        settingsStore.objectWillChange
+            .sink { [weak self] _ in
+                guard let self, self.lastEnvironmentSuppression != nil else { return }
+                self.lastEnvironmentSuppression = nil
             }
             .store(in: &cancellables)
     }
@@ -271,6 +281,9 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
         let now = dateProvider()
         let check = canPlay(event, agentId: agentId, now: now, bypassCooldown: bypassCooldown)
         guard check.allowed else {
+            if let reason = check.reason, reason.environmentDescription != nil {
+                lastEnvironmentSuppression = (reason, now)
+            }
             return
         }
 
@@ -280,6 +293,10 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
 
         guard ensureEngineRunning() else {
             return
+        }
+
+        if lastEnvironmentSuppression != nil {
+            lastEnvironmentSuppression = nil
         }
 
         // Record cooldowns only for live operational playback (not UI previews)

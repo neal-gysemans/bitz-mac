@@ -148,12 +148,22 @@ public struct AudioSettingsTabView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                Toggle("Suppress during active microphone or screen sharing", isOn: Binding(
+                if let audioService = audioPlayer as? CyberAudioService {
+                    AudioSuppressionNotice(audioService: audioService)
+                        .font(.caption.bold())
+                        .foregroundStyle(.orange)
+                }
+
+                Toggle("Mute while any app is using the microphone", isOn: Binding(
                     get: { settingsStore.isCallSuppressionEnabled },
                     set: { settingsStore.setCallSuppressionEnabled($0) }
                 ))
                 .font(.subheadline)
                 .disabled(!settingsStore.isEnabled)
+
+                Text("Covers calls, but also dictation tools, webcam apps and browser tabs that keep the microphone open.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 Toggle("Suppress when macOS Focus / Do Not Disturb is active", isOn: Binding(
                     get: { settingsStore.isFocusDNDSuppressionEnabled },
@@ -205,6 +215,22 @@ public struct AudioSettingsTabView: View {
             return "Ascending 8-bit victory fanfare when all agents finish"
         case .charging:
             return "Calm ascending blip when entering offline/break charging"
+        }
+    }
+}
+
+/// Says why the last sound stayed silent; a leaf view so only this line re-renders (AGENTS.md §2.5).
+public struct AudioSuppressionNotice: View {
+    @ObservedObject var audioService: CyberAudioService
+
+    public init(audioService: CyberAudioService) {
+        self.audioService = audioService
+    }
+
+    public var body: some View {
+        if let last = audioService.lastEnvironmentSuppression, let cause = last.reason.environmentDescription {
+            Label("Last sound skipped at \(last.date.formatted(date: .omitted, time: .shortened)): \(cause)",
+                  systemImage: "speaker.slash.fill")
         }
     }
 }

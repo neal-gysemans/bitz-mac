@@ -867,6 +867,9 @@ struct BitzMenuBarContentView: View {
                     get: { audioSettings.isEnabled },
                     set: { audioSettings.setEnabled($0) }
                 ))
+                if let audioService {
+                    AudioSuppressionNotice(audioService: audioService)
+                }
                 Divider()
                 Toggle("Soothing Purr (Petting & High Wellness)", isOn: Binding(
                     get: { audioSettings.isPurrEnabled },

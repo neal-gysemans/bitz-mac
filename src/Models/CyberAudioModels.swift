@@ -72,4 +72,14 @@ public enum AudioSuppressionReason: String, Sendable, Equatable {
     case rateLimited
     case sameState
     case assetMissing
+
+    /// User-facing cause when the environment (not a setting or cooldown) muted a sound; nil otherwise.
+    public var environmentDescription: String? {
+        switch self {
+        case .systemMuted: return "system output is muted"
+        case .focusActive: return "Focus / Do Not Disturb is on"
+        case .callOrScreenSharingActive: return "microphone in use by another app"
+        case .masterDisabled, .eventDisabled, .cooldownActive, .rateLimited, .sameState, .assetMissing: return nil
+        }
+    }
 }

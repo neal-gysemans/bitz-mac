@@ -4,6 +4,21 @@ import XCTest
 @MainActor
 final class CyberAudioSettingsStoreTests: XCTestCase {
 
+    func testLegacyPersistedCallSuppressionDefaultIsIgnored() {
+        let suiteName = "BitzAudioDefaultsTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        // Every pre-#95 install persisted the old default-on value under this key
+        defaults.set(true, forKey: "bitz.audio.isCallSuppressionEnabled")
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        XCTAssertFalse(store.isCallSuppressionEnabled)
+
+        store.setCallSuppressionEnabled(true)
+        XCTAssertTrue(CyberAudioSettingsStore(userDefaults: defaults).isCallSuppressionEnabled, "Opting in persists")
+    }
+
     func testInitialDefaultsAreSafeAndDefaultOff() {
         let suiteName = "BitzAudioDefaultsTest.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -25,7 +40,7 @@ final class CyberAudioSettingsStoreTests: XCTestCase {
         XCTAssertTrue(store.isAgentChimeEnabled)
         XCTAssertTrue(store.isAllDoneFanfareEnabled)
         XCTAssertTrue(store.isFocusDNDSuppressionEnabled)
-        XCTAssertTrue(store.isCallSuppressionEnabled)
+        XCTAssertFalse(store.isCallSuppressionEnabled, "Mic-in-use suppression is opt-in (#95)")
 
         // But isEventEnabled must return false for all events when master is disabled
         for event in CyberSoundEvent.allCases {

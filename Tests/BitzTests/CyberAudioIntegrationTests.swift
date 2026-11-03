@@ -188,7 +188,8 @@ final class CyberAudioIntegrationTests: XCTestCase {
         XCTAssertEqual(checkMute.reason, .systemMuted)
         mockDetector.isMuted = false
 
-        // 2. Microphone / call active suppression
+        // 2. Microphone / call active suppression (opt-in since #95)
+        store.setCallSuppressionEnabled(true)
         mockDetector.isMicActive = true
         let checkMic = service.canPlay(.burnout)
         XCTAssertFalse(checkMic.allowed)
@@ -206,6 +207,40 @@ final class CyberAudioIntegrationTests: XCTestCase {
         let checkDND = service.canPlay(.burnout)
         XCTAssertFalse(checkDND.allowed)
         XCTAssertEqual(checkDND.reason, .focusActive)
+    }
+
+    func testEnvironmentalSuppressionIsReportedAndClearedByNextSound() {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        store.setEnabled(true)
+        store.setCallSuppressionEnabled(true)
+        let mockDetector = MockAudioEnvironmentDetector(isMicActive: true)
+        let service = CyberAudioService(settingsStore: store, environmentDetector: mockDetector)
+
+        // A muted "done" fanfare is reported with its cause
+        service.play(.allAgentsDone)
+        XCTAssertEqual(service.lastEnvironmentSuppression?.reason, .callOrScreenSharingActive)
+        XCTAssertEqual(service.lastEnvironmentSuppression?.reason.environmentDescription, "microphone in use by another app")
+
+        // Cooldown / settings skips are not environmental and must not be reported
+        XCTAssertNil(AudioSuppressionReason.cooldownActive.environmentDescription)
+        XCTAssertNil(AudioSuppressionReason.eventDisabled.environmentDescription)
+
+        // Next sound that plays clears the notice
+        mockDetector.isMicActive = false
+        service.play(.allAgentsDone)
+        XCTAssertNotNil(service.lastFanfarePlayedAt)
+        XCTAssertNil(service.lastEnvironmentSuppression)
+
+        // A settings change also clears a stale notice
+        mockDetector.isMicActive = true
+        service.play(.agentNeedsApproval, bypassCooldown: true)
+        XCTAssertNotNil(service.lastEnvironmentSuppression)
+        store.setCallSuppressionEnabled(false)
+        XCTAssertNil(service.lastEnvironmentSuppression)
     }
 
     func testPettingInteractionTriggersAndEndsPurrLoop() {

@@ -18,7 +18,8 @@ public final class CyberAudioSettingsStore: ObservableObject {
     public static let isAgentChimeEnabledKey = "\(keyPrefix)isAgentChimeEnabled"
     public static let isAllDoneFanfareEnabledKey = "\(keyPrefix)isAllDoneFanfareEnabled"
     public static let isFocusDNDSuppressionEnabledKey = "\(keyPrefix)isFocusDNDSuppressionEnabled"
-    public static let isCallSuppressionEnabledKey = "\(keyPrefix)isCallSuppressionEnabled"
+    // New key so the default-on value every earlier install persisted no longer applies (#95)
+    public static let isCallSuppressionEnabledKey = "\(keyPrefix)isMicInUseSuppressionEnabled"
 
     public static let defaultVolume: Double = 0.30
     public static let minVolume: Double = 0.00
@@ -66,7 +67,8 @@ public final class CyberAudioSettingsStore: ObservableObject {
         self.isAgentChimeEnabled = Self.readBool(userDefaults, key: Self.isAgentChimeEnabledKey, defaultVal: true)
         self.isAllDoneFanfareEnabled = Self.readBool(userDefaults, key: Self.isAllDoneFanfareEnabledKey, defaultVal: true)
         self.isFocusDNDSuppressionEnabled = Self.readBool(userDefaults, key: Self.isFocusDNDSuppressionEnabledKey, defaultVal: true)
-        self.isCallSuppressionEnabled = Self.readBool(userDefaults, key: Self.isCallSuppressionEnabledKey, defaultVal: true)
+        // Opt-in: any app holding the mic open (not just calls) would otherwise mute every sound (#95)
+        self.isCallSuppressionEnabled = Self.readBool(userDefaults, key: Self.isCallSuppressionEnabledKey, defaultVal: false)
     }
 
     private static func readBool(_ defaults: UserDefaults, key: String, defaultVal: Bool) -> Bool {
