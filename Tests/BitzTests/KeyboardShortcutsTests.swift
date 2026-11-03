@@ -172,6 +172,64 @@ final class KeyboardShortcutsTests: XCTestCase {
         XCTAssertEqual(riveController.lastTriggeredInput, BitzRiveInputName.triggerPet)
     }
 
+    func testGlobalKeyEventsOnlyHandleBitzHotkeys() {
+        let suiteName = "KeyboardShortcutsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            SettingsWindowManager.shared.closeSettingsWindow()
+        }
+
+        let riveController = ProductionRiveController()
+        let scaleStore = AvatarScaleStore(userDefaults: defaults)
+        scaleStore.selectPreset(.defaultSize)
+        let opacityStore = AvatarOpacityStore(userDefaults: defaults)
+        opacityStore.selectPreset(.translucent) // 0.80
+        let positionStore = AvatarPositionStore(userDefaults: defaults)
+        let delegate = BitzAppDelegate(
+            riveController: riveController,
+            scaleStore: scaleStore,
+            opacityStore: opacityStore,
+            positionStore: positionStore,
+            userDefaults: defaults
+        )
+        SettingsWindowManager.shared.closeSettingsWindow()
+        let initialScale = scaleStore.scaleFactor
+        let initialOpacity = opacityStore.opacityFactor
+
+        // Keystrokes typed in other apps belong to those apps (#93); ⌘Q last so a regression can't skip the rest
+        let foreignShortcuts = [
+            makeSyntheticKeyEvent(keyCode: 43, characters: ",", modifiers: [.command]),
+            makeSyntheticKeyEvent(keyCode: 24, characters: "=", modifiers: [.command]),
+            makeSyntheticKeyEvent(keyCode: 27, characters: "-", modifiers: [.command]),
+            makeSyntheticKeyEvent(keyCode: 30, characters: "]", modifiers: [.command]),
+            makeSyntheticKeyEvent(keyCode: 33, characters: "[", modifiers: [.command]),
+            makeSyntheticKeyEvent(keyCode: 35, characters: "p", modifiers: [.command]),
+            makeSyntheticKeyEvent(keyCode: 35, characters: "p"),
+            makeSyntheticKeyEvent(keyCode: 12, characters: "q", modifiers: [.command])
+        ]
+        for event in foreignShortcuts {
+            XCTAssertFalse(
+                delegate.handleKeyEvent(event, isGlobal: true),
+                "Global \(event.modifierFlags.contains(.command) ? "⌘" : "")\(event.charactersIgnoringModifiers ?? "") must pass through"
+            )
+        }
+        XCTAssertEqual(riveController.totalTriggerCount, 0)
+        XCTAssertEqual(scaleStore.scaleFactor, initialScale, accuracy: 0.001)
+        XCTAssertEqual(opacityStore.opacityFactor, initialOpacity, accuracy: 0.001)
+        XCTAssertFalse(SettingsWindowManager.shared.isWindowOpen)
+
+        // ⌥⌘B and the Esc lock stay global hotkeys
+        let toggleEvent = makeSyntheticKeyEvent(keyCode: 11, characters: "b", modifiers: [.option, .command])
+        XCTAssertTrue(delegate.handleKeyEvent(toggleEvent, isGlobal: true))
+        XCTAssertTrue(SettingsWindowManager.shared.isWindowOpen)
+
+        positionStore.unlockPosition()
+        let escEvent = makeSyntheticKeyEvent(keyCode: 53, characters: "\u{1b}")
+        XCTAssertTrue(delegate.handleKeyEvent(escEvent, isGlobal: true))
+        XCTAssertFalse(positionStore.isInteractivityEnabled)
+    }
+
     func testSetupApplicationMenuRegistersExpectedShortcuts() {
         let suiteName = "KeyboardShortcutsTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

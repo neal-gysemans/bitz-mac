@@ -279,7 +279,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         self.globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return }
             Task { @MainActor [weak self] in
-                self?.handleKeyEvent(event)
+                self?.handleKeyEvent(event, isGlobal: true)
             }
         }
     }
@@ -504,9 +504,10 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Handles keyboard shortcuts locally or globally without stealing key focus.
+    /// `isGlobal` marks keystrokes typed in other apps: only ⌥⌘B and the Esc/Return lock apply there.
     @MainActor
     @discardableResult
-    public func handleKeyEvent(_ event: NSEvent) -> Bool {
+    public func handleKeyEvent(_ event: NSEvent, isGlobal: Bool = false) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let cmd = flags.contains(.command)
         let opt = flags.contains(.option)
@@ -514,9 +515,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
         let keyCode = event.keyCode
 
-        // 1. Toggle / Open Settings Window: ⌥⌘B or ⌘,
-        if (cmd && opt && !ctrl && (keyCode == 11 || chars == "b")) ||
-           (cmd && !opt && !ctrl && (keyCode == 43 || chars == ",")) {
+        // 1. Toggle / Open Settings Window: ⌥⌘B (works from any app)
+        if cmd && opt && !ctrl && (keyCode == 11 || chars == "b") {
             toggleSettingsWindow()
             return true
         }
@@ -524,6 +524,15 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         // 2. Lock position when dragging or unlocked: ⎋ Esc (53), ⏎ Return (36), or Enter (76)
         if positionStore.isInteractivityEnabled && (keyCode == 53 || keyCode == 36 || keyCode == 76) {
             positionStore.lockPosition()
+            return true
+        }
+
+        // Shortcuts below belong to the frontmost app when Bitz isn't active (⌘Q must not quit Bitz, #93)
+        if isGlobal { return false }
+
+        // Toggle / Open Settings Window: ⌘,
+        if cmd && !opt && !ctrl && (keyCode == 43 || chars == ",") {
+            toggleSettingsWindow()
             return true
         }
 
