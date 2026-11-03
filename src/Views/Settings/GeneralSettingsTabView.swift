@@ -11,6 +11,7 @@ public struct GeneralSettingsTabView: View {
     public var engine: WellnessPointEngine?
     @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
     public var inboxDirectoryURL: URL
+    @ObservedObject public var paletteStore: AvatarPaletteStore
 
     public init(
         scaleStore: AvatarScaleStore,
@@ -19,10 +20,12 @@ public struct GeneralSettingsTabView: View {
         displayStore: DisplayPreferenceStore,
         engine: WellnessPointEngine? = nil,
         interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
-        inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory
+        inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory,
+        paletteStore: AvatarPaletteStore = AvatarPaletteStore()
     ) {
         self.interactionSettings = interactionSettings
         self.inboxDirectoryURL = inboxDirectoryURL
+        self.paletteStore = paletteStore
         self.scaleStore = scaleStore
         self.opacityStore = opacityStore
         self.positionStore = positionStore
@@ -219,7 +222,10 @@ public struct GeneralSettingsTabView: View {
                 }
             }
 
-            // Section 3b: Interaction, Petting & File Drop-Zone
+            // Section 3b: Theme & Colors
+            AppearancePaletteSectionView(paletteStore: paletteStore)
+
+            // Section 3c: Interaction, Petting & File Drop-Zone
             settingsCard(title: "Interaction, Petting & File Drop-Zone", systemImage: "hand.tap.fill") {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Hold a key to interact with Bitz", isOn: $interactionSettings.isHoldToInteractEnabled)
@@ -327,11 +333,13 @@ public struct GeneralSettingsTabView: View {
 
             // Real Bitz Cyber Mascot with reactive scale & opacity
             VStack {
-                let currentState = engine?.currentState ?? .balanced
+                let currentState = paletteStore.previewSlot?.previewState ?? engine?.currentState ?? .balanced
                 AnimatedBitzCharacterView(
                     state: currentState,
                     showParticles: true,
-                    isPaused: !settingsWindowManager.isWindowVisible
+                    customVisorColor: paletteStore.resolvedPalette.visorColor(for: currentState),
+                    isPaused: !settingsWindowManager.isWindowVisible,
+                    palette: paletteStore.resolvedPalette
                 )
                     .scaleEffect(0.70 * CGFloat(scaleStore.scaleFactor))
                     .frame(height: 140)

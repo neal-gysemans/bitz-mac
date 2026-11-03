@@ -42,6 +42,7 @@ public struct SettingsRootView: View {
     @ObservedObject public var flowShieldService: FlowShieldService
     @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
     public var inboxDirectoryURL: URL
+    @ObservedObject public var paletteStore: AvatarPaletteStore
 
     @State private var selectedTab: SettingsTab = .general
 
@@ -61,10 +62,12 @@ public struct SettingsRootView: View {
         flowShieldSettings: FlowShieldSettingsStore? = nil,
         flowShieldService: FlowShieldService? = nil,
         interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
-        inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory
+        inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory,
+        paletteStore: AvatarPaletteStore = AvatarPaletteStore()
     ) {
         self.interactionSettings = interactionSettings
         self.inboxDirectoryURL = inboxDirectoryURL
+        self.paletteStore = paletteStore
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.scaleStore = scaleStore
@@ -202,7 +205,8 @@ public struct SettingsRootView: View {
                 displayStore: displayStore,
                 engine: engine,
                 interactionSettings: interactionSettings,
-                inboxDirectoryURL: inboxDirectoryURL
+                inboxDirectoryURL: inboxDirectoryURL,
+                paletteStore: paletteStore
             )
         case .behaviors:
             BehaviorSettingsTabView(

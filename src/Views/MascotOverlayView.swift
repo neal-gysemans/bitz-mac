@@ -17,6 +17,7 @@ public struct MascotOverlayView: View {
     public let telemetryDashboard: TelemetryDashboardService
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
     @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
+    @ObservedObject public var paletteStore: AvatarPaletteStore
 
     public var onFilesDropped: (([URL]) -> Void)?
     public var onDragChanged: ((NSPoint, NSScreen?) -> Void)?
@@ -41,6 +42,7 @@ public struct MascotOverlayView: View {
         telemetryDashboard: TelemetryDashboardService = TelemetryDashboardService(),
         telemetrySettings: TelemetrySettingsStore = TelemetrySettingsStore(),
         interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
+        paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         onFilesDropped: (([URL]) -> Void)? = nil,
         onDragChanged: ((NSPoint, NSScreen?) -> Void)? = nil,
         onDragEnded: ((NSPoint, NSScreen?) -> Void)? = nil,
@@ -56,6 +58,7 @@ public struct MascotOverlayView: View {
         self.telemetryDashboard = telemetryDashboard
         self.telemetrySettings = telemetrySettings
         self.interactionSettings = interactionSettings
+        self.paletteStore = paletteStore
         self.onFilesDropped = onFilesDropped
         self.onDragChanged = onDragChanged
         self.onDragEnded = onDragEnded
@@ -103,12 +106,24 @@ public struct MascotOverlayView: View {
         return Color(red: rgb.red, green: rgb.green, blue: rgb.blue)
     }
 
+    /// State shown on the mascot: a settings "Preview Emotion" temporarily overrides the live engine state.
+    private var displayedState: BitzState {
+        paletteStore.previewSlot?.previewState ?? engine.currentState
+    }
+
+    private var displayedPetReaction: Bool {
+        paletteStore.previewSlot == .petting || engine.isPetReactionActive
+    }
+
     private var visorColor: Color {
-        Self.visorColor(for: engine.currentState, warningVisorActive: engine.isWarningVisorActive)
+        paletteStore.resolvedPalette.visorColor(
+            for: displayedState,
+            warningVisorActive: engine.isWarningVisorActive && paletteStore.previewSlot == nil
+        )
     }
 
     private var animationSpeedMultiplier: Double {
-        switch engine.currentState {
+        switch displayedState {
         case .superCharged:
             return 2.0
         case .balanced:
@@ -127,7 +142,7 @@ public struct MascotOverlayView: View {
     }
 
     private var isLoafPosture: Bool {
-        engine.currentState == .burnout || engine.currentState == .charging
+        displayedState == .burnout || displayedState == .charging
     }
 
     // Holding ⌥ alone only shows the border, so typing ⌥ shortcuts in other apps doesn't flash the HUD
@@ -147,12 +162,13 @@ public struct MascotOverlayView: View {
             // Offload continuous mascot motion to CoreAnimation (`LiveBitzCharacterView`), keeping the main thread
             // and Cyber HUD quiescent at idle (#70).
             LiveBitzCharacterView(
-                state: engine.currentState,
-                isPetReactionActive: engine.isPetReactionActive,
+                state: displayedState,
+                isPetReactionActive: displayedPetReaction,
                 isLoafPosture: isLoafPosture,
                 showParticles: true,
                 customVisorColor: visorColor,
-                isPaused: isAnimationPaused
+                isPaused: isAnimationPaused,
+                palette: paletteStore.resolvedPalette
             )
             .frame(width: 180, height: 140)
             .opacity(opacityStore.opacityFactor)

@@ -109,6 +109,7 @@ public struct BitzCharacterView: View {
     public let isLoafPosture: Bool
     public let showParticles: Bool
     public let customVisorColor: Color?
+    public let palette: AvatarResolvedPalette
 
     public init(
         state: BitzState = .balanced,
@@ -117,8 +118,10 @@ public struct BitzCharacterView: View {
         isPetReactionActive: Bool = false,
         isLoafPosture: Bool? = nil,
         showParticles: Bool = true,
-        customVisorColor: Color? = nil
+        customVisorColor: Color? = nil,
+        palette: AvatarResolvedPalette = .cyberpunkClassic
     ) {
+        self.palette = palette
         self.state = state
         self.time = time
         self.isBlinking = isBlinking
@@ -189,17 +192,17 @@ public struct BitzCharacterView: View {
         ZStack(alignment: .bottom) {
             // Glowing cybernetic tail on the right
             Capsule()
-                .fill(Color(red: 26.0 / 255.0, green: 26.0 / 255.0, blue: 29.0 / 255.0))
+                .fill(palette.chassisColor)
                 .frame(width: 48, height: 14)
                 .overlay(
                     Capsule()
-                        .stroke(visorColor.opacity(0.85), lineWidth: 2)
+                        .stroke(palette.trim(over: visorColor).opacity(0.85), lineWidth: 2)
                 )
                 .rotationEffect(.degrees(isLoafPosture ? 0 : -22 + sin(time * 3.2 * animationSpeedMultiplier) * 10))
                 .offset(x: 64, y: -14)
 
             // Compact cyber-cat body / loaf base (time-invariant subtree skipped via Equatable #70)
-            MascotTorsoView(state: state, isLoafPosture: isLoafPosture, visorColor: visorColor)
+            MascotTorsoView(state: state, isLoafPosture: isLoafPosture, visorColor: visorColor, palette: palette)
                 .equatable()
                 .frame(width: isLoafPosture ? 136 : 108, height: isLoafPosture ? 54 : 68)
 
@@ -208,14 +211,14 @@ public struct BitzCharacterView: View {
                 let pawSway = sin(time * 3.0 * animationSpeedMultiplier) * 2.0
                 HStack(spacing: 28) {
                     Capsule()
-                        .fill(Color(red: 26.0 / 255.0, green: 26.0 / 255.0, blue: 29.0 / 255.0))
+                        .fill(palette.chassisColor)
                         .frame(width: 18, height: 10)
-                        .overlay(Capsule().stroke(visorColor.opacity(0.65), lineWidth: 1))
+                        .overlay(Capsule().stroke(palette.trim(over: visorColor).opacity(0.65), lineWidth: 1))
                         .transformEffect(CGAffineTransform(translationX: 0, y: pawSway))
                     Capsule()
-                        .fill(Color(red: 26.0 / 255.0, green: 26.0 / 255.0, blue: 29.0 / 255.0))
+                        .fill(palette.chassisColor)
                         .frame(width: 18, height: 10)
-                        .overlay(Capsule().stroke(visorColor.opacity(0.65), lineWidth: 1))
+                        .overlay(Capsule().stroke(palette.trim(over: visorColor).opacity(0.65), lineWidth: 1))
                         .transformEffect(CGAffineTransform(translationX: 0, y: -pawSway))
                 }
                 .frame(width: 64, height: 10)
@@ -229,7 +232,8 @@ public struct BitzCharacterView: View {
                 isLoafPosture: isLoafPosture,
                 isBlinking: isBlinking,
                 isPetReactionActive: isPetReactionActive,
-                visorColor: visorColor
+                visorColor: visorColor,
+                palette: palette
             )
             .equatable()
             .frame(width: 132, height: 116)
@@ -249,21 +253,22 @@ private struct MascotTorsoView: View, Equatable {
     let state: BitzState
     let isLoafPosture: Bool
     let visorColor: Color
+    let palette: AvatarResolvedPalette
 
     var body: some View {
         RoundedRectangle(cornerRadius: 28)
-            .fill(Color(red: 20.0 / 255.0, green: 20.0 / 255.0, blue: 24.0 / 255.0))
+            .fill(palette.chassisDeepColor)
             .frame(width: isLoafPosture ? 136 : 108, height: isLoafPosture ? 54 : 68)
             .overlay(
                 RoundedRectangle(cornerRadius: 28)
-                    .stroke(visorColor.opacity(0.45), lineWidth: 1.5)
+                    .stroke(palette.trim(over: visorColor).opacity(0.45), lineWidth: 1.5)
             )
             .overlay(
                 // Chest neon core emblem
                 Circle()
                     .fill(visorColor.opacity(state == .burnout ? 0.3 : 0.9))
                     .frame(width: 12, height: 12)
-                    .shadow(color: visorColor, radius: 6)
+                    .shadow(color: visorColor, radius: 6 * palette.glowScale)
                     .offset(y: 6)
             )
     }
@@ -275,6 +280,7 @@ private struct MascotHeadAssemblyView: View, Equatable {
     let isBlinking: Bool
     let isPetReactionActive: Bool
     let visorColor: Color
+    let palette: AvatarResolvedPalette
 
     var body: some View {
         let earTilt = (state == .overworked || state == .dopamineSad) ? 14.0 : 0.0
@@ -284,7 +290,7 @@ private struct MascotHeadAssemblyView: View, Equatable {
             HStack(spacing: 48) {
                 ZStack {
                     CyberEarShape()
-                        .fill(Color(red: 26.0 / 255.0, green: 26.0 / 255.0, blue: 29.0 / 255.0))
+                        .fill(palette.chassisColor)
                         .frame(width: 36, height: 34)
                     CyberEarShape()
                         .fill(visorColor.opacity(0.85))
@@ -295,7 +301,7 @@ private struct MascotHeadAssemblyView: View, Equatable {
 
                 ZStack {
                     CyberEarShape()
-                        .fill(Color(red: 26.0 / 255.0, green: 26.0 / 255.0, blue: 29.0 / 255.0))
+                        .fill(palette.chassisColor)
                         .frame(width: 36, height: 34)
                     CyberEarShape()
                         .fill(visorColor.opacity(0.85))
@@ -310,12 +316,12 @@ private struct MascotHeadAssemblyView: View, Equatable {
             // Apply shadow directly to the filled RoundedRectangle before stroke overlay to avoid CPU path unioning (#70)
             ZStack {
                 RoundedRectangle(cornerRadius: 34)
-                    .fill(Color(red: 26.0 / 255.0, green: 26.0 / 255.0, blue: 29.0 / 255.0))
+                    .fill(palette.chassisColor)
                     .frame(width: 132, height: 92)
-                    .shadow(color: visorColor.opacity(0.35), radius: 8)
+                    .shadow(color: visorColor.opacity(0.35), radius: 8 * palette.glowScale)
                     .overlay(
                         RoundedRectangle(cornerRadius: 34)
-                            .stroke(visorColor.opacity(0.75), lineWidth: 2)
+                            .stroke(palette.trim(over: visorColor).opacity(0.75), lineWidth: 2)
                     )
 
                 // Wrap-around glossy black LED visor
@@ -324,7 +330,7 @@ private struct MascotHeadAssemblyView: View, Equatable {
                     .frame(width: 108, height: 46)
                     .overlay(
                         RoundedRectangle(cornerRadius: 18)
-                            .stroke(visorColor.opacity(0.5), lineWidth: 1)
+                            .stroke(palette.trim(over: visorColor).opacity(0.5), lineWidth: 1)
                     )
                     .overlay(
                         visorContent
@@ -339,8 +345,8 @@ private struct MascotHeadAssemblyView: View, Equatable {
         if isPetReactionActive {
             Text("<3  <3")
                 .font(.system(size: 18, weight: .heavy, design: .monospaced))
-                .foregroundStyle(Color(red: 1.0, green: 0.0, blue: 127.0 / 255.0))
-                .shadow(color: Color(red: 1.0, green: 0.0, blue: 127.0 / 255.0), radius: 6)
+                .foregroundStyle(palette.color(for: .petting))
+                .shadow(color: palette.color(for: .petting), radius: 6 * palette.glowScale)
         } else if isBlinking {
             // Natural blink slit
             HStack(spacing: 24) {
@@ -351,12 +357,12 @@ private struct MascotHeadAssemblyView: View, Equatable {
                     .fill(visorColor)
                     .frame(width: 18, height: 3)
             }
-            .shadow(color: visorColor, radius: 4)
+            .shadow(color: visorColor, radius: 4 * palette.glowScale)
         } else if state == .charging {
             Text("⚡ Z Z")
                 .font(.system(size: 17, weight: .heavy, design: .monospaced))
                 .foregroundStyle(visorColor)
-                .shadow(color: visorColor, radius: 6)
+                .shadow(color: visorColor, radius: 6 * palette.glowScale)
         } else if state == .burnout {
             Text("X  X")
                 .font(.system(size: 19, weight: .heavy, design: .monospaced))
@@ -365,17 +371,17 @@ private struct MascotHeadAssemblyView: View, Equatable {
             Text("T  T")
                 .font(.system(size: 19, weight: .heavy, design: .monospaced))
                 .foregroundStyle(visorColor)
-                .shadow(color: visorColor, radius: 6)
+                .shadow(color: visorColor, radius: 6 * palette.glowScale)
         } else if state == .overheating {
             Text(">  <")
                 .font(.system(size: 20, weight: .heavy, design: .monospaced))
                 .foregroundStyle(visorColor)
-                .shadow(color: visorColor, radius: 6)
+                .shadow(color: visorColor, radius: 6 * palette.glowScale)
         } else if state == .superCharged {
             Text("^  ^")
                 .font(.system(size: 21, weight: .heavy, design: .monospaced))
                 .foregroundStyle(visorColor)
-                .shadow(color: visorColor, radius: 8)
+                .shadow(color: visorColor, radius: 8 * palette.glowScale)
         } else if state == .overworked {
             HStack(spacing: 24) {
                 Rectangle()
@@ -385,7 +391,7 @@ private struct MascotHeadAssemblyView: View, Equatable {
                     .fill(visorColor)
                     .frame(width: 20, height: 5)
             }
-            .shadow(color: visorColor, radius: 4)
+            .shadow(color: visorColor, radius: 4 * palette.glowScale)
         } else {
             HStack(spacing: 24) {
                 Capsule()
@@ -395,7 +401,7 @@ private struct MascotHeadAssemblyView: View, Equatable {
                     .fill(visorColor)
                     .frame(width: 18, height: 11)
             }
-            .shadow(color: visorColor, radius: 6)
+            .shadow(color: visorColor, radius: 6 * palette.glowScale)
         }
     }
 }
@@ -411,6 +417,7 @@ public struct LiveBitzCharacterView: View {
     public let showParticles: Bool
     public let customVisorColor: Color?
     public let isPaused: Bool
+    public let palette: AvatarResolvedPalette
 
     @State private var isBlinking: Bool = false
 
@@ -426,8 +433,10 @@ public struct LiveBitzCharacterView: View {
         isLoafPosture: Bool? = nil,
         showParticles: Bool = true,
         customVisorColor: Color? = nil,
-        isPaused: Bool = false
+        isPaused: Bool = false,
+        palette: AvatarResolvedPalette = .cyberpunkClassic
     ) {
+        self.palette = palette
         self.state = state
         self.isPetReactionActive = isPetReactionActive
         self.isLoafPosture = isLoafPosture ?? (state == .burnout || state == .charging)
@@ -457,7 +466,8 @@ public struct LiveBitzCharacterView: View {
                     isPetReactionActive: isPetReactionActive,
                     isLoafPosture: isLoafPosture,
                     showParticles: false,
-                    customVisorColor: customVisorColor
+                    customVisorColor: customVisorColor,
+                    palette: palette
                 )
             } else {
                 LiveMotionStageView(
@@ -466,7 +476,8 @@ public struct LiveBitzCharacterView: View {
                     isPetReactionActive: isPetReactionActive,
                     isLoafPosture: isLoafPosture,
                     showParticles: showParticles,
-                    visorColor: visorColor
+                    visorColor: visorColor,
+                    palette: palette
                 )
                 .id(MotionStageKey(state: state, isLoafPosture: isLoafPosture, showParticles: showParticles))
             }
@@ -494,6 +505,7 @@ private struct LiveMotionStageView: View {
     let isLoafPosture: Bool
     let showParticles: Bool
     let visorColor: Color
+    let palette: AvatarResolvedPalette
 
     private var speedMultiplier: Double {
         switch state {
@@ -514,11 +526,11 @@ private struct LiveMotionStageView: View {
         ZStack(alignment: .bottom) {
             // Glowing cybernetic tail on the right (wags via out-of-process CALayer transform animation)
             Capsule()
-                .fill(Color(red: 26.0 / 255.0, green: 26.0 / 255.0, blue: 29.0 / 255.0))
+                .fill(palette.chassisColor)
                 .frame(width: 48, height: 14)
                 .overlay(
                     Capsule()
-                        .stroke(visorColor.opacity(0.85), lineWidth: 2)
+                        .stroke(palette.trim(over: visorColor).opacity(0.85), lineWidth: 2)
                 )
                 .rotationEffect(.degrees(isLoafPosture ? 0 : -22))
                 .background(
@@ -532,7 +544,7 @@ private struct LiveMotionStageView: View {
                 .offset(x: 64, y: -14)
 
             // Static torso subtree
-            MascotTorsoView(state: state, isLoafPosture: isLoafPosture, visorColor: visorColor)
+            MascotTorsoView(state: state, isLoafPosture: isLoafPosture, visorColor: visorColor, palette: palette)
                 .equatable()
                 .frame(width: isLoafPosture ? 136 : 108, height: isLoafPosture ? 54 : 68)
 
@@ -540,9 +552,9 @@ private struct LiveMotionStageView: View {
             if !isLoafPosture {
                 HStack(spacing: 28) {
                     Capsule()
-                        .fill(Color(red: 26.0 / 255.0, green: 26.0 / 255.0, blue: 29.0 / 255.0))
+                        .fill(palette.chassisColor)
                         .frame(width: 18, height: 10)
-                        .overlay(Capsule().stroke(visorColor.opacity(0.65), lineWidth: 1))
+                        .overlay(Capsule().stroke(palette.trim(over: visorColor).opacity(0.65), lineWidth: 1))
                         .background(
                             CALayerMotionBridge(
                                 kind: hasMotion ? .verticalSway(amplitude: 1.8, halfPeriod: 1.05 / speed) : .none
@@ -551,9 +563,9 @@ private struct LiveMotionStageView: View {
                         .compositingGroup()
 
                     Capsule()
-                        .fill(Color(red: 26.0 / 255.0, green: 26.0 / 255.0, blue: 29.0 / 255.0))
+                        .fill(palette.chassisColor)
                         .frame(width: 18, height: 10)
-                        .overlay(Capsule().stroke(visorColor.opacity(0.65), lineWidth: 1))
+                        .overlay(Capsule().stroke(palette.trim(over: visorColor).opacity(0.65), lineWidth: 1))
                         .background(
                             CALayerMotionBridge(
                                 kind: hasMotion ? .verticalSway(amplitude: -1.8, halfPeriod: 1.05 / speed) : .none
@@ -572,7 +584,8 @@ private struct LiveMotionStageView: View {
                 isLoafPosture: isLoafPosture,
                 isBlinking: isBlinking,
                 isPetReactionActive: isPetReactionActive,
-                visorColor: visorColor
+                visorColor: visorColor,
+                palette: palette
             )
             .equatable()
             .frame(width: 132, height: 116)
@@ -942,14 +955,17 @@ public struct AnimatedBitzCharacterView: View {
     public let showParticles: Bool
     public let customVisorColor: Color?
     public let isPaused: Bool
+    public let palette: AvatarResolvedPalette
 
     public init(
         state: BitzState = .balanced,
         isLoafPosture: Bool? = nil,
         showParticles: Bool = true,
         customVisorColor: Color? = nil,
-        isPaused: Bool = false
+        isPaused: Bool = false,
+        palette: AvatarResolvedPalette = .cyberpunkClassic
     ) {
+        self.palette = palette
         self.state = state
         self.isLoafPosture = isLoafPosture
         self.showParticles = showParticles
@@ -977,7 +993,8 @@ public struct AnimatedBitzCharacterView: View {
             isLoafPosture: isLoafPosture,
             showParticles: showParticles,
             customVisorColor: customVisorColor,
-            isPaused: isPaused
+            isPaused: isPaused,
+            palette: palette
         )
     }
 }

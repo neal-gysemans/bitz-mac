@@ -74,6 +74,22 @@ final class MascotOverlayLayoutTests: XCTestCase {
         try assertNothingDrawnOutside(fixture.mascotView(), size: MascotOverlayPanel.defaultPanelSize)
     }
 
+    func testMascotWithMaxGlowIntensityStaysInsidePanel() throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        let paletteStore = AvatarPaletteStore(userDefaults: defaults)
+        paletteStore.setGlowIntensity(1.5)
+        let view = MascotOverlayView(
+            engine: fixture.engine,
+            scaleStore: fixture.scaleStore,
+            opacityStore: fixture.opacityStore,
+            positionStore: fixture.positionStore,
+            telemetryDashboard: fixture.telemetryDashboard,
+            telemetrySettings: fixture.telemetrySettings,
+            paletteStore: paletteStore
+        )
+        try assertNothingDrawnOutside(view, size: MascotOverlayPanel.defaultPanelSize)
+    }
+
     /// The bubble is anchored to `earOverflow`, so it must match where the ears are actually drawn.
     func testEarOverflowMatchesDrawnEarTips() throws {
         for isLoafPosture in [false, true] {

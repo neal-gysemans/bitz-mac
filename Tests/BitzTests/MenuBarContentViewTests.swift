@@ -170,4 +170,33 @@ final class MenuBarContentViewTests: XCTestCase {
         XCTAssertNil(agentMonitor.activePopup, "Dismissing also clears the warning bubble")
         XCTAssertFalse(String(describing: menuView.body).contains("Dismiss Agent Warning"))
     }
+
+    func testMenuBarThemePresetSubmenuCanBeRenderedAndSelectsPreset() {
+        let suiteName = "MenuBarThemePresetTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let paletteStore = AvatarPaletteStore(userDefaults: defaults)
+        let menuView = BitzMenuBarContentView(
+            engine: WellnessPointEngine(riveController: ProductionRiveController(), userDefaults: defaults),
+            activityMonitor: ActivityMonitorService(
+                engine: WellnessPointEngine(riveController: ProductionRiveController(), userDefaults: defaults),
+                telemetry: MockTelemetryProvider()
+            ),
+            scaleStore: AvatarScaleStore(userDefaults: defaults),
+            opacityStore: AvatarOpacityStore(userDefaults: defaults),
+            positionStore: AvatarPositionStore(userDefaults: defaults),
+            displayStore: DisplayPreferenceStore(userDefaults: defaults),
+            agentMonitor: AgentMonitorService(adapters: []),
+            updateStore: AppUpdateStore(userDefaults: defaults),
+            telemetryDashboard: TelemetryDashboardService(settingsStore: TelemetrySettingsStore(userDefaults: defaults)),
+            telemetrySettings: TelemetrySettingsStore(userDefaults: defaults),
+            paletteStore: paletteStore
+        )
+
+        _ = menuView.body
+        XCTAssertEqual(paletteStore.selectedPreset, .cyberpunkClassic)
+        paletteStore.selectPreset(.nord)
+        XCTAssertEqual(paletteStore.selectedPreset, .nord)
+    }
 }

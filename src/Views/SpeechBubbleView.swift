@@ -58,6 +58,7 @@ public struct SpeechBubbleView: View {
     @ObservedObject public var updateStore: AppUpdateStore
     public let telemetryDashboard: TelemetryDashboardService
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
+    @ObservedObject public var paletteStore: AvatarPaletteStore
 
     public init(
         engine: WellnessPointEngine,
@@ -65,8 +66,10 @@ public struct SpeechBubbleView: View {
         agentMonitor: AgentMonitorService,
         updateStore: AppUpdateStore,
         telemetryDashboard: TelemetryDashboardService,
-        telemetrySettings: TelemetrySettingsStore
+        telemetrySettings: TelemetrySettingsStore,
+        paletteStore: AvatarPaletteStore = AvatarPaletteStore()
     ) {
+        self.paletteStore = paletteStore
         self.engine = engine
         self.scaleStore = scaleStore
         self.agentMonitor = agentMonitor
@@ -87,7 +90,7 @@ public struct SpeechBubbleView: View {
     // Speech Bubble Notification (always 100% solid contrast for legibility)
     @ViewBuilder
     private var bubble: some View {
-        let visorColor = MascotOverlayView.visorColor(for: engine.currentState)
+        let visorColor = paletteStore.resolvedPalette.visorColor(for: engine.currentState)
         if let popup = agentMonitor.activePopup {
             if popup.kind == .warning {
                 warningBubbleView(popup)

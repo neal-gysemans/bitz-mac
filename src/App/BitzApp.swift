@@ -24,6 +24,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
     public let flowShieldService: FlowShieldService
     public let interactionSettings: MascotInteractionSettingsStore
     public let fileDropService: FileDropInboxService
+    public let paletteStore: AvatarPaletteStore
     @Published public private(set) var menuBarTitle: String = "Bitz"
     public private(set) var overlayPanels: [MascotOverlayPanel] = []
     public var overlayPanel: MascotOverlayPanel? { overlayPanels.first }
@@ -66,8 +67,10 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
         flowShieldService: FlowShieldService? = nil,
         interactionSettings: MascotInteractionSettingsStore? = nil,
         fileDropService: FileDropInboxService? = nil,
+        paletteStore: AvatarPaletteStore? = nil,
         userDefaults: UserDefaults = .standard
     ) {
+        self.paletteStore = paletteStore ?? AvatarPaletteStore(userDefaults: userDefaults)
         self.interactionSettings = interactionSettings ?? MascotInteractionSettingsStore(userDefaults: userDefaults)
         self.fileDropService = fileDropService ?? FileDropInboxService()
         self.riveController = riveController
@@ -140,6 +143,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
             self?.positionStore.lockPosition()
             self?.updatePanelsInteractivity()
             self?.activityMonitor.clearManualOverride()
+            self?.paletteStore.cancelPreview()
         }
         // An agent popup can cover the update alert's buttons, so re-check on either change
         self.bubbleInteractivityCancellable = Publishers.Merge(
@@ -389,7 +393,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
                 flowShieldSettings: flowShieldSettings,
                 flowShieldService: flowShieldService,
                 interactionSettings: interactionSettings,
-                inboxDirectoryURL: fileDropService.inboxDirectoryURL
+                inboxDirectoryURL: fileDropService.inboxDirectoryURL,
+                paletteStore: paletteStore
             )
         )
     }
@@ -585,7 +590,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
                 agentMonitor: agentMonitor,
                 updateStore: updateStore,
                 telemetryDashboard: telemetryDashboard,
-                telemetrySettings: telemetrySettings
+                telemetrySettings: telemetrySettings,
+                paletteStore: paletteStore
             )
         )
         panel.onRightMouseDown = { [weak self] in
@@ -601,6 +607,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
             interactionSettings: interactionSettings,
+            paletteStore: paletteStore,
             onFilesDropped: { [weak self] urls in
                 guard let self else { return }
                 do {
@@ -662,6 +669,7 @@ struct BitzMenuBarContentView: View {
     @ObservedObject var telemetryDashboard: TelemetryDashboardService
     @ObservedObject var telemetrySettings: TelemetrySettingsStore
     @ObservedObject var audioSettings: CyberAudioSettingsStore
+    @ObservedObject var paletteStore: AvatarPaletteStore
     var audioService: CyberAudioService? = nil
     @ObservedObject var flowShieldSettings: FlowShieldSettingsStore
     @ObservedObject var flowShieldService: FlowShieldService
@@ -680,8 +688,10 @@ struct BitzMenuBarContentView: View {
         audioSettings: CyberAudioSettingsStore = CyberAudioSettingsStore(),
         audioService: CyberAudioService? = nil,
         flowShieldSettings: FlowShieldSettingsStore? = nil,
-        flowShieldService: FlowShieldService? = nil
+        flowShieldService: FlowShieldService? = nil,
+        paletteStore: AvatarPaletteStore = AvatarPaletteStore()
     ) {
+        self.paletteStore = paletteStore
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.scaleStore = scaleStore
@@ -733,6 +743,18 @@ struct BitzMenuBarContentView: View {
 
             Divider()
 
+            // MARK: - 1b. Theme Preset Submenu
+            Menu {
+                ForEach(AvatarThemePreset.allCases) { preset in
+                    Toggle(preset.title, isOn: Binding(
+                        get: { paletteStore.selectedPreset == preset },
+                        set: { if $0 { paletteStore.selectPreset(preset) } }
+                    ))
+                }
+            } label: {
+                Label("Theme Preset", systemImage: "paintpalette.fill")
+            }
+
             // MARK: - 2. Flow Shield Quick Controls
             if flowShieldService.isFlowShieldActive {
                 Button("🛡 Break Shield (Disable Focus)") {
@@ -768,8 +790,6 @@ struct BitzMenuBarContentView: View {
             } label: {
                 Label("Flow Shield", systemImage: flowShieldService.currentStatus.systemImage)
             }
-
-            // MARK: - 3. Sound Quick Settings Submenu
             Menu {
                 Toggle("Enable Cyber Audio", isOn: Binding(
                     get: { audioSettings.isEnabled },
@@ -981,7 +1001,8 @@ public struct BitzApp: App {
                 audioSettings: appDelegate.audioSettings,
                 audioService: appDelegate.audioService,
                 flowShieldSettings: appDelegate.flowShieldSettings,
-                flowShieldService: appDelegate.flowShieldService
+                flowShieldService: appDelegate.flowShieldService,
+                paletteStore: appDelegate.paletteStore
             )
         }
     }
