@@ -116,6 +116,11 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
 
         switch line["type"] as? String {
         case "assistant":
+            // Claude Code stops the turn on a usage limit; usually a `turn_duration` follows, but not always.
+            if line["error"] as? String == "rate_limit" {
+                let resetsAt = ((line["quotaLimits"] as? [String: Any])?["resetsAt"] as? Double).map(Date.init(timeIntervalSince1970:))
+                return [.rateLimit(resetsAt: resetsAt), .turnEnd(isDone: false)]
+            }
             // `<synthetic>` placeholders (interrupts, API errors) carry all-zero usage and are not model output.
             guard let message, message["model"] as? String != "<synthetic>" else { return [] }
             let tokens = (message["usage"] as? [String: Any]).map { usage in

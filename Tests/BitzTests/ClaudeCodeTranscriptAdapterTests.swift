@@ -181,7 +181,55 @@ final class ClaudeCodeTranscriptAdapterTests: XCTestCase {
         XCTAssertEqual(entries(synthetic), [], "A placeholder never resets the context reading or starts a turn")
     }
 
+    /// Shape of a real Claude Code usage-limit line (#102), text shortened.
+    private func rateLimit(resetsAt: Int? = 1_791_558_600, sidechain: Bool = false) -> String {
+        var line: [String: Any] = [
+            "type": "assistant", "isSidechain": sidechain, "error": "rate_limit", "isApiErrorMessage": true, "apiErrorStatus": 429,
+            "message": ["model": "<synthetic>", "role": "assistant", "stop_reason": "stop_sequence",
+                        "content": [["type": "text", "text": "You've hit your session limit"]]] as [String: Any],
+        ]
+        if let resetsAt { line["quotaLimits"] = ["status": "rejected", "rateLimitType": "five_hour", "resetsAt": resetsAt] }
+        return json(line)
+    }
+
+    func testParserMapsRateLimitLine() {
+        XCTAssertEqual(entries(rateLimit()),
+                       [.rateLimit(resetsAt: Date(timeIntervalSince1970: 1_791_558_600)), .turnEnd(isDone: false)])
+        XCTAssertEqual(entries(rateLimit(resetsAt: nil)), [.rateLimit(resetsAt: nil), .turnEnd(isDone: false)])
+        XCTAssertEqual(entries(rateLimit(sidechain: true)), [], "Sidechain lines are skipped")
+    }
+
     // MARK: - Adapter
+
+    func testRateLimitRaisesOneWarningAndEndsTurn() throws {
+        let session = try makeSession("proj/session-1.jsonl")
+        let adapter = makeAdapter()
+        adapter.checkForUpdates()
+        try append([userPrompt(), assistant()], to: session)
+        adapter.checkForUpdates()
+        XCTAssertEqual(lifecycle(collector.drain()), [.working])
+
+        try append([rateLimit(), system("turn_duration")], to: session)
+        adapter.checkForUpdates()
+
+        let events = collector.drain()
+        XCTAssertEqual(lifecycle(events), [.warning], "One warning, never done")
+        let warning = events.first { $0.kind == .warning }
+        XCTAssertEqual(warning?.warningReason, .rateLimit)
+        let resets = Date(timeIntervalSince1970: 1_791_558_600).formatted(.dateTime.weekday().hour().minute())
+        XCTAssertEqual(warning?.message, "⚠️ Claude hit its usage limit · resets \(resets).")
+        XCTAssertEqual(usage(events).last?.turnActive, false, "Turn ended, so no stall warning follows")
+    }
+
+    func testRateLimitInSeedStaysSilent() throws {
+        try makeSession("proj/session-1.jsonl", [userPrompt(), assistant(), rateLimit(), system("turn_duration")])
+        let adapter = makeAdapter()
+        adapter.checkForUpdates()
+
+        let seeded = collector.drain()
+        XCTAssertEqual(seeded.map(\.kind), [.usage], "An old limit is never re-announced on startup")
+        XCTAssertEqual(seeded.first?.turnActive, false)
+    }
 
     func testFullTurnEmitsWorkingThenDoneAndUsage() throws {
         let session = try makeSession("proj/session-1.jsonl")

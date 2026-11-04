@@ -126,6 +126,7 @@ final class AgentModelsTests: XCTestCase {
         XCTAssertTrue(settings.contextWarningEnabled)
         XCTAssertTrue(settings.loopWarningEnabled)
         XCTAssertTrue(settings.stallWarningEnabled)
+        XCTAssertTrue(settings.rateLimitWarningEnabled)
         XCTAssertEqual(settings.contextThresholdPercent, 90)
         XCTAssertEqual(settings.stallTimeoutMinutes, 3)
         XCTAssertEqual(settings.contextWindow(for: "claude"), 200_000)
@@ -162,9 +163,11 @@ final class AgentModelsTests: XCTestCase {
         settings.contextWarningEnabled = false
         settings.loopWarningEnabled = false
         settings.stallWarningEnabled = false
+        settings.rateLimitWarningEnabled = false
         XCTAssertFalse(settings.isEnabled(.context))
         XCTAssertFalse(settings.isEnabled(.loop))
         XCTAssertFalse(settings.isEnabled(.stall))
+        XCTAssertFalse(settings.isEnabled(.rateLimit))
         XCTAssertTrue(settings.isEnabled(.reported), "Reported warnings have no toggle")
     }
 }

@@ -149,6 +149,8 @@ public enum AgentWarningReason: String, Codable, Sendable, CaseIterable {
     case context
     case loop
     case stall
+    /// Usage limit hit (Claude Code `rate_limit` / HTTP 429 log line).
+    case rateLimit
     /// Raised by an agent or script through the drop-box; has no toggle.
     case reported
 }
@@ -200,7 +202,7 @@ public struct AgentContextReading: Sendable, Equatable {
     }
 }
 
-/// User settings for agent signals (almost done, context, loop and stall warnings).
+/// User settings for agent signals (almost done, context, loop, stall and rate-limit warnings).
 public struct AgentSignalSettings: Codable, Sendable, Equatable {
     public static let defaultContextWindow = 200_000
     public static let `default` = AgentSignalSettings()
@@ -209,6 +211,7 @@ public struct AgentSignalSettings: Codable, Sendable, Equatable {
     public var contextWarningEnabled = true
     public var loopWarningEnabled = true
     public var stallWarningEnabled = true
+    public var rateLimitWarningEnabled = true
     /// 50...99
     public var contextThresholdPercent = 90
     /// 1...30
@@ -226,6 +229,7 @@ public struct AgentSignalSettings: Codable, Sendable, Equatable {
         contextWarningEnabled = try container.decodeIfPresent(Bool.self, forKey: .contextWarningEnabled) ?? defaults.contextWarningEnabled
         loopWarningEnabled = try container.decodeIfPresent(Bool.self, forKey: .loopWarningEnabled) ?? defaults.loopWarningEnabled
         stallWarningEnabled = try container.decodeIfPresent(Bool.self, forKey: .stallWarningEnabled) ?? defaults.stallWarningEnabled
+        rateLimitWarningEnabled = try container.decodeIfPresent(Bool.self, forKey: .rateLimitWarningEnabled) ?? defaults.rateLimitWarningEnabled
         contextThresholdPercent = try container.decodeIfPresent(Int.self, forKey: .contextThresholdPercent) ?? defaults.contextThresholdPercent
         stallTimeoutMinutes = try container.decodeIfPresent(Int.self, forKey: .stallTimeoutMinutes) ?? defaults.stallTimeoutMinutes
         contextWindowTokens = try container.decodeIfPresent([String: Int].self, forKey: .contextWindowTokens) ?? defaults.contextWindowTokens
@@ -240,6 +244,7 @@ public struct AgentSignalSettings: Codable, Sendable, Equatable {
         case .context: return contextWarningEnabled
         case .loop: return loopWarningEnabled
         case .stall: return stallWarningEnabled
+        case .rateLimit: return rateLimitWarningEnabled
         case .reported: return true
         }
     }

@@ -414,6 +414,37 @@ final class AgentSignalPolicyTests: XCTestCase {
         XCTAssertEqual(service.activeWarning?.reason, .stall, "Activity re-arms the stall warning")
     }
 
+    func testWakeRestartsStallTimeout() {
+        let clock = ClockBox()
+        let (service, defaults, suite) = makeService(clock)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        service.handleEvent(event("claude", .usage, clock)) // session-log heartbeat: only log-backed sessions stall
+        service.handleEvent(event("claude", .working, clock))
+        clock.advance(minutes: 60) // Mac asleep mid-turn
+        service.handleSystemWake()
+        service.evaluateStalls()
+        XCTAssertNil(service.activeWarning, "Sleep time is not stall time")
+
+        clock.advance(minutes: 3)
+        service.evaluateStalls()
+        XCTAssertEqual(service.activeWarning?.reason, .stall, "A real stall after wake still fires")
+    }
+
+    func testRateLimitToggleOffSuppressesWarning() {
+        let clock = ClockBox()
+        let (service, defaults, suite) = makeService(clock)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        service.signalSettings.rateLimitWarningEnabled = false
+        service.handleEvent(warning("claude", clock, reason: .rateLimit, message: "limit"))
+        XCTAssertNil(service.activeWarning)
+
+        service.signalSettings.rateLimitWarningEnabled = true
+        service.handleEvent(warning("claude", clock, reason: .rateLimit, message: "limit"))
+        XCTAssertEqual(service.activeWarning?.reason, .rateLimit)
+    }
+
     func testAgentWithoutSessionLogNeverStalls() {
         let clock = ClockBox()
         let (service, defaults, suite) = makeService(clock)

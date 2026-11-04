@@ -92,6 +92,8 @@ public struct AgentsSettingsTabView: View {
                         .disabled(!agentMonitor.signalSettings.stallWarningEnabled)
                         .padding(.leading, 20)
 
+                    Toggle("Usage Limit Warnings (Claude Code)", isOn: $agentMonitor.signalSettings.rateLimitWarningEnabled)
+
                     hint("Turning off Agent Speech Bubbles hides bubbles only; the amber visor and context gauge keep working.")
 
                     Divider()

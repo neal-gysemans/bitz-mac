@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Combine
 
@@ -44,6 +45,7 @@ public final class AgentMonitorService: ObservableObject {
     private let userDefaults: UserDefaults
     private var dismissTask: Task<Void, Never>? = nil
     private var stallTask: Task<Void, Never>? = nil
+    private var wakeObserver: NSObjectProtocol? = nil
 
     /// Per-agent stall and context-crossing inputs (data-model.md, "Per-agent session").
     private struct SessionState {
@@ -191,6 +193,17 @@ public final class AgentMonitorService: ObservableObject {
                 self.evaluateStalls()
             }
         }
+        if wakeObserver == nil {
+            wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.handleSystemWake()
+                }
+            }
+        }
     }
 
     /// Stops all registered adapters.
@@ -202,6 +215,10 @@ public final class AgentMonitorService: ObservableObject {
         dismissTask = nil
         stallTask?.cancel()
         stallTask = nil
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
         activePopup = nil
         activeAgents.removeAll()
         sessions.removeAll()
@@ -347,6 +364,12 @@ public final class AgentMonitorService: ObservableObject {
             raiseWarning(AgentWarning(agentID: id, agentName: agent.displayName, reason: .stall,
                                       text: "⚠️ \(agent.displayName) may be stuck: no output for \(minutes) min."))
         }
+    }
+
+    /// Agents produce no output while the Mac sleeps, so each session gets a full stall timeout after wake. Public for tests.
+    public func handleSystemWake() {
+        let now = clock()
+        for id in sessions.keys { sessions[id]?.lastActivity = now }
     }
 
     /// Clears the warning (Got it / menu Dismiss Agent Warning) and its bubble.

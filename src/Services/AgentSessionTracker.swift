@@ -12,6 +12,8 @@ public enum SessionLogEntry: Equatable, Sendable {
     case approvalRequest
     case turnEnd(isDone: Bool)
     case compaction
+    /// Usage limit hit; `resetsAt` nil when the log line gives no reset time.
+    case rateLimit(resetsAt: Date?)
 }
 
 /// Turns parsed session-log entries into `AgentEvent`s: working/done, loop warnings and usage readings (FR-008, FR-014).
@@ -93,6 +95,11 @@ public struct AgentSessionTracker: Sendable {
                 loopFingerprint = nil
                 loopCount = 0
                 loopFired = false
+            case .rateLimit(let resetsAt):
+                // Weekday included: weekly limits reset days later.
+                let resets = resetsAt.map { " · resets \($0.formatted(.dateTime.weekday().hour().minute()))" } ?? ""
+                emit(.warning, "⚠️ \(agentName) hit its usage limit\(resets).",
+                     [AgentEvent.MetadataKey.reason: AgentWarningReason.rateLimit.rawValue])
             }
         }
         return events
