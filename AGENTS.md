@@ -91,8 +91,15 @@ Bitz sits on the user's desktop all day alongside heavy IDEs and LLM agents. Reg
   - `Closes #<id>` and `refs #<id>`
 - This ensures automated CI passes `.github/workflows/pr-ticket-check.yml`.
 
-### Rule 3.3: Mandatory Post-Merge Issue Closure
-> **CRITICAL RULE**: When a Pull Request is merged into `main`, you MUST immediately verify that the linked issue ticket is officially **CLOSED**.
+### Rule 3.3: Human Review & Validation (NO AUTO-MERGING BY AGENTS)
+> **CRITICAL RULE**: **AI agents must NEVER merge Pull Requests automatically.**
+>
+> 1. Once all tests pass, local packaging succeeds, and CI checks are green on the PR, the agent MUST **STOP**.
+> 2. The agent hands off the PR link to the user/maintainer for human review, verification, and validation.
+> 3. Only the human maintainer validates and merges the PR.
+
+### Rule 3.4: Mandatory Post-Merge Issue Closure
+> **CRITICAL RULE**: When a Pull Request is merged into `main` by the maintainer, verify that the linked issue ticket is officially **CLOSED**.
 >
 > 1. Check issue status: `gh issue view <id> --repo AkramKs/bitz-mac`
 > 2. If the ticket remains open for any reason, immediately close it:
@@ -101,8 +108,8 @@ Bitz sits on the user's desktop all day alongside heavy IDEs and LLM agents. Reg
 >    ```
 > 3. **Never leave completed issue tickets open after a PR is done.**
 
-### Rule 3.4: Branch Sync & Cleanup
-- Immediately after merging a PR:
+### Rule 3.5: Branch Sync & Cleanup
+- Immediately after a PR is merged into `main`:
   1. Switch back to `main`: `git checkout main`
   2. Pull latest upstream commits: `git pull origin main`
   3. Delete the local feature branch: `git branch -D <branch>`
