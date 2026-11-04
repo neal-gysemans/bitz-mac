@@ -9,6 +9,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
     case personality = "Personality"
     case audio = "Audio"
     case telemetry = "Telemetry"
+    case pro = "Bitz Pro"
     case advanced = "Advanced"
 
     public var id: String { rawValue }
@@ -21,6 +22,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
         case .personality: return "sparkles"
         case .audio: return "speaker.wave.2.fill"
         case .telemetry: return "chart.xyaxis.line"
+        case .pro: return "crown.fill"
         case .advanced: return "gearshape.2.fill"
         }
     }
@@ -46,6 +48,7 @@ public struct SettingsRootView: View {
     public var inboxDirectoryURL: URL
     @ObservedObject public var paletteStore: AvatarPaletteStore
     @ObservedObject public var personalitySettings: PersonalitySettingsStore
+    @ObservedObject public var licensingService: LicensingService
 
     @State private var selectedTab: SettingsTab = .general
 
@@ -67,12 +70,14 @@ public struct SettingsRootView: View {
         interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
         inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
-        personalitySettings: PersonalitySettingsStore? = nil
+        personalitySettings: PersonalitySettingsStore? = nil,
+        licensingService: LicensingService? = nil
     ) {
         self.interactionSettings = interactionSettings
         self.inboxDirectoryURL = inboxDirectoryURL
         self.paletteStore = paletteStore
         self.personalitySettings = personalitySettings ?? PersonalitySettingsStore()
+        self.licensingService = licensingService ?? LicensingService()
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.scaleStore = scaleStore
@@ -242,6 +247,11 @@ public struct SettingsRootView: View {
             TelemetrySettingsTabView(
                 telemetryDashboard: telemetryDashboard,
                 telemetrySettings: telemetrySettings
+            )
+        case .pro:
+            BitzProSettingsTabView(
+                licensingService: licensingService,
+                audioPlayer: audioPlayer
             )
         case .advanced:
             AdvancedSettingsTabView(

@@ -1,0 +1,31 @@
+{
+  "accept_commit": "d44e36c2bfd68e3904a804d6da3df43aa1ddea3e",
+  "acceptance_history": [
+    {
+      "accept_commit": "d44e36c2bfd68e3904a804d6da3df43aa1ddea3e",
+      "acceptance_mode": "pr",
+      "accepted_at": "2026-11-04T10:30:50.823497+00:00",
+      "accepted_by": "antigravity",
+      "accepted_from_commit": "835ef3b77380f3606880fc81abc84566dbdcdf19"
+    }
+  ],
+  "acceptance_mode": "pr",
+  "accepted_at": "2026-11-04T10:30:50.823497+00:00",
+  "accepted_by": "antigravity",
+  "accepted_from_commit": "835ef3b77380f3606880fc81abc84566dbdcdf19",
+  "created_at": "2026-11-04T09:34:51.463294+00:00",
+  "flattened": false,
+  "friendly_name": "bitz pro licensing",
+  "mission_id": "01M6JYJJ0FT3TZ7H474SZ75E3Z",
+  "mission_number": null,
+  "mission_slug": "bitz-pro-licensing-01M6JYJJ",
+  "mission_type": "software-dev",
+  "purpose_context": "This mission advances bitz pro licensing on feat/issue-117-bitz-pro-licensing so stakeholders can track the work from mission creation onward.",
+  "purpose_tldr": "bitz pro licensing",
+  "slug": "bitz-pro-licensing-01M6JYJJ",
+  "status_phase": "1",
+  "target_branch": "feat/issue-117-bitz-pro-licensing",
+  "topology": "single_branch",
+  "vcs": "git",
+  "vcs_locked_at": "2026-11-04T10:12:16.443745+00:00"
+}

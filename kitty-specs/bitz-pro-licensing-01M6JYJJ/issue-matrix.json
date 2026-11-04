@@ -1,0 +1,53 @@
+{
+  "rows": {
+    "#117": {
+      "evidence_ref": "0889d4e",
+      "fr": "FR-001",
+      "nfr": "NFR-001",
+      "repo": "AkramKs/bitz-mac",
+      "sc": null,
+      "scope": "core",
+      "source_file": "spec.md",
+      "title": "[Feature]: Bitz Pro Feature Tiering & Backendless License Architecture",
+      "verdict": "fixed",
+      "wp": "WP01"
+    },
+    "#28": {
+      "evidence_ref": "Follow-up: #28",
+      "fr": "FR-001",
+      "nfr": null,
+      "repo": "AkramKs/bitz-mac",
+      "sc": null,
+      "scope": "followup",
+      "source_file": "spec.md",
+      "title": "Custom Color Palettes & Visor Themes",
+      "verdict": "deferred-with-followup",
+      "wp": "WP04"
+    },
+    "#30": {
+      "evidence_ref": "Follow-up: #30",
+      "fr": "FR-001",
+      "nfr": null,
+      "repo": "AkramKs/bitz-mac",
+      "sc": null,
+      "scope": "followup",
+      "source_file": "spec.md",
+      "title": "Multi-Mascot Character Roster",
+      "verdict": "deferred-with-followup",
+      "wp": "WP04"
+    },
+    "#43": {
+      "evidence_ref": "Follow-up: #43",
+      "fr": "FR-001",
+      "nfr": null,
+      "repo": "AkramKs/bitz-mac",
+      "sc": null,
+      "scope": "followup",
+      "source_file": "spec.md",
+      "title": "Meeting Audio Recorder & Local Whisper Transcription",
+      "verdict": "deferred-with-followup",
+      "wp": "WP04"
+    }
+  },
+  "schema_version": 1
+}

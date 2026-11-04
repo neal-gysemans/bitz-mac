@@ -1,0 +1,144 @@
+{
+  "event_count": 29,
+  "last_event_id": "01M6K1Q2CYQAZSJX7F925Q2R3M",
+  "materialized_at": "2026-11-04T10:29:44.990800+00:00",
+  "mission_number": "",
+  "mission_slug": "bitz-pro-licensing-01M6JYJJ",
+  "mission_type": "software-dev",
+  "summary": {
+    "approved": 0,
+    "blocked": 0,
+    "canceled": 0,
+    "claimed": 0,
+    "done": 4,
+    "for_review": 0,
+    "in_progress": 0,
+    "in_review": 0,
+    "planned": 1
+  },
+  "work_packages": {
+    "WP01": {
+      "actor": "user",
+      "agent": "antigravity",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6K0YJKQW8EMXRFH25RJ80F8",
+      "last_transition_at": "2026-11-04T10:16:22.391644+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "Ready for review: licensing models and keychain storage implemented",
+        "Review passed: clean models and storage"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "reference": "review-cycle://bitz-pro-licensing-01M6JYJJ/WP01-licensing-models-and-storage/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "shell_pid": 3936,
+      "shell_pid_created_at": "1793733650.321519",
+      "subtasks": {
+        "T001": "done",
+        "T002": "done",
+        "T003": "done"
+      }
+    },
+    "WP02": {
+      "actor": "user",
+      "agent": "antigravity",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6K17SFPEB3VVSGVQNT8C5HX",
+      "last_transition_at": "2026-11-04T10:21:24.342110+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "Ready for review: licensing service and test suite implemented",
+        "Review passed: CryptoKit validation and tests verified"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "reference": "review-cycle://bitz-pro-licensing-01M6JYJJ/WP02-licensing-service-and-tests/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "shell_pid": 3936,
+      "shell_pid_created_at": "1793733650.321519",
+      "subtasks": {
+        "T004": "done",
+        "T005": "done",
+        "T006": "done"
+      }
+    },
+    "WP03": {
+      "actor": "user",
+      "agent": "antigravity",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6K1HNR2KVFEHX8ENK0H3JMZ",
+      "last_transition_at": "2026-11-04T10:26:48.194865+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "Ready for review: Bitz Pro settings tab and pro gating badge implemented",
+        "Review passed: Bitz Pro UI and tab integration verified"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "reference": "review-cycle://bitz-pro-licensing-01M6JYJJ/WP03-settings-ui-and-pro-gating/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "shell_pid": 3936,
+      "shell_pid_created_at": "1793733650.321519",
+      "subtasks": {
+        "T007": "done",
+        "T008": "done",
+        "T009": "done"
+      }
+    },
+    "WP04": {
+      "actor": "user",
+      "agent": "antigravity",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6K1Q2CYQAZSJX7F925Q2R3M",
+      "last_transition_at": "2026-11-04T10:29:44.990800+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "Ready for review: BitzApp wiring and documentation complete",
+        "Review passed: BitzApp wiring and docs verified"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "reference": "review-cycle://bitz-pro-licensing-01M6JYJJ/WP04-app-wiring-and-documentation/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "shell_pid": 3936,
+      "shell_pid_created_at": "1793733650.321519",
+      "subtasks": {
+        "T010": "done",
+        "T011": "done",
+        "T012": "done"
+      }
+    },
+    "WP05": {
+      "actor": "finalize-tasks",
+      "force_count": 0,
+      "lane": "planned",
+      "last_event_id": "01M6JZ1CVTM33D0WY91VX876R0",
+      "last_transition_at": "2026-11-04T09:42:57.658828+00:00"
+    }
+  }
+}

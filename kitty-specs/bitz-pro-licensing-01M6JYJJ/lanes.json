@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "mission_slug": "bitz-pro-licensing-01M6JYJJ",
+  "mission_id": "01M6JYJJ0FT3TZ7H474SZ75E3Z",
+  "mission_branch": "kitty/mission-bitz-pro-licensing-01M6JYJJ",
+  "target_branch": "feat/issue-117-bitz-pro-licensing",
+  "lanes": [
+    {
+      "lane_id": "lane-a",
+      "wp_ids": [
+        "WP01"
+      ],
+      "write_scope": [
+        "src/Models/LicensingModels.swift",
+        "src/Services/Licensing/KeychainLicenseStorage.swift",
+        "src/Services/Licensing/LicenseStorageProtocol.swift"
+      ],
+      "predicted_surfaces": [],
+      "depends_on_lanes": [],
+      "parallel_group": 0
+    },
+    {
+      "lane_id": "lane-b",
+      "wp_ids": [
+        "WP02"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/LicensingServiceTests.swift",
+        "src/Services/Licensing/LicensingService.swift",
+        "src/Services/Licensing/LicensingServiceProtocol.swift"
+      ],
+      "predicted_surfaces": [
+        "tests"
+      ],
+      "depends_on_lanes": [
+        "lane-a"
+      ],
+      "parallel_group": 1
+    },
+    {
+      "lane_id": "lane-c",
+      "wp_ids": [
+        "WP03"
+      ],
+      "write_scope": [
+        "src/Views/Components/ProBadgeView.swift",
+        "src/Views/Settings/BitzProSettingsTabView.swift",
+        "src/Views/Settings/SettingsRootView.swift"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "app-shell"
+      ],
+      "depends_on_lanes": [
+        "lane-a",
+        "lane-b"
+      ],
+      "parallel_group": 2
+    },
+    {
+      "lane_id": "lane-d",
+      "wp_ids": [
+        "WP04"
+      ],
+      "write_scope": [
+        "docs/LICENSING.md",
+        "src/App/BitzApp.swift"
+      ],
+      "predicted_surfaces": [],
+      "depends_on_lanes": [
+        "lane-a",
+        "lane-b",
+        "lane-c"
+      ],
+      "parallel_group": 3
+    }
+  ],
+  "computed_at": "2026-11-04T09:44:13.605713+00:00",
+  "computed_from": "dependency_graph+ownership",
+  "planning_artifact_wps": [],
+  "planning_commit_sha": "a6e720e6673fed5910ee18b333731295b6ffa4c7"
+}

@@ -31,6 +31,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     public let approvalStore: AgentApprovalStore
     public let appActivator: any AppActivating
     public let diffViewer: any DiffViewing
+    public let licensingService: LicensingService
     @Published public private(set) var menuBarTitle: String = "Bitz"
     public private(set) var overlayPanels: [MascotOverlayPanel] = []
     public var overlayPanel: MascotOverlayPanel? { overlayPanels.first }
@@ -83,8 +84,10 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         approvalStore: AgentApprovalStore? = nil,
         appActivator: (any AppActivating)? = nil,
         diffViewer: (any DiffViewing)? = nil,
+        licensingService: LicensingService? = nil,
         userDefaults: UserDefaults = .standard
     ) {
+        self.licensingService = licensingService ?? LicensingService()
         let resolvedApprovalStore = approvalStore ?? AgentApprovalStore()
         self.approvalStore = resolvedApprovalStore
         self.appActivator = appActivator ?? WorkspaceAppActivator()
@@ -508,7 +511,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
                 interactionSettings: interactionSettings,
                 inboxDirectoryURL: fileDropService.inboxDirectoryURL,
                 paletteStore: paletteStore,
-                personalitySettings: personalitySettings
+                personalitySettings: personalitySettings,
+                licensingService: licensingService
             )
         )
     }

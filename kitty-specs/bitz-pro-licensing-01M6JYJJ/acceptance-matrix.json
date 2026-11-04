@@ -1,0 +1,79 @@
+{
+  "mission_slug": "bitz-pro-licensing-01M6JYJJ",
+  "mission_number": "",
+  "mission_type": "software-dev",
+  "overall_verdict": "pass",
+  "criteria": [
+    {
+      "criterion_id": "FR-001",
+      "description": "BitzTier and BitzFeature Enums",
+      "proof_type": "automated_test",
+      "evidence": "src/Models/LicensingModels.swift",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-04T10:30:00.000000+00:00",
+      "notes": "Defined free and pro tiers and feature enumeration with titles and descriptions."
+    },
+    {
+      "criterion_id": "FR-002",
+      "description": "LicensingServiceProtocol",
+      "proof_type": "automated_test",
+      "evidence": "src/Services/Licensing/LicensingServiceProtocol.swift",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-04T10:30:00.000000+00:00",
+      "notes": "Contract for checking tier, unlocking features, activating, and deactivating."
+    },
+    {
+      "criterion_id": "FR-003",
+      "description": "Offline Ed25519 Cryptographic Verification",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/LicensingServiceTests.swift",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-04T10:30:00.000000+00:00",
+      "notes": "Verified CryptoKit Curve25519 signing validation for valid, corrupt, and expired keys."
+    },
+    {
+      "criterion_id": "FR-004",
+      "description": "macOS Keychain Persistence",
+      "proof_type": "automated_test",
+      "evidence": "src/Services/Licensing/KeychainLicenseStorage.swift",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-04T10:30:00.000000+00:00",
+      "notes": "Secure storage in Keychain with kSecClassGenericPassword."
+    },
+    {
+      "criterion_id": "FR-005",
+      "description": "Settings Bitz Pro Tab View",
+      "proof_type": "automated_test",
+      "evidence": "src/Views/Settings/BitzProSettingsTabView.swift",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-04T10:30:00.000000+00:00",
+      "notes": "Dedicated Settings tab with plan status badge, key input, and Pro capabilities showcase."
+    },
+    {
+      "criterion_id": "FR-006",
+      "description": "Feature Gating Helper",
+      "proof_type": "automated_test",
+      "evidence": "src/Views/Components/ProBadgeView.swift",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-04T10:30:00.000000+00:00",
+      "notes": "Reusable ProBadgeView and proFeatureGated view modifier with non-intrusive popover."
+    },
+    {
+      "criterion_id": "FR-007",
+      "description": "Deactivation and Reset Flow",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/LicensingServiceTests.swift::testDeactivationRevertsToFreeAndClearsStorage",
+      "pass_fail": "pass",
+      "verified_by": "antigravity",
+      "verified_at": "2026-11-04T10:30:00.000000+00:00",
+      "notes": "Clearing stored license resets active license and reverts to free tier."
+    }
+  ],
+  "negative_invariants": []
+}
