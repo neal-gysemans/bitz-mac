@@ -11,6 +11,8 @@ import SwiftUI
 @MainActor
 public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     public static let shared = SettingsWindowManager()
+    /// Content (not frame) minimum, shared with `SettingsRootView`; `sizingOptions = []` means AppKit can't read it from SwiftUI.
+    public static let minimumContentSize = NSSize(width: 660, height: 560)
 
     private var windowController: NSWindowController?
     @Published public private(set) var isWindowOpen: Bool = false
@@ -34,11 +36,12 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
             if !isWindowOpen || existingWindow.contentViewController == nil {
                 let contentSize = existingWindow.contentRect(forFrameRect: existingWindow.frame).size
                 let targetSize = NSSize(
-                    width: max(contentSize.width, existingWindow.minSize.width),
-                    height: max(contentSize.height, existingWindow.minSize.height)
+                    width: max(contentSize.width, Self.minimumContentSize.width),
+                    height: max(contentSize.height, Self.minimumContentSize.height)
                 )
                 existingWindow.contentViewController = makeHostingController(rootView: rootView, size: targetSize)
                 existingWindow.setContentSize(targetSize)
+                existingWindow.contentMinSize = Self.minimumContentSize
             }
             existingWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -55,9 +58,10 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
             backing: .buffered,
             defer: false
         )
-        window.minSize = NSSize(width: 640, height: 520)
         window.contentViewController = hostingController
         window.setContentSize(initialSize)
+        // After contentViewController: assigning it resets contentMinSize on macOS 14
+        window.contentMinSize = Self.minimumContentSize
         window.center()
         window.title = "Bitz Settings"
         window.isReleasedWhenClosed = false

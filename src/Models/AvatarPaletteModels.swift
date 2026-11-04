@@ -83,6 +83,11 @@ public enum AvatarEmotionColorSlot: String, CaseIterable, Identifiable, Sendable
     }
 }
 
+extension BitzState {
+    /// Human-readable state name ("Super Charged", not "superCharged").
+    public var displayName: String { AvatarEmotionColorSlot(state: self).title }
+}
+
 // MARK: - Resolved palette
 
 /// Fully resolved colors used for rendering. Equatable so views only update when values really change.

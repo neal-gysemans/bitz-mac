@@ -162,6 +162,10 @@ public struct AdvancedSettingsTabView: View {
                             .buttonStyle(.borderedProminent)
                         }
                     }
+
+                    Text(updateStore.statusMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 

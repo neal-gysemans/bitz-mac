@@ -208,6 +208,25 @@ final class AppUpdateServiceTests: XCTestCase {
         XCTAssertTrue(store.isUpdateAvailable)
     }
 
+    /// #94: a failed background check restores the previous status instead of leaving "Checking for updates..."
+    func testFailedAutomaticCheckRestoresStatusMessage() async {
+        let (defaults, cleanup) = createIsolatedDefaults()
+        defer { cleanup() }
+
+        let store = AppUpdateStore(
+            currentVersionString: "1.2.0",
+            updateService: MockUpdateCheckingService(result: .failure(URLError(.notConnectedToInternet))),
+            userDefaults: defaults
+        )
+        store.automaticallyCheckForUpdates = true
+
+        await store.checkForUpdates(manual: false)
+        XCTAssertEqual(store.statusMessage, "v1.2.0")
+
+        await store.checkForUpdates(manual: true)
+        XCTAssertEqual(store.statusMessage, "Could not check for updates")
+    }
+
     func testGitHubUpdateServiceDefaultRepositoryIsBitzReleases() {
         let service = GitHubUpdateService()
         XCTAssertEqual(service.repository, "AkramKs/bitz-releases")

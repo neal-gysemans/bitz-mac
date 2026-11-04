@@ -532,4 +532,31 @@ final class ActivityMonitorServiceTests: XCTestCase {
         XCTAssertNotEqual(engine.currentState, .charging)
         XCTAssertEqual(engine.currentPoints, 50.5, accuracy: 0.001)
     }
+
+    /// #94 A5: Bitz's own Settings window must not replace the app the user came from.
+    func testOwnBundleIsIgnoredWhenFrontmost() {
+        let suiteName = "ActivityOwnBundleTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let telemetry = MockTelemetryProvider()
+        let service = ActivityMonitorService(
+            engine: WellnessPointEngine(riveController: ProductionRiveController(), userDefaults: defaults),
+            telemetry: telemetry,
+            ownBundleIdentifier: "com.example.bitz"
+        )
+        telemetry.bundleID = "com.microsoft.VSCode"
+        service.performSampleTick()
+        telemetry.bundleID = "com.example.bitz"
+        service.performSampleTick()
+
+        XCTAssertEqual(service.lastFrontmostBundleID, "com.microsoft.VSCode")
+        XCTAssertTrue(service.lastAppIsProductive)
+
+        // Marking from Settings (Bitz frontmost) re-scores the remembered app immediately
+        service.markFrontmostApp(asProductive: false)
+        XCTAssertFalse(service.lastAppIsProductive)
+        service.resetFrontmostAppRule()
+        XCTAssertTrue(service.lastAppIsProductive)
+    }
 }

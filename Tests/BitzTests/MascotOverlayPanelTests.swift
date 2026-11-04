@@ -328,4 +328,21 @@ final class MascotOverlayPanelTests: XCTestCase {
         let restoredPosStore = AvatarPositionStore(userDefaults: defaults)
         XCTAssertEqual(restoredPosStore.cornerAnchor, .topRight)
     }
+
+    /// A resize or corner change keeps Bitz on its assigned display instead of jumping to the focused one.
+    func testScaleAndCornerChangesKeepAssignedScreen() throws {
+        guard let secondary = NSScreen.screens.first(where: { $0 != NSScreen.main }) else {
+            throw XCTSkip("Needs a second display")
+        }
+        let panel = MascotOverlayPanel()
+        panel.applyCornerAnchor(.bottomRight, on: secondary)
+
+        panel.applyScaleFactor(1.2)
+        XCTAssertTrue(panel.assignedScreen === secondary)
+        XCTAssertTrue(secondary.frame.intersects(panel.frame))
+
+        panel.applyCornerAnchor(.topLeft)
+        XCTAssertTrue(panel.assignedScreen === secondary)
+        XCTAssertTrue(secondary.frame.intersects(panel.frame))
+    }
 }

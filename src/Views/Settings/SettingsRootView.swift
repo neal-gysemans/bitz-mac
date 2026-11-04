@@ -107,7 +107,10 @@ public struct SettingsRootView: View {
             // Bottom Utility Footer Bar
             bottomFooterBar
         }
-        .frame(minWidth: 660, minHeight: 560)
+        .frame(
+            minWidth: SettingsWindowManager.minimumContentSize.width,
+            minHeight: SettingsWindowManager.minimumContentSize.height
+        )
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
@@ -188,6 +191,8 @@ public struct SettingsRootView: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(isSelected ? Color.accentColor.opacity(0.3) : Color.clear, lineWidth: 1)
                     )
+                    // Clear backgrounds aren't hit-tested; without this only the icon and text of unselected tabs take clicks
+                    .contentShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
             }

@@ -6,7 +6,7 @@ import SwiftUI
 /// Application delegate managing the transparent `MascotOverlayPanel`, `WellnessPointEngine`,
 /// `ActivityMonitorService`, `AvatarScaleStore`, and `AvatarOpacityStore` lifecycle (`FR-001`, `FR-005`, `FR-006`).
 @MainActor
-public final class BitzAppDelegate: NSObject, NSApplicationDelegate {
+public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     public let riveController: ProductionRiveController
     public let engine: WellnessPointEngine
     public let activityMonitor: ActivityMonitorService
@@ -836,7 +836,6 @@ struct BitzMenuBarContentView: View {
     @ObservedObject var scaleStore: AvatarScaleStore
     @ObservedObject var opacityStore: AvatarOpacityStore
     @ObservedObject var positionStore: AvatarPositionStore
-    @ObservedObject var displayStore: DisplayPreferenceStore
     @ObservedObject var agentMonitor: AgentMonitorService
     @ObservedObject var updateStore: AppUpdateStore
     @ObservedObject var telemetryDashboard: TelemetryDashboardService
@@ -846,9 +845,7 @@ struct BitzMenuBarContentView: View {
     var audioService: CyberAudioService? = nil
     @ObservedObject var flowShieldSettings: FlowShieldSettingsStore
     @ObservedObject var flowShieldService: FlowShieldService
-    @ObservedObject var interactionSettings: MascotInteractionSettingsStore
-    public var inboxDirectoryURL: URL
-    @ObservedObject var personalitySettings: PersonalitySettingsStore
+    var onOpenSettings: () -> Void
 
     public init(
         engine: WellnessPointEngine,
@@ -856,7 +853,6 @@ struct BitzMenuBarContentView: View {
         scaleStore: AvatarScaleStore,
         opacityStore: AvatarOpacityStore,
         positionStore: AvatarPositionStore,
-        displayStore: DisplayPreferenceStore,
         agentMonitor: AgentMonitorService,
         updateStore: AppUpdateStore,
         telemetryDashboard: TelemetryDashboardService,
@@ -866,20 +862,15 @@ struct BitzMenuBarContentView: View {
         flowShieldSettings: FlowShieldSettingsStore? = nil,
         flowShieldService: FlowShieldService? = nil,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
-        interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
-        inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory,
-        personalitySettings: PersonalitySettingsStore? = nil
+        onOpenSettings: @escaping () -> Void = {}
     ) {
         self.paletteStore = paletteStore
-        self.interactionSettings = interactionSettings
-        self.inboxDirectoryURL = inboxDirectoryURL
-        self.personalitySettings = personalitySettings ?? PersonalitySettingsStore()
+        self.onOpenSettings = onOpenSettings
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.scaleStore = scaleStore
         self.opacityStore = opacityStore
         self.positionStore = positionStore
-        self.displayStore = displayStore
         self.agentMonitor = agentMonitor
         self.updateStore = updateStore
         self.telemetryDashboard = telemetryDashboard
@@ -1067,15 +1058,20 @@ struct BitzMenuBarContentView: View {
 
             // MARK: - 4. Dedicated Settings Entrance
             Button("Settings...") {
-                openSettingsWindow()
+                onOpenSettings()
             }
             .keyboardShortcut(",", modifiers: [.command])
 
             Button("Check for Updates...") {
                 Task {
                     await updateStore.checkForUpdates(manual: true)
+                    // The menu is closed by now; an unskipped available update already shows its own bubble
+                    if !updateStore.isSpeechBubbleAlertActive {
+                        engine.showTransientBubble(updateStore.statusMessage)
+                    }
                 }
             }
+            Text(updateStore.statusMessage)
 
             Divider()
 
@@ -1087,41 +1083,22 @@ struct BitzMenuBarContentView: View {
         .padding(8)
     }
 
-    private func openSettingsWindow() {
-        SettingsWindowManager.shared.showSettingsWindow(
-            rootView: SettingsRootView(
-                engine: engine,
-                activityMonitor: activityMonitor,
-                scaleStore: scaleStore,
-                opacityStore: opacityStore,
-                positionStore: positionStore,
-                displayStore: displayStore,
-                agentMonitor: agentMonitor,
-                updateStore: updateStore,
-                telemetryDashboard: telemetryDashboard,
-                telemetrySettings: telemetrySettings,
-                audioSettings: audioSettings,
-                audioPlayer: audioService,
-                flowShieldSettings: flowShieldSettings,
-                flowShieldService: flowShieldService,
-                interactionSettings: interactionSettings,
-                inboxDirectoryURL: inboxDirectoryURL,
-                paletteStore: paletteStore,
-                personalitySettings: personalitySettings
-            )
-        )
-    }
-
     // MARK: - Header & Primary Actions
 
     @ViewBuilder
     private var headerSection: some View {
         Text("Bitz the Cyber Cat")
             .font(.headline)
-        Text("State: \(engine.currentState.rawValue) (\(String(format: "%.0f", engine.currentPoints)) PTS)")
+        Text("State: \(engine.currentState.displayName) (\(String(format: "%.0f", engine.currentPoints)) PTS)")
         Text(String(format: "Streak: %.0f min • Focus: %.1f / 100", engine.continuousWorkMinutes, engine.currentPoints))
             .font(.caption)
             .foregroundStyle(.secondary)
+        if telemetrySettings.displayInMenuBarMenu {
+            let stats = telemetryDashboard.snapshot.menuBarItems(enabledMetrics: telemetrySettings.enabledMetrics)
+            if !stats.isEmpty {
+                Text(stats.joined(separator: " | "))
+            }
+        }
 
         if activityMonitor.isManualOverrideActive {
             HStack(spacing: 6) {
@@ -1175,14 +1152,13 @@ public struct BitzApp: App {
     public init() {}
 
     public var body: some Scene {
-        MenuBarExtra(appDelegate.menuBarTitle, systemImage: "cat.fill") {
+        MenuBarExtra {
             BitzMenuBarContentView(
                 engine: appDelegate.engine,
                 activityMonitor: appDelegate.activityMonitor,
                 scaleStore: appDelegate.scaleStore,
                 opacityStore: appDelegate.opacityStore,
                 positionStore: appDelegate.positionStore,
-                displayStore: appDelegate.displayStore,
                 agentMonitor: appDelegate.agentMonitor,
                 updateStore: appDelegate.updateStore,
                 telemetryDashboard: appDelegate.telemetryDashboard,
@@ -1192,10 +1168,27 @@ public struct BitzApp: App {
                 flowShieldSettings: appDelegate.flowShieldSettings,
                 flowShieldService: appDelegate.flowShieldService,
                 paletteStore: appDelegate.paletteStore,
-                interactionSettings: appDelegate.interactionSettings,
-                inboxDirectoryURL: appDelegate.fileDropService.inboxDirectoryURL,
-                personalitySettings: appDelegate.personalitySettings
+                onOpenSettings: appDelegate.showSettingsWindow
             )
+        } label: {
+            BitzMenuBarLabel(appDelegate: appDelegate)
+        }
+    }
+}
+
+/// Status item label. Observes only the delegate, which publishes on title changes, not on every telemetry tick.
+struct BitzMenuBarLabel: View {
+    @ObservedObject var appDelegate: BitzAppDelegate
+
+    var body: some View {
+        if appDelegate.menuBarTitle == "Bitz" {
+            Image(systemName: "cat.fill")
+                .accessibilityLabel("Bitz")
+        } else {
+            HStack {
+                Image(systemName: "cat.fill")
+                Text(appDelegate.menuBarTitle)
+            }
         }
     }
 }

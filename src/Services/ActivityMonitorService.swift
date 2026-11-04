@@ -845,7 +845,9 @@ public final class ActivityMonitorService: ObservableObject {
     public let idleBreakThresholdSeconds: TimeInterval
     public let overheatingTemperatureThresholdCelsius: Double
     public let overheatingCPULoadThresholdPercent: Double
+    public let ownBundleIdentifier: String?
 
+    public static let sampleIntervalSeconds: TimeInterval = 5.0
     public static let customProductiveKey = "customProductiveBundleIDs"
     public static let customDistractionKey = "customDistractionBundleIDs"
 
@@ -877,6 +879,7 @@ public final class ActivityMonitorService: ObservableObject {
     @Published public private(set) var lastAppIsProductive: Bool = false
 
     private var pollingTimer: Timer?
+    private var lastTabSample: (url: String?, title: String?, isVideoPlaying: Bool) = (nil, nil, false)
     private var sleepWakeObservers: [NSObjectProtocol] = []
     private var sleepRecordedAt: Date? = nil
 
@@ -886,7 +889,8 @@ public final class ActivityMonitorService: ObservableObject {
         productiveBundleIDs: Set<String> = ActivityMonitorService.defaultProductiveBundleIDs,
         idleBreakThresholdSeconds: TimeInterval = 60.0,
         overheatingTemperatureThresholdCelsius: Double = 80.0,
-        overheatingCPULoadThresholdPercent: Double = 85.0
+        overheatingCPULoadThresholdPercent: Double = 85.0,
+        ownBundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) {
         self.engine = engine
         self.telemetry = telemetry
@@ -894,6 +898,7 @@ public final class ActivityMonitorService: ObservableObject {
         self.idleBreakThresholdSeconds = idleBreakThresholdSeconds
         self.overheatingTemperatureThresholdCelsius = overheatingTemperatureThresholdCelsius
         self.overheatingCPULoadThresholdPercent = overheatingCPULoadThresholdPercent
+        self.ownBundleIdentifier = ownBundleIdentifier
 
         if let storedProd = UserDefaults.standard.stringArray(forKey: Self.customProductiveKey) {
             self.customProductiveIDs = Set(storedProd)
@@ -915,6 +920,7 @@ public final class ActivityMonitorService: ObservableObject {
         }
         UserDefaults.standard.set(Array(customProductiveIDs), forKey: Self.customProductiveKey)
         UserDefaults.standard.set(Array(customDistractionIDs), forKey: Self.customDistractionKey)
+        reclassifyLastApp()
         performSampleTick()
     }
 
@@ -925,6 +931,7 @@ public final class ActivityMonitorService: ObservableObject {
         customDistractionIDs.remove(bundleID)
         UserDefaults.standard.set(Array(customProductiveIDs), forKey: Self.customProductiveKey)
         UserDefaults.standard.set(Array(customDistractionIDs), forKey: Self.customDistractionKey)
+        reclassifyLastApp()
         performSampleTick()
     }
 
@@ -1011,7 +1018,7 @@ public final class ActivityMonitorService: ObservableObject {
     }
 
     /// Starts periodic telemetry sampling on the main run loop with timer coalescing tolerance (`NFR-001`).
-    public func startMonitoring(intervalSeconds: TimeInterval = 5.0) {
+    public func startMonitoring(intervalSeconds: TimeInterval = ActivityMonitorService.sampleIntervalSeconds) {
         stopMonitoring()
         isMonitoring = true
         performSampleTick()
@@ -1140,32 +1147,12 @@ public final class ActivityMonitorService: ObservableObject {
         let currentTime = telemetry.now()
 
         let frontmostBundleID = telemetry.frontmostBundleIdentifier()
-        let activeTab = telemetry.activeBrowserTab()
-        let activeTabURL = activeTab.url
-        let activeTabTitle = activeTab.title
-        lastFrontmostBundleID = frontmostBundleID
-
-        let baseAppName = telemetry.frontmostApplicationName() ?? frontmostBundleID ?? "Unknown"
-        if let urlStr = activeTabURL, let host = URL(string: urlStr)?.host {
-            let cleanHost = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
-            lastFrontmostAppName = "\(baseAppName) [\(cleanHost)]"
-        } else {
-            lastFrontmostAppName = baseAppName
+        // Opening Settings activates Bitz; keep classifying and scoring the app the user came from (#94)
+        if ownBundleIdentifier == nil || frontmostBundleID != ownBundleIdentifier {
+            sampleFrontmostApp(bundleID: frontmostBundleID)
         }
-
-        let isDopamineTab = isDopamineStreamingOrSocialTab(url: activeTabURL, title: activeTabTitle)
-        let isEntertainmentApp = isDopamineMediaOrGameBundleID(frontmostBundleID)
-        let isVideoPlaying = telemetry.isVideoPlaybackActive() && !isWorkMeetingBundleID(frontmostBundleID)
-        let watchingMediaOrDistraction = isDopamineTab || isEntertainmentApp || isVideoPlaying
-        isWatchingMediaOrDistraction = watchingMediaOrDistraction
-
-        let isProductive = isProductiveBundleID(
-            frontmostBundleID,
-            activeTabURL: activeTabURL,
-            activeTabTitle: activeTabTitle,
-            isVideoPlaying: isVideoPlaying
-        )
-        lastAppIsProductive = isProductive
+        let isProductive = lastAppIsProductive
+        let watchingMediaOrDistraction = isWatchingMediaOrDistraction
 
         if isManualOverrideActive {
             let state = telemetry.thermalState()
@@ -1211,6 +1198,39 @@ public final class ActivityMonitorService: ObservableObject {
         }
 
         engine.evaluateWorkTick(isProductiveApp: isProductive)
+    }
+
+    private func sampleFrontmostApp(bundleID frontmostBundleID: String?) {
+        let activeTab = telemetry.activeBrowserTab()
+        let activeTabURL = activeTab.url
+        let activeTabTitle = activeTab.title
+        lastFrontmostBundleID = frontmostBundleID
+
+        let baseAppName = telemetry.frontmostApplicationName() ?? frontmostBundleID ?? "Unknown"
+        if let urlStr = activeTabURL, let host = URL(string: urlStr)?.host {
+            let cleanHost = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+            lastFrontmostAppName = "\(baseAppName) [\(cleanHost)]"
+        } else {
+            lastFrontmostAppName = baseAppName
+        }
+
+        let isDopamineTab = isDopamineStreamingOrSocialTab(url: activeTabURL, title: activeTabTitle)
+        let isEntertainmentApp = isDopamineMediaOrGameBundleID(frontmostBundleID)
+        let isVideoPlaying = telemetry.isVideoPlaybackActive() && !isWorkMeetingBundleID(frontmostBundleID)
+        isWatchingMediaOrDistraction = isDopamineTab || isEntertainmentApp || isVideoPlaying
+
+        lastTabSample = (activeTabURL, activeTabTitle, isVideoPlaying)
+        reclassifyLastApp()
+    }
+
+    /// Mark/reset run from Settings while Bitz is frontmost and sampling is skipped, so re-score the remembered app (#94).
+    private func reclassifyLastApp() {
+        lastAppIsProductive = isProductiveBundleID(
+            lastFrontmostBundleID,
+            activeTabURL: lastTabSample.url,
+            activeTabTitle: lastTabSample.title,
+            isVideoPlaying: lastTabSample.isVideoPlaying
+        )
     }
 
     private func evaluateThermalSample() {

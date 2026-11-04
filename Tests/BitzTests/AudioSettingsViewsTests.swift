@@ -122,7 +122,6 @@ final class AudioSettingsViewsTests: XCTestCase {
             scaleStore: scaleStore,
             opacityStore: opacityStore,
             positionStore: positionStore,
-            displayStore: displayStore,
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,

@@ -601,14 +601,15 @@ public final class MascotOverlayPanel: NSPanel {
         }
     }
 
-    /// Updates `currentScaleFactor`, resizes the hosted `contentView`, and re-anchors the panel on `screen`.
-    public func applyScaleFactor(_ scaleFactor: CGFloat, on screen: NSScreen? = NSScreen.main) {
+    /// Updates `currentScaleFactor`, resizes the hosted `contentView`, and re-anchors the panel on `screen`
+    /// (`nil` keeps the assigned screen; `NSScreen.main` is the focused display and would pull Bitz off a second screen).
+    public func applyScaleFactor(_ scaleFactor: CGFloat, on screen: NSScreen? = nil) {
         self.currentScaleFactor = CGFloat(AvatarScaleStore.sanitizeScaleFactor(Double(scaleFactor)))
         repositionOnScreen(of: screen)
     }
 
     /// Updates `currentCornerAnchor`, clears custom freeform position, persists to `UserDefaults`, and re-anchors the panel on `screen`.
-    public func applyCornerAnchor(_ corner: ScreenCornerAnchor, on screen: NSScreen? = NSScreen.main) {
+    public func applyCornerAnchor(_ corner: ScreenCornerAnchor, on screen: NSScreen? = nil) {
         self.customOrigin = nil
         self.currentCornerAnchor = corner
         UserDefaults.standard.set(corner.rawValue, forKey: Self.cornerAnchorUserDefaultsKey)

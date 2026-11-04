@@ -93,12 +93,13 @@ public struct GeneralSettingsTabView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
-                        Picker("Size Presets", selection: Binding(
-                            get: { AvatarSizePreset.allCases.first(where: { scaleStore.isPresetSelected($0) }) ?? .defaultSize },
-                            set: { scaleStore.selectPreset($0) }
+                        // Optional selection: no segment is highlighted while the size sits between presets
+                        Picker("Size Presets", selection: Binding<AvatarSizePreset?>(
+                            get: { AvatarSizePreset.allCases.first(where: { scaleStore.isPresetSelected($0) }) },
+                            set: { if let preset = $0 { scaleStore.selectPreset(preset) } }
                         )) {
                             ForEach(AvatarSizePreset.allCases, id: \.rawValue) { preset in
-                                Text(preset.percentageText).tag(preset)
+                                Text(preset.percentageText).tag(Optional(preset))
                             }
                         }
                         .pickerStyle(.segmented)
@@ -147,12 +148,12 @@ public struct GeneralSettingsTabView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
-                        Picker("Opacity Presets", selection: Binding(
-                            get: { AvatarOpacityPreset.allCases.first(where: { opacityStore.isPresetSelected($0) }) ?? .translucent },
-                            set: { opacityStore.selectPreset($0) }
+                        Picker("Opacity Presets", selection: Binding<AvatarOpacityPreset?>(
+                            get: { AvatarOpacityPreset.allCases.first(where: { opacityStore.isPresetSelected($0) }) },
+                            set: { if let preset = $0 { opacityStore.selectPreset(preset) } }
                         )) {
                             ForEach(AvatarOpacityPreset.allCases, id: \.rawValue) { preset in
-                                Text(preset.percentageText).tag(preset)
+                                Text(preset.percentageText).tag(Optional(preset))
                             }
                         }
                         .pickerStyle(.segmented)
@@ -269,6 +270,10 @@ public struct GeneralSettingsTabView: View {
                         Text("Primary Screen").tag(DisplayTargetMode.primary)
                         Text("Follow Active Screen").tag(DisplayTargetMode.followActive)
                         Text("All Screens").tag(DisplayTargetMode.allDisplays)
+                        // Only offered once chosen below or by dragging, since it needs a display ID
+                        if displayStore.targetMode == .specific {
+                            Text(displayStore.summaryTitle).tag(DisplayTargetMode.specific)
+                        }
                     }
                     .pickerStyle(.menu)
 
@@ -364,7 +369,7 @@ public struct GeneralSettingsTabView: View {
 
                     Spacer()
 
-                    let stateTitle = (engine?.currentState ?? .balanced).rawValue.capitalized
+                    let stateTitle = paletteStore.previewSlot?.title ?? (engine?.currentState ?? .balanced).displayName
                     Text("\(stateTitle) • \(scaleStore.formattedSizeSummary) • \(opacityStore.formattedOpacitySummary)")
                         .font(.caption2.monospacedDigit().bold())
                         .foregroundStyle(.secondary)

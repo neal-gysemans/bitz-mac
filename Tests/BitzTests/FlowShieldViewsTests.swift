@@ -93,7 +93,6 @@ final class FlowShieldViewsTests: XCTestCase {
             scaleStore: delegate.scaleStore,
             opacityStore: delegate.opacityStore,
             positionStore: delegate.positionStore,
-            displayStore: delegate.displayStore,
             agentMonitor: delegate.agentMonitor,
             updateStore: delegate.updateStore,
             telemetryDashboard: delegate.telemetryDashboard,

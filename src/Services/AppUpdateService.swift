@@ -270,6 +270,7 @@ public final class AppUpdateStore: ObservableObject {
         guard !isChecking else { return }
 
         isChecking = true
+        let previousStatusMessage = statusMessage
         statusMessage = "Checking for updates..."
 
         do {
@@ -292,9 +293,8 @@ public final class AppUpdateStore: ObservableObject {
                 statusMessage = "You're on the latest version (v\(currentVersionString))"
             }
         } catch {
-            if manual {
-                statusMessage = "Could not check for updates"
-            }
+            // A silent background failure must not leave "Checking for updates..." showing in the menu (#94)
+            statusMessage = manual ? "Could not check for updates" : previousStatusMessage
         }
 
         isChecking = false

@@ -28,7 +28,6 @@ final class MenuBarContentViewTests: XCTestCase {
             scaleStore: scaleStore,
             opacityStore: opacityStore,
             positionStore: positionStore,
-            displayStore: displayStore,
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
@@ -69,7 +68,6 @@ final class MenuBarContentViewTests: XCTestCase {
             scaleStore: scaleStore,
             opacityStore: opacityStore,
             positionStore: positionStore,
-            displayStore: displayStore,
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
@@ -105,7 +103,6 @@ final class MenuBarContentViewTests: XCTestCase {
             scaleStore: scaleStore,
             opacityStore: opacityStore,
             positionStore: positionStore,
-            displayStore: displayStore,
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
@@ -149,7 +146,6 @@ final class MenuBarContentViewTests: XCTestCase {
             scaleStore: AvatarScaleStore(userDefaults: defaults),
             opacityStore: AvatarOpacityStore(userDefaults: defaults),
             positionStore: AvatarPositionStore(userDefaults: defaults),
-            displayStore: DisplayPreferenceStore(userDefaults: defaults),
             agentMonitor: agentMonitor,
             updateStore: AppUpdateStore(userDefaults: defaults),
             telemetryDashboard: TelemetryDashboardService(settingsStore: telemetrySettings),
@@ -186,7 +182,6 @@ final class MenuBarContentViewTests: XCTestCase {
             scaleStore: AvatarScaleStore(userDefaults: defaults),
             opacityStore: AvatarOpacityStore(userDefaults: defaults),
             positionStore: AvatarPositionStore(userDefaults: defaults),
-            displayStore: DisplayPreferenceStore(userDefaults: defaults),
             agentMonitor: AgentMonitorService(adapters: []),
             updateStore: AppUpdateStore(userDefaults: defaults),
             telemetryDashboard: TelemetryDashboardService(settingsStore: TelemetrySettingsStore(userDefaults: defaults)),
@@ -198,5 +193,53 @@ final class MenuBarContentViewTests: XCTestCase {
         XCTAssertEqual(paletteStore.selectedPreset, .cyberpunkClassic)
         paletteStore.selectPreset(.nord)
         XCTAssertEqual(paletteStore.selectedPreset, .nord)
+    }
+
+    /// #94 A2 / A3: the update status and, when enabled, the stats line are rendered in the dropdown.
+    func testMenuShowsUpdateStatusAndGatedStatsLine() {
+        let suiteName = "MenuBarStatsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let engine = WellnessPointEngine(riveController: ProductionRiveController(), userDefaults: defaults)
+        let telemetrySettings = TelemetrySettingsStore(userDefaults: defaults)
+        telemetrySettings.enabledMetrics = [.ram]
+        let telemetryDashboard = TelemetryDashboardService(settingsStore: telemetrySettings)
+        let updateStore = AppUpdateStore(userDefaults: defaults)
+        let menuView = BitzMenuBarContentView(
+            engine: engine,
+            activityMonitor: ActivityMonitorService(engine: engine, telemetry: MockTelemetryProvider()),
+            scaleStore: AvatarScaleStore(userDefaults: defaults),
+            opacityStore: AvatarOpacityStore(userDefaults: defaults),
+            positionStore: AvatarPositionStore(userDefaults: defaults),
+            agentMonitor: AgentMonitorService(adapters: [], userDefaults: defaults),
+            updateStore: updateStore,
+            telemetryDashboard: telemetryDashboard,
+            telemetrySettings: telemetrySettings
+        )
+        let stats = telemetryDashboard.snapshot.menuBarItems(enabledMetrics: [.ram]).joined(separator: " | ")
+        XCTAssertFalse(stats.isEmpty)
+
+        XCTAssertTrue(String(describing: menuView.body).contains(updateStore.statusMessage))
+        XCTAssertTrue(String(describing: menuView.body).contains(stats))
+        telemetrySettings.displayInMenuBarMenu = false
+        XCTAssertFalse(String(describing: menuView.body).contains(stats))
+    }
+
+    /// #94 A4: the status item label observes the delegate, so a title change must publish.
+    func testDelegatePublishesMenuBarTitleChanges() {
+        let suiteName = "MenuBarTitleTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let delegate = BitzAppDelegate(userDefaults: defaults)
+        var changes = 0
+        let cancellable = delegate.objectWillChange.sink { changes += 1 }
+        defer { cancellable.cancel() }
+
+        delegate.telemetrySettings.enabledMetrics = [.ram]
+        delegate.telemetrySettings.displayInMenuBarTitle = true
+        XCTAssertNotEqual(delegate.menuBarTitle, "Bitz")
+        XCTAssertGreaterThan(changes, 0)
     }
 }

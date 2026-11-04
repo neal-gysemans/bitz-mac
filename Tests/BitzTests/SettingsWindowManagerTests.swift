@@ -100,4 +100,18 @@ final class SettingsWindowManagerTests: XCTestCase {
         XCTAssertEqual(AnimatedBitzCharacterView.frameInterval(for: .overheating), 1.0 / 30.0, accuracy: 0.0001)
         XCTAssertEqual(AnimatedBitzCharacterView.frameInterval(for: .balanced, isPetReactionActive: true), 1.0 / 30.0, accuracy: 0.0001)
     }
+
+    /// #94 A9: AppKit gets the SwiftUI content minimum, so the window can't shrink below it.
+    func testWindowContentMinSizeMatchesRootMinimum() {
+        let manager = SettingsWindowManager()
+        manager.showSettingsWindow(rootView: Text("Min"))
+        defer { manager.closeSettingsWindow() }
+
+        XCTAssertEqual(manager.window?.contentMinSize, SettingsWindowManager.minimumContentSize)
+
+        // Reopen re-hosts the content after teardown, which must not drop the minimum
+        manager.closeSettingsWindow()
+        manager.showSettingsWindow(rootView: Text("Min"))
+        XCTAssertEqual(manager.window?.contentMinSize, SettingsWindowManager.minimumContentSize)
+    }
 }

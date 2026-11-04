@@ -215,7 +215,6 @@ final class SettingsViewsTests: XCTestCase {
             scaleStore: scaleStore,
             opacityStore: opacityStore,
             positionStore: positionStore,
-            displayStore: displayStore,
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
@@ -226,5 +225,17 @@ final class SettingsViewsTests: XCTestCase {
         activityMonitor.clearManualOverride()
         XCTAssertFalse(activityMonitor.isManualOverrideActive)
         _ = menuView.body
+    }
+
+    /// #94 A6: the engine's per-tick deltas are shown per minute at the 5 s sample cadence.
+    func testPointRateLabelIsPerMinute() {
+        XCTAssertEqual(BehaviorSettingsTabView.pointRateLabel(isProductive: true), "+6 PTS / min")
+        XCTAssertEqual(BehaviorSettingsTabView.pointRateLabel(isProductive: false), "-18 PTS / min")
+    }
+
+    /// #94 A10: states read as words, not enum cases.
+    func testStateDisplayNamesAreHumanReadable() {
+        XCTAssertEqual(BitzState.superCharged.displayName, "Super Charged")
+        XCTAssertEqual(BitzState.dopamineSad.displayName, "Dopamine Sad")
     }
 }

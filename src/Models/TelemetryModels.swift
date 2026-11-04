@@ -377,8 +377,15 @@ public struct TelemetrySnapshot: Equatable, Sendable {
 
     /// Formats a single-line compact Menu Bar title representation.
     public func menuBarTitle(enabledMetrics: Set<TelemetryMetric>) -> String {
-        guard !enabledMetrics.isEmpty else { return "Bitz" }
+        let items = menuBarItems(enabledMetrics: enabledMetrics)
+        if items.isEmpty {
+            return "Bitz"
+        }
+        return "Bitz • " + items.joined(separator: " | ")
+    }
 
+    /// Compact per-metric badges shared by the menu bar title and the dropdown stats line.
+    public func menuBarItems(enabledMetrics: Set<TelemetryMetric>) -> [String] {
         var items: [String] = []
         if enabledMetrics.contains(.agents) {
             if agents.activeCount > 0 {
@@ -405,11 +412,7 @@ public struct TelemetrySnapshot: Equatable, Sendable {
         if enabledMetrics.contains(.battery), let bat = battery {
             items.append(bat.compactBadge)
         }
-
-        if items.isEmpty {
-            return "Bitz"
-        }
-        return "Bitz • " + items.joined(separator: " | ")
+        return items
     }
 
     /// Formats the Cyber HUD readout string displayed underneath the mascot.

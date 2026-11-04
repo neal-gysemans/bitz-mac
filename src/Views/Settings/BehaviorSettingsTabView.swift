@@ -103,7 +103,7 @@ public struct BehaviorSettingsTabView: View {
                                     .font(.subheadline.bold())
                             }
                             Spacer()
-                            Text(isProductive ? "+0.5 PTS / min" : "-1.5 PTS / min")
+                            Text(Self.pointRateLabel(isProductive: isProductive))
                                 .font(.caption.bold())
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
@@ -349,8 +349,14 @@ public struct BehaviorSettingsTabView: View {
 
     // MARK: - Helpers
 
+    /// The engine applies its delta once per activity sample, so convert per-tick points to per-minute.
+    static func pointRateLabel(isProductive: Bool) -> String {
+        let delta = isProductive ? WellnessPointEngine.productiveTickDelta : WellnessPointEngine.unproductiveTickDelta
+        return String(format: "%+.0f PTS / min", delta * 60 / ActivityMonitorService.sampleIntervalSeconds)
+    }
+
     private func stateBadge(state: BitzState) -> some View {
-        Text(state.rawValue.capitalized)
+        Text(state.displayName)
             .font(.subheadline.bold())
             .padding(.horizontal, 10)
             .padding(.vertical, 3)
