@@ -66,6 +66,8 @@ public struct AgentApprovalHUDView: View {
                         .foregroundStyle(Color.black)
                     }
                     .buttonStyle(.plain)
+                    .help("Approve the agent's request to continue")
+                    .accessibilityLabel("Approve Agent Request")
                 }
 
                 // JUMP button: brings owning terminal / IDE forward (FR-004)
@@ -87,6 +89,8 @@ public struct AgentApprovalHUDView: View {
                     .foregroundStyle(Color.white)
                 }
                 .buttonStyle(.plain)
+                .help("Bring the agent's terminal or IDE to the front")
+                .accessibilityLabel("Jump to Agent Application")
 
                 // DIFF button: opens git diff for the working directory (FR-005)
                 Button(action: {
@@ -107,6 +111,8 @@ public struct AgentApprovalHUDView: View {
                     .foregroundStyle(Color.black)
                 }
                 .buttonStyle(.plain)
+                .help("Open a diff of the agent's proposed changes")
+                .accessibilityLabel("View Agent Changes Diff")
             }
         }
         .padding(.top, 2)

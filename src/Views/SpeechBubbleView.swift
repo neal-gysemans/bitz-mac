@@ -172,6 +172,8 @@ public struct SpeechBubbleView: View {
                     .foregroundStyle(Color.black)
             }
             .buttonStyle(.plain)
+            .help("Acknowledge and dismiss this warning")
+            .accessibilityLabel("Dismiss Warning")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -200,6 +202,8 @@ public struct SpeechBubbleView: View {
                         .foregroundStyle(Color.black)
                 }
                 .buttonStyle(.plain)
+                .help("Download the latest update")
+                .accessibilityLabel("Download Update")
 
                 Button(action: { updateStore.dismissAlert() }) {
                     Text("LATER")
@@ -210,6 +214,8 @@ public struct SpeechBubbleView: View {
                         .foregroundStyle(Color.white.opacity(0.8))
                 }
                 .buttonStyle(.plain)
+                .help("Dismiss the update alert for now")
+                .accessibilityLabel("Dismiss Update Alert")
             }
         }
         .padding(.horizontal, 10)
