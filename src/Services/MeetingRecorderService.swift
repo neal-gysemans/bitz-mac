@@ -205,6 +205,10 @@ public final class MeetingAudioStreamMixer: @unchecked Sendable {
         if let cached = converters[key] {
             converter = cached
         } else if let created = AVAudioConverter(from: buffer.format, to: targetFormat) {
+            // Voice-processed mic input is 4 discrete channels; the default map is [-1, -1] (silence). Ch 0 is the processed voice.
+            if buffer.format.channelCount > 2 {
+                created.channelMap = [0, 0]
+            }
             converters[key] = created
             converter = created
         } else {
@@ -273,6 +277,19 @@ public final class MeetingAudioStreamMixer: @unchecked Sendable {
         }
     }
 
+    /// Writes queued system audio unmixed, so a backlog from a mic gap is never mixed against fresh mic audio.
+    public func flushSecondary() {
+        lock.lock()
+        defer { lock.unlock() }
+        flushSecondaryLocked()
+    }
+
+    private func flushSecondaryLocked() {
+        if let backlog = dequeueSecondary(frameCount: secondaryLeftQueue.count) {
+            write(backlog)
+        }
+    }
+
     /// Pops `frameCount` queued system-audio frames into a canonical buffer. Caller holds `lock`.
     private func dequeueSecondary(frameCount: Int) -> AVAudioPCMBuffer? {
         guard frameCount > 0,
@@ -303,9 +320,7 @@ public final class MeetingAudioStreamMixer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         // Keep the system audio the mic had not consumed yet
-        if let tail = dequeueSecondary(frameCount: secondaryLeftQueue.count) {
-            write(tail)
-        }
+        flushSecondaryLocked()
         audioFile = nil
         converters.removeAll()
         secondaryLeftQueue.removeAll()
@@ -353,6 +368,8 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
     private var configurationObserver: NSObjectProtocol?
     private var interruptionHandler: (@Sendable (String) -> Void)?
     private let sampleQueue = DispatchQueue(label: "com.bitz.meetingrecorder.audio", qos: .userInitiated)
+    /// Serializes device-change restarts with teardown, so a restart can never revive a stopped engine.
+    private let micQueue = DispatchQueue(label: "com.bitz.meetingrecorder.mic", qos: .userInitiated)
 
     public var onCaptureInterrupted: (@Sendable (String) -> Void)? {
         get { lock.withLock { interruptionHandler } }
@@ -409,6 +426,9 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
 
             if captureMicrophone {
                 let engine = AVAudioEngine()
+                lock.withLock {
+                    self.audioEngine = engine
+                }
                 try startMicrophone(on: engine)
 
                 let observer = NotificationCenter.default.addObserver(
@@ -416,12 +436,12 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
                     object: engine,
                     queue: nil
                 ) { [weak self] notification in
-                    guard let engine = notification.object as? AVAudioEngine else { return }
-                    self?.restartMicrophone(engine)
+                    guard let self, let engine = notification.object as? AVAudioEngine else { return }
+                    // Off AVAudioEngine's posting thread, serialized with teardown
+                    self.micQueue.async { self.restartMicrophone(engine) }
                 }
 
                 lock.withLock {
-                    self.audioEngine = engine
                     self.configurationObserver = observer
                 }
             }
@@ -446,8 +466,14 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
             NotificationCenter.default.removeObserver(observer)
         }
         if let engine {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
+            // Waits for an in-flight restart on `micQueue`, then stops whatever it started
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                micQueue.async {
+                    engine.inputNode.removeTap(onBus: 0)
+                    engine.stop()
+                    continuation.resume()
+                }
+            }
         }
         if let stream {
             try? await stream.stopCapture()
@@ -460,7 +486,7 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
         // Echo cancellation so speaker output is not re-recorded by the mic; also re-applied on device-change restarts
         do {
             try inputNode.setVoiceProcessingEnabled(true)
-            // Keep the user's meeting audio at full volume instead of ducking it while we record
+            // `.min` is the lowest ducking level, not none: other audio is still lowered slightly while recording
             inputNode.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
                 enableAdvancedDucking: false,
                 duckingLevel: .min
@@ -468,7 +494,22 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
         } catch {
             NSLog("Bitz meeting recorder: voice processing unavailable, recording without it: \(error.localizedDescription)")
         }
-        // Read after enabling voice processing, which can change the input sample rate and channel count
+
+        do {
+            try installTapAndStart(engine)
+        } catch where inputNode.isVoiceProcessingEnabled {
+            // Voice processing enabled but the engine would not start with it: retry once without it
+            NSLog("Bitz meeting recorder: start failed with voice processing, retrying without it: \(error.localizedDescription)")
+            inputNode.removeTap(onBus: 0)
+            engine.stop()
+            try inputNode.setVoiceProcessingEnabled(false)
+            try installTapAndStart(engine)
+        }
+    }
+
+    private func installTapAndStart(_ engine: AVAudioEngine) throws {
+        let inputNode = engine.inputNode
+        // Read after toggling voice processing, which changes the input sample rate and channel count
         let inputFormat = inputNode.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0 && inputFormat.channelCount > 0 else {
             throw MeetingRecorderError.captureStartFailed("No valid microphone input format available.")
@@ -481,12 +522,19 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
         }
 
         engine.prepare()
+        guard lock.withLock({ self.audioEngine === engine }) else {
+            throw MeetingRecorderError.captureStartFailed("Capture was stopped.")
+        }
         try engine.start()
     }
 
     /// The input device changed (AirPods, unplugged mic): the engine has stopped, so rebuild the tap with the new format.
+    /// Runs on `micQueue`.
     private func restartMicrophone(_ engine: AVAudioEngine) {
-        guard lock.withLock({ self.audioEngine === engine }) else { return }
+        let (isCurrent, activeMixer) = lock.withLock { (self.audioEngine === engine, self.mixer) }
+        guard isCurrent else { return }
+        // System audio queued during the gap is written unmixed, so it is not mixed later against fresh mic audio
+        activeMixer?.flushSecondary()
         engine.inputNode.removeTap(onBus: 0)
         do {
             try startMicrophone(on: engine)
@@ -579,6 +627,7 @@ public final class MeetingRecorderService: ObservableObject {
     private var isStarting = false
     private var isStopping = false
     private var failureDismissTask: Task<Void, Never>?
+    private var transcribingMetadata: (metadata: MeetingRecordingMetadata, url: URL)?
     var failureBubbleDurationNanoseconds: UInt64 = 6_000_000_000
 
     private static let knownMeetingAppNames: Set<String> = [
@@ -782,6 +831,8 @@ public final class MeetingRecorderService: ObservableObject {
             state = .transcribing(sessionID: sessionID, sessionDirectoryURL: sessionDir)
             statusMessage = "✨ Meeting saved! Transcribing audio on-device..."
 
+            transcribingMetadata = (metadata, metadataURL)
+            defer { transcribingMetadata = nil }
             do {
                 let transcript = try await transcriptionService.transcribe(
                     audioFileURL: audioURL,
@@ -860,6 +911,13 @@ public final class MeetingRecorderService: ObservableObject {
         if case .failed = state {
             state = .idle
         }
+    }
+
+    /// Quit path while transcribing: synchronously replaces the "pending" status so metadata never stays stale.
+    public func markTranscriptionInterrupted() {
+        guard var pending = transcribingMetadata else { return }
+        pending.metadata.transcriptStatus = "interrupted"
+        Self.writeMetadata(pending.metadata, to: pending.url)
     }
 
     // MARK: - Internal Helpers

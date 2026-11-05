@@ -80,12 +80,16 @@ struct MockMeetingTranscriptionService: MeetingTranscriptionProviding {
     ]
     var fullText: String = "Hello team. Let's ship Bitz."
     var error: Error?
+    var delayNanoseconds: UInt64 = 0
 
     func transcribe(
         audioFileURL: URL,
         sessionID: String,
         locale: Locale
     ) async throws -> MeetingTranscript {
+        if delayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+        }
         if let error { throw error }
         return MeetingTranscript(
             sessionID: sessionID,
@@ -503,5 +507,65 @@ final class MeetingRecorderServiceTests: XCTestCase {
         }
         XCTAssertEqual(SpeechFrameworkTranscriptionService.recognitionTimeout(forAudioDuration: 0), 60)
         XCTAssertEqual(SpeechFrameworkTranscriptionService.recognitionTimeout(forAudioDuration: 600), 1_260)
+    }
+
+    func testVoiceProcessingFourChannelInputConvertsToAudibleStereo() throws {
+        // Voice-processed input reports 4 discrete channels; the default converter map would emit silence
+        var layout = AudioChannelLayout()
+        layout.mChannelLayoutTag = kAudioChannelLayoutTag_DiscreteInOrder | 4
+        let source = AVAudioFormat(standardFormatWithSampleRate: 48_000, channelLayout: AVAudioChannelLayout(layout: &layout))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: source, frameCapacity: 1_024))
+        buffer.frameLength = 1_024
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        for i in 0..<1_024 {
+            channels[0][i] = 0.5
+            for ch in 1..<4 { channels[ch][i] = 0 }
+        }
+
+        let mixer = try MeetingAudioStreamMixer(outputFileURL: tempDir.appendingPathComponent("vp.m4a"))
+        defer { mixer.close() }
+        let converted = try XCTUnwrap(mixer.convertToCanonical(buffer))
+        let out = try XCTUnwrap(converted.floatChannelData)
+        XCTAssertEqual(converted.format.channelCount, 2)
+        XCTAssertEqual(out[0][100], 0.5, accuracy: 0.01)
+        XCTAssertEqual(out[1][100], 0.5, accuracy: 0.01)
+    }
+
+    func testFlushSecondaryWritesQueuedSystemAudioBeforeMicResumes() throws {
+        let outputURL = tempDir.appendingPathComponent("flush.m4a")
+        let mixer = try MeetingAudioStreamMixer(outputFileURL: outputURL)
+        let oneSecond = try XCTUnwrap(MockMeetingAudioCaptureEngine.makeSineWaveBuffer(frequency: 880.0, frameCount: 48_000))
+        let mic = try XCTUnwrap(MockMeetingAudioCaptureEngine.makeSineWaveBuffer(frequency: 440.0, frameCount: 4_800))
+
+        // 1 s of system audio queued during a mic gap is written unmixed, so fresh mic audio is not mixed against it
+        mixer.appendSystemAudioBuffer(oneSecond, mixWithMic: true)
+        mixer.flushSecondary()
+        mixer.appendMicrophoneBuffer(mic)
+        mixer.close()
+
+        let readFile = try AVAudioFile(forReading: outputURL)
+        XCTAssertGreaterThanOrEqual(Double(readFile.length) / readFile.fileFormat.sampleRate, 1.08)
+    }
+
+    func testQuitDuringTranscriptionMarksMetadataInterrupted() async throws {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        var transcription = MockMeetingTranscriptionService()
+        transcription.delayNanoseconds = 200_000_000
+        let service = makeService(captureEngine: captureEngine, transcription: transcription)
+        await service.startRecording()
+
+        let stop = Task { await service.stopRecording() }
+        while !service.isTranscribing {
+            await Task.yield()
+        }
+        service.markTranscriptionInterrupted()
+
+        let metadataURL = try XCTUnwrap(captureEngine.lastOutputURL).deletingLastPathComponent()
+            .appendingPathComponent("metadata.json")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let meta = try decoder.decode(MeetingRecordingMetadata.self, from: Data(contentsOf: metadataURL))
+        XCTAssertEqual(meta.transcriptStatus, "interrupted")
+        await stop.value
     }
 }

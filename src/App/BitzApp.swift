@@ -435,6 +435,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
+        meetingRecorder.markTranscriptionInterrupted()
         overlayPanels.forEach { panel in
             panel.orderOut(nil)
             panel.close()
