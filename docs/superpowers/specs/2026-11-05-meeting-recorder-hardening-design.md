@@ -30,6 +30,7 @@ Ship the meeting recorder in a state where a recording can never be silently los
 - **At Stop:** mix the two CAFs offline (sum × 0.85 headroom, clamp) into `audio.m4a` (AAC, as today), then delete the CAFs only after the `.m4a` is verified readable. On mix/encode failure keep the CAFs and report it.
 - **Quit path:** close both CAFs (instant, always valid); run the mix only if it fits the existing 5 s cap, otherwise leave CAFs and mark metadata `audio_status: "unmixed"`.
 - **Launch recovery:** on start-up, any session folder with CAFs and no `audio.m4a` is mixed in the background (utility priority, one at a time) and gets metadata `recovered: true`. No transcription on recovery (user can use Transcribe Again, D6).
+- **Session lock:** the recording process holds `flock` on `<session>/.recording.lock` (0600) from start until the stop's last metadata write; recovery skips a session whose lock another process holds and recovers a crashed one (lock released by the kernel) at once. Where `flock` is unsupported (some network volumes) it falls back to skipping sessions touched in the last 2 minutes.
 - **Removes:** `MeetingAudioStreamMixer` queueing (`secondaryLeftQueue`, `flushSecondary`, `maxQueuedSamples`, overflow path). `mixBuffers` survives as the offline mix kernel.
 - Per-track files also make speaker separation ("me" vs "others") possible later; not in scope (§6).
 

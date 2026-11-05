@@ -339,9 +339,6 @@ final class MeetingRecorderServiceTests: XCTestCase {
         )
     }
 
-    /// A launch after the live-session window, so files the test just wrote count as left behind, not as live.
-    private let laterLaunch: () -> Date = { Date().addingTimeInterval(MeetingRecorderService.liveSessionWindow + 60) }
-
     private func decodeMetadata(_ url: URL) throws -> MeetingRecordingMetadata {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -933,13 +930,18 @@ final class MeetingRecorderServiceTests: XCTestCase {
         }
         let before = try snapshot()
 
-        let partial = MeetingTranscript(sessionID: first.sessionID, localeIdentifier: "en-US", fullText: "Hello", segments: [],
-                                        warning: "Transcript may be incomplete: transcription timed out")
-        for rerun in [MeetingTranscript(sessionID: first.sessionID, localeIdentifier: "en-US", fullText: " ", segments: []), partial] {
+        let timedOut = "Transcript may be incomplete: transcription timed out"
+        func partial(_ text: String) -> MeetingTranscript {
+            MeetingTranscript(sessionID: first.sessionID, localeIdentifier: "en-US", fullText: text, segments: [], warning: timedOut)
+        }
+        let empty = MeetingTranscript(sessionID: first.sessionID, localeIdentifier: "en-US", fullText: " ", segments: [])
+        // A partial re-run with more words than the complete transcript still loses to it
+        for (rerun, warning) in [(empty, MeetingBubble.noSpeechKeptWarning),
+                                 (partial("Hello team. Let's ship Bitz today, all of it."), MeetingBubble.stoppedEarlyKeptWarning)] {
             next.transcript = rerun
             await service.transcribeAgain()
             let again = try XCTUnwrap(service.lastCompletedResult)
-            XCTAssertEqual(again.warning, MeetingBubble.lessTextKeptWarning)
+            XCTAssertEqual(again.warning, warning)
             XCTAssertEqual(again.transcriptTextURL, txtURL)
             XCTAssertEqual(try snapshot(), before, "transcript, metadata and export are kept")
         }
@@ -949,9 +951,20 @@ final class MeetingRecorderServiceTests: XCTestCase {
             MeetingTranscript(sessionID: first.sessionID, localeIdentifier: "en-US", fullText: "", segments: []),
             to: first.sessionDirectoryURL
         )
+        next.transcript = partial("Hello there")
         await service.transcribeAgain()
-        XCTAssertEqual(service.lastCompletedResult?.warning, partial.warning)
-        XCTAssertTrue(try String(contentsOf: txtURL, encoding: .utf8).contains("Hello"))
+        XCTAssertEqual(service.lastCompletedResult?.warning, timedOut)
+        XCTAssertTrue(try String(contentsOf: txtURL, encoding: .utf8).contains("Hello there"))
+
+        // Partial over partial (N5): replaced only by more words
+        next.transcript = partial("Goodbye now")
+        await service.transcribeAgain()
+        XCTAssertEqual(service.lastCompletedResult?.warning, MeetingBubble.noMoreTextKeptWarning)
+        XCTAssertTrue(try String(contentsOf: txtURL, encoding: .utf8).contains("Hello there"))
+        next.transcript = partial("Hello there, and welcome")
+        await service.transcribeAgain()
+        XCTAssertEqual(service.lastCompletedResult?.warning, timedOut)
+        XCTAssertTrue(try String(contentsOf: txtURL, encoding: .utf8).contains("Hello there, and welcome"))
     }
 
     func testTranscriptFilesChangeTogetherOrNotAtAll() throws {
@@ -1319,7 +1332,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
     // MARK: - Stop-time mix, quit budget, launch recovery
 
     func testQuitWithExhaustedBudgetKeepsTracksUnmixedForRecovery() async throws {
-        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), nowProvider: laterLaunch)
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
         await service.startRecording()
 
         await service.finalizeForTermination(mixBudget: .zero)
@@ -1363,7 +1376,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
     func testEmptyRecordingIsMarkedEmptyAndNotRetriedByRecovery() async throws {
         let captureEngine = MockMeetingAudioCaptureEngine()
         captureEngine.trackFrameCount = 0
-        let service = makeService(captureEngine: captureEngine, nowProvider: laterLaunch)
+        let service = makeService(captureEngine: captureEngine)
         await service.startRecording()
         await service.stopRecording(transcribe: false)
 
@@ -1436,7 +1449,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
     }
 
     func testLaunchRecoveryMixesOrphanedSessionsAndLeavesCompleteOnesAlone() async throws {
-        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), nowProvider: laterLaunch)
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
         let fm = FileManager.default
 
         // Crash mid-recording: tracks, no metadata, and a partial mix from a quit that was cut short
@@ -1483,7 +1496,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
     }
 
     func testRecoveryNeverReplacesAVerifiedMixWithALeftoverTrack() async throws {
-        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), nowProvider: laterLaunch)
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
         let session = try makeSession("2026-11-05_10-00-00")
         let mic = session.appendingPathComponent(MeetingTrackWriter.micFileName)
         let system = session.appendingPathComponent(MeetingTrackWriter.systemFileName)
@@ -1522,17 +1535,19 @@ final class MeetingRecorderServiceTests: XCTestCase {
         in session: URL,
         audioFileNames: [String],
         audioStatus: MeetingRecordingMetadata.AudioStatus,
-        mixedTracks: [String]?
+        mixedTracks: [String]?,
+        startedAt: Date = Date(),
+        transcriptStatus: MeetingRecordingMetadata.TranscriptStatus = .skipped
     ) {
         MeetingRecorderService.writeMetadata(MeetingRecordingMetadata(
-            sessionID: session.lastPathComponent, startedAt: Date(), endedAt: Date(), durationSeconds: 1,
+            sessionID: session.lastPathComponent, startedAt: startedAt, endedAt: startedAt, durationSeconds: 1,
             captureMicrophone: true, captureSystemAudio: true, detectedAppNames: [],
-            audioFileNames: audioFileNames, audioStatus: audioStatus, mixedTracks: mixedTracks, transcriptStatus: .skipped
+            audioFileNames: audioFileNames, audioStatus: audioStatus, mixedTracks: mixedTracks, transcriptStatus: transcriptStatus
         ), to: session.appendingPathComponent("metadata.json"))
     }
 
     func testATrackUnreadableAtMixTimeIsNeverDeletedAsALeftover() async throws {
-        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), nowProvider: laterLaunch)
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
         let session = try makeSession("2026-11-05_10-30-00")
         let system = session.appendingPathComponent(MeetingTrackWriter.systemFileName)
         try writeTrack(session.appendingPathComponent(MeetingTrackWriter.micFileName), frames: 96_000)
@@ -1577,7 +1592,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
     }
 
     func testRecoveryReconcilesOlderMetadataAKillLeftStale() async throws {
-        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), nowProvider: laterLaunch)
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
         let session = try makeSession("2026-11-05_10-45-00")
         try writeTrack(session.appendingPathComponent(MeetingTrackWriter.micFileName))
         XCTAssertTrue(MeetingTrackMixer.mixSession(in: session).mixed)
@@ -1587,7 +1602,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
              "durationSeconds":60,"captureMicrophone":true,"captureSystemAudio":true,"detectedAppNames":["zoom.us"],
              "audioFileNames":["mic.caf","system.caf"],"audioStatus":"unmixed","transcriptStatus":"skipped"}
             """, in: session)
-        XCTAssertTrue(MeetingRecorderService.needsRecovery(session, now: laterLaunch()))
+        XCTAssertTrue(MeetingRecorderService.needsRecovery(session, now: Date()))
 
         await service.recoverUnmixedSessions()
 
@@ -1599,11 +1614,11 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(meta.durationSeconds, 60)
         let keys = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: metadataURL)) as? [String: Any]).keys
         XCTAssertTrue(keys.contains("audio_status") && !keys.contains("audioStatus"), "rewritten in the new schema")
-        XCTAssertFalse(MeetingRecorderService.needsRecovery(session, now: laterLaunch()), "settled after one launch")
+        XCTAssertFalse(MeetingRecorderService.needsRecovery(session, now: Date()), "settled after one launch")
     }
 
     func testMixedSessionWithAnUnreadableTrackStaysMixedAcrossLaunches() async throws {
-        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), nowProvider: laterLaunch)
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
         let session = try makeSession("2026-11-05_11-00-00")
         try writeTrack(session.appendingPathComponent(MeetingTrackWriter.micFileName))
         try Data("not audio".utf8).write(to: session.appendingPathComponent(MeetingTrackWriter.systemFileName))
@@ -1624,7 +1639,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
     }
 
     func testRecoveryOnlyTouchesBitzSessionFolders() async throws {
-        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), nowProvider: laterLaunch)
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
         let fm = FileManager.default
         let foreign = try makeSession("Podcast drafts")
         try writeTrack(foreign.appendingPathComponent(MeetingTrackWriter.micFileName))
@@ -1644,7 +1659,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
     }
 
     func testOlderMetadataDecodesAndRecoveryMergesIntoIt() async throws {
-        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), nowProvider: laterLaunch)
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
         // Written before the per-source tracks: one audioFileName, no audioStatus
         let legacy = """
             {"sessionID":"2026-11-04_09-00-00","startedAt":"2026-11-04T09:00:00Z","endedAt":"2026-11-04T09:30:00Z",
@@ -1682,7 +1697,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
 
     func testLaunchRecoveryNeverRunsDuringARecording() async throws {
         let captureEngine = MockMeetingAudioCaptureEngine()
-        let service = makeService(captureEngine: captureEngine, nowProvider: laterLaunch)
+        let service = makeService(captureEngine: captureEngine)
         let orphan = tempDir.appendingPathComponent("2026-11-05_09-00-00", isDirectory: true)
         try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: false)
         try writeTrack(orphan.appendingPathComponent(MeetingTrackWriter.micFileName))
@@ -1698,22 +1713,89 @@ final class MeetingRecorderServiceTests: XCTestCase {
 
     // MARK: - Another Bitz instance's live recording (dev and release builds share the recordings folder)
 
-    func testRecoveryLeavesAnotherInstancesLiveRecordingAlone() async throws {
-        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+    /// Another process's recording, as `MeetingSessionLock` holds it: flock is per open file, so this conflicts in-process too.
+    private func holdSessionLock(in session: URL) throws -> Int32 {
+        let fd = open(session.appendingPathComponent(MeetingSessionLock.fileName).path, O_RDWR | O_CREAT, 0o600)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        XCTAssertEqual(flock(fd, LOCK_EX | LOCK_NB), 0)
+        return fd
+    }
+
+    private func lockFileExists(in session: URL) -> Bool {
+        FileManager.default.fileExists(atPath: session.appendingPathComponent(MeetingSessionLock.fileName).path)
+    }
+
+    /// N3: a system-audio-only recording silent for minutes (SCStream writes nothing) keeps its lock, so its old file dates
+    /// never let another instance's recovery mix and delete it.
+    func testRecoveryLeavesAnotherInstancesSilentLiveRecordingAlone() async throws {
         let session = try makeSession("2026-11-05_10-00-00")
-        let writer = try MeetingTrackWriter(fileURL: session.appendingPathComponent(MeetingTrackWriter.micFileName), sessionStartHostSeconds: 0)
+        let lock = try holdSessionLock(in: session)
+        let writer = try MeetingTrackWriter(fileURL: session.appendingPathComponent(MeetingTrackWriter.systemFileName), sessionStartHostSeconds: 0)
         let second = try XCTUnwrap(MockMeetingAudioCaptureEngine.makeSineWaveBuffer(frequency: 440, frameCount: 48_000))
         writer.append(second, hostSeconds: nil)
+        let longAgo = Date().addingTimeInterval(-3_600)
+        for url in [session, session.appendingPathComponent(MeetingTrackWriter.systemFileName)] {
+            try FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: url.path)
+        }
 
+        XCTAssertEqual(MeetingSessionLock.state(of: session), .live)
         XCTAssertFalse(MeetingRecorderService.needsRecovery(session, now: Date()))
-        await service.recoverUnmixedSessions()
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: session.path), ["mic.caf"], "the live track is not mixed or deleted")
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        await service.runLaunchMaintenance()
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: session.path).sorted(), [".recording.lock", "system.caf"],
+                       "the live track is not mixed or deleted")
+        XCTAssertEqual(MeetingSessionLock.state(of: session), .live, "the probe released its own lock")
 
         for _ in 0..<5 { writer.append(second, hostSeconds: nil) }
         writer.close()
         XCTAssertTrue(MeetingTrackMixer.mixSession(in: session).mixed, "the owner's stop mix still lands")
         XCTAssertEqual(Double(try XCTUnwrap(MeetingTrackMixer.mixedLength(in: session))), 288_000,
                        accuracy: Double(MeetingTrackMixer.lengthToleranceFrames), "all 6 s are in the mix")
+        close(lock)
+    }
+
+    /// N2: a crash leaves the lock file, but the kernel released the lock, so the next launch recovers at once.
+    func testACrashedSessionIsRecoveredAtOnceAndItsStaleLockRemoved() async throws {
+        let session = try makeSession("2026-11-05_12-00-00")
+        close(try holdSessionLock(in: session))
+        try writeTrack(session.appendingPathComponent(MeetingTrackWriter.micFileName))
+        XCTAssertEqual(MeetingSessionLock.state(of: session), .notLive)
+        XCTAssertTrue(MeetingRecorderService.needsRecovery(session, now: Date()), "just-written files, no 2-minute wait")
+
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        await service.runLaunchMaintenance()
+
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: session.path).sorted(), ["audio.m4a", "metadata.json"])
+        XCTAssertEqual(service.lastCompletedResult?.sessionDirectoryURL.lastPathComponent, session.lastPathComponent)
+    }
+
+    func testTheRecordingHoldsItsLockUntilSavedOnEveryPath() async throws {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        let service = makeService(captureEngine: captureEngine)
+        for quit in [false, true] {
+            await service.startRecording()
+            let session = try XCTUnwrap(captureEngine.lastSessionDirectoryURL)
+            XCTAssertEqual(MeetingSessionLock.state(of: session), .live)
+            let mode = try XCTUnwrap(FileManager.default.attributesOfItem(
+                atPath: session.appendingPathComponent(MeetingSessionLock.fileName).path)[.posixPermissions] as? Int)
+            XCTAssertEqual(mode & 0o077, 0, "owner only")
+            if quit {
+                await service.finalizeForTermination(mixBudget: .zero)
+            } else {
+                await service.stopRecording()
+            }
+            XCTAssertFalse(lockFileExists(in: session), quit ? "quit stop" : "normal stop")
+            XCTAssertEqual(MeetingSessionLock.state(of: session), .notLive)
+        }
+
+        // A failed start removes its folder, lock file included, and leaves no lock held
+        let failing = MockMeetingAudioCaptureEngine()
+        failing.shouldThrowOnStart = MeetingRecorderError.captureStartFailed("no device")
+        let failed = makeService(captureEngine: failing)
+        failed.settingsStore.setMeetingsRootDirectoryURL(tempDir.appendingPathComponent("Failed", isDirectory: true))
+        await failed.startRecording()
+        XCTAssertEqual(failed.state, .failed)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: tempDir.appendingPathComponent("Failed").path), [])
     }
 
     func testATrackThatGrowsDuringARecoveryMixIsNeverDeleted() throws {
@@ -1733,39 +1815,39 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(try AVAudioFile(forReading: mic).length, 96_000)
     }
 
-    func testASessionUntouchedForLongerThanTheWindowIsRecovered() async throws {
-        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+    /// Volumes without flock (some network shares) fall back to the file dates.
+    func testWithoutFlockASessionUntouchedForLongerThanTheWindowIsRecovered() async throws {
         let session = try makeSession("2026-11-05_10-30-00")
         let mic = session.appendingPathComponent(MeetingTrackWriter.micFileName)
         try writeTrack(mic)
+        let noFlock: (URL) -> MeetingSessionLock.State = { _ in .unsupported }
+        XCTAssertFalse(MeetingRecorderService.needsRecovery(session, now: Date(), lockState: noFlock), "a fresh file date counts as live")
         let stale = Date().addingTimeInterval(-MeetingRecorderService.liveSessionWindow - 1)
         for url in [mic, session] {
             try FileManager.default.setAttributes([.modificationDate: stale], ofItemAtPath: url.path)
         }
-        XCTAssertTrue(MeetingRecorderService.needsRecovery(session, now: Date()))
-        XCTAssertFalse(MeetingRecorderService.needsRecovery(session, now: Date(), modificationDate: { _ in Date() }), "a fresh file date counts as live")
-
-        await service.recoverUnmixedSessions()
-
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: session.path).sorted(), ["audio.m4a", "metadata.json"])
+        XCTAssertTrue(MeetingRecorderService.needsRecovery(session, now: Date(), lockState: noFlock))
+        XCTAssertFalse(MeetingRecorderService.needsRecovery(session, now: Date(), lockState: noFlock, modificationDate: { _ in Date() }))
+        XCTAssertFalse(MeetingRecorderService.needsRecovery(session, now: Date(), lockState: { _ in .live }))
     }
 
     // MARK: - Transcribe Again after a relaunch (D6)
 
-    func testARecoveredSessionCanBeTranscribedAgainButATranscribedOneIsNotPicked() async throws {
+    func testARecoveredSessionCanBeTranscribedAgain() async throws {
         final class URLLog: @unchecked Sendable { var urls: [URL] = [] }
         let log = URLLog()
         var transcription = MockMeetingTranscriptionService()
         transcription.onTranscribe = { log.urls.append($0) }
-        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), transcription: transcription, nowProvider: laterLaunch)
-        // A crash left tracks only; a newer session already has its transcript
-        let orphan = try makeSession("2026-11-05_09-00-00")
-        try writeTrack(orphan.appendingPathComponent(MeetingTrackWriter.micFileName))
-        let transcribed = try makeSession("2026-11-05_11-00-00")
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), transcription: transcription)
+        // An older session has its transcript; a crash left the newest one as tracks only
+        let transcribed = try makeSession("2026-11-05_08-00-00")
         try writeTrack(transcribed.appendingPathComponent(MeetingTrackWriter.micFileName))
         XCTAssertTrue(MeetingTrackMixer.mixSession(in: transcribed).mixed)
-        writeSessionMetadata(in: transcribed, audioFileNames: ["audio.m4a"], audioStatus: .mixed, mixedTracks: ["mic.caf"])
+        writeSessionMetadata(in: transcribed, audioFileNames: ["audio.m4a"], audioStatus: .mixed, mixedTracks: ["mic.caf"],
+                             startedAt: Date().addingTimeInterval(-3_600))
         try "done".write(to: transcribed.appendingPathComponent("transcript.txt"), atomically: true, encoding: .utf8)
+        let orphan = try makeSession("2026-11-05_09-00-00")
+        try writeTrack(orphan.appendingPathComponent(MeetingTrackWriter.micFileName))
         XCTAssertFalse(service.canTranscribeAgain)
 
         await service.runLaunchMaintenance()
@@ -1778,7 +1860,35 @@ final class MeetingRecorderServiceTests: XCTestCase {
 
         XCTAssertEqual(log.urls.map { $0.deletingLastPathComponent().lastPathComponent + "/" + $0.lastPathComponent }, ["2026-11-05_09-00-00/audio.m4a"])
         XCTAssertNotNil(service.lastCompletedResult?.transcriptTextURL)
+        XCTAssertNil(service.lastCompletedResult?.warning)
         XCTAssertEqual(try decodeMetadata(orphan.appendingPathComponent("metadata.json")).transcriptStatus, .completed)
+    }
+
+    /// N4: only the newest session is ever offered, and not once its transcription failed.
+    func testOnlyTheNewestSessionIsOfferedAndNotAfterItFailed() throws {
+        func mixedSession(_ name: String, hoursAgo: Double, status: MeetingRecordingMetadata.TranscriptStatus) throws -> URL {
+            let session = try makeSession(name)
+            try writeTrack(session.appendingPathComponent(MeetingTrackWriter.micFileName))
+            XCTAssertTrue(MeetingTrackMixer.mixSession(in: session).mixed)
+            writeSessionMetadata(in: session, audioFileNames: ["audio.m4a"], audioStatus: .mixed, mixedTracks: ["mic.caf"],
+                                 startedAt: Date().addingTimeInterval(-hoursAgo * 3_600), transcriptStatus: status)
+            return session
+        }
+        let picked = { MeetingRecorderService.newestUntranscribedSession(in: self.tempDir)?.sessionDirectoryURL.lastPathComponent }
+        _ = try mixedSession("2026-11-05_08-00-00", hoursAgo: 3, status: .skipped)
+        let transcribed = try mixedSession("2026-11-05_09-00-00", hoursAgo: 2, status: .completed)
+        try "done".write(to: transcribed.appendingPathComponent("transcript.txt"), atomically: true, encoding: .utf8)
+        XCTAssertNil(picked(), "an untranscribed session older than a transcribed one is not offered")
+
+        let failed = try mixedSession("2026-11-05_10-00-00", hoursAgo: 1, status: .failed)
+        XCTAssertNil(picked(), "a failed transcription was already offered once")
+
+        writeSessionMetadata(in: failed, audioFileNames: ["audio.m4a"], audioStatus: .mixed, mixedTracks: ["mic.caf"],
+                             startedAt: Date().addingTimeInterval(-3_600), transcriptStatus: .interrupted)
+        XCTAssertEqual(picked(), failed.lastPathComponent)
+        let lock = try holdSessionLock(in: failed)
+        XCTAssertNil(picked(), "another instance still holds it")
+        close(lock)
     }
 
     func testASessionStoppedByQuitIsOfferedForTranscribeAgainAtNextLaunch() async throws {
@@ -1787,11 +1897,55 @@ final class MeetingRecorderServiceTests: XCTestCase {
         await before.finalizeForTermination()
         let quitSession = try XCTUnwrap(before.lastCompletedResult?.sessionDirectoryURL)
 
-        let relaunched = makeService(captureEngine: MockMeetingAudioCaptureEngine(), nowProvider: laterLaunch)
+        let relaunched = makeService(captureEngine: MockMeetingAudioCaptureEngine())
         await relaunched.runLaunchMaintenance()
 
         XCTAssertEqual(relaunched.lastCompletedResult?.sessionDirectoryURL.lastPathComponent, quitSession.lastPathComponent)
         XCTAssertTrue(relaunched.canTranscribeAgain)
+    }
+
+    /// N1: a quit that skipped the mix leaves both tracks; the session is offered only once recovery mixed it, so
+    /// Transcribe Again never transcribes the mic track alone.
+    func testAQuitStopThatSkippedTheMixIsOfferedOnlyOnceMixed() async throws {
+        final class URLLog: @unchecked Sendable { var urls: [URL] = [] }
+        let log = URLLog()
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        let before = makeService(captureEngine: captureEngine)
+        await before.startRecording()
+        let session = try XCTUnwrap(captureEngine.lastSessionDirectoryURL)
+        try writeTrack(session.appendingPathComponent(MeetingTrackWriter.systemFileName))
+        await before.finalizeForTermination(mixBudget: .zero)
+        XCTAssertEqual(MeetingTrackMixer.audioFileNames(in: session), ["mic.caf", "system.caf"])
+
+        XCTAssertNil(MeetingRecorderService.newestUntranscribedSession(in: tempDir), "tracks only: not offered")
+
+        var transcription = MockMeetingTranscriptionService()
+        transcription.onTranscribe = { log.urls.append($0) }
+        let relaunched = makeService(captureEngine: MockMeetingAudioCaptureEngine(), transcription: transcription)
+        await relaunched.runLaunchMaintenance()
+        XCTAssertEqual(relaunched.lastCompletedResult?.audioFileURL.lastPathComponent, "audio.m4a", "offered once recovery mixed it")
+
+        await relaunched.transcribeAgain()
+        XCTAssertEqual(log.urls.map(\.lastPathComponent), ["audio.m4a"])
+        XCTAssertNil(relaunched.lastCompletedResult?.warning)
+    }
+
+    /// Safety net: whenever transcription falls back to mic.caf while system.caf is there too, the result says so.
+    func testTranscribingTheMicTrackAloneWarns() async throws {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        captureEngine.blocksMixOutput = true
+        let service = makeService(captureEngine: captureEngine)
+        await service.startRecording()
+        let session = try XCTUnwrap(captureEngine.lastSessionDirectoryURL)
+        try writeTrack(session.appendingPathComponent(MeetingTrackWriter.systemFileName))
+        await service.stopRecording()
+
+        let result = try XCTUnwrap(service.lastCompletedResult)
+        XCTAssertEqual(result.audioFileURL.lastPathComponent, "mic.caf")
+        XCTAssertTrue(result.warning?.contains(MeetingBubble.micOnlyWarning) ?? false, result.warning ?? "")
+
+        await service.transcribeAgain()
+        XCTAssertTrue(service.lastCompletedResult?.warning?.contains(MeetingBubble.micOnlyWarning) ?? false)
     }
 }
 

@@ -239,6 +239,10 @@ public struct MeetingTranscript: Codable, Equatable, Sendable {
         !fullText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !segments.isEmpty
     }
 
+    public var wordCount: Int {
+        fullText.split(whereSeparator: \.isWhitespace).count
+    }
+
     /// Formats a human-readable plain-text transcript with timestamped lines for `transcript.txt`.
     public func formattedPlainText() -> String {
         var lines: [String] = [

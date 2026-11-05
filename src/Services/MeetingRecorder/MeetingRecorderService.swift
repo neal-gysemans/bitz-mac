@@ -40,6 +40,8 @@ public final class MeetingRecorderService: ObservableObject {
 
     private var activeSessionID: String?
     private var activeSessionDirectoryURL: URL?
+    /// Held from start until the stop's last metadata write, so another Bitz instance's recovery leaves the session alone.
+    private var activeSessionLock: MeetingSessionLock?
     private var activeStartedAt: Date?
     private var activeDetectedApps: [String] = []
     private var activeCaptureWarning: String?
@@ -196,6 +198,7 @@ public final class MeetingRecorderService: ObservableObject {
 
         let startDate = nowProvider()
         var createdSessionDir: URL?
+        var sessionLock: MeetingSessionLock?
 
         do {
             let sessionDir = try Self.createSessionDirectory(
@@ -203,6 +206,8 @@ public final class MeetingRecorderService: ObservableObject {
                 baseName: MeetingFormatting.sessionFolderName(for: startDate)
             )
             createdSessionDir = sessionDir
+            // Before any track exists, so a folder with tracks and no held lock is never a live recording
+            sessionLock = MeetingSessionLock(sessionDirectory: sessionDir)
             let sessionID = sessionDir.lastPathComponent
             try await captureEngine.startCapture(
                 sessionDirectoryURL: sessionDir,
@@ -212,6 +217,7 @@ public final class MeetingRecorderService: ObservableObject {
 
             activeSessionID = sessionID
             activeSessionDirectoryURL = sessionDir
+            activeSessionLock = sessionLock
             activeStartedAt = startDate
             Self.restrictToOwner(
                 sessionDir.appendingPathComponent(MeetingTrackWriter.micFileName),
@@ -226,6 +232,7 @@ public final class MeetingRecorderService: ObservableObject {
             present(.recording, hideAfter: Self.recordingBubbleDuration)
             onPlaySound?(.meetingRecordingStarted)
         } catch {
+            sessionLock?.release()
             // Only the folder this attempt just created; an earlier recording's folder is never reused or removed
             if let createdSessionDir {
                 try? FileManager.default.removeItem(at: createdSessionDir)
@@ -329,6 +336,9 @@ public final class MeetingRecorderService: ObservableObject {
                 transcriptError: &transcriptError
             )
         }
+        // After transcription's metadata write: until then a track it may be reading (failed mix) stays protected
+        activeSessionLock?.release()
+        activeSessionLock = nil
 
         showCompletion(MeetingRecordingResult(
             sessionID: sessionID,
@@ -460,10 +470,9 @@ public final class MeetingRecorderService: ObservableObject {
         } catch {
             return giveUp(error.localizedDescription, keptWarning: "\(MeetingBubble.previousTranscriptKeptWarning): \(error.localizedDescription)")
         }
-        // An empty or partial re-run never replaces a transcript with text (an unreadable transcript.json counts as text)
-        let newIsLess = !transcript.hasText || transcript.warning != nil
-        if newIsLess, previousTranscript != nil, Self.decodedTranscript(at: previousJSONURL).map(\.hasText) ?? true {
-            warnings.append(MeetingBubble.lessTextKeptWarning)
+        if previousTranscript != nil,
+           let kept = Self.keptTranscriptWarning(new: transcript, previous: Self.decodedTranscript(at: previousJSONURL)) {
+            warnings.append(kept)
             return (previousTxtURL, previousJSONURL)
         }
         let written: (txtURL: URL, jsonURL: URL)
@@ -476,6 +485,12 @@ public final class MeetingRecorderService: ObservableObject {
         Self.restrictToOwner(written.txtURL, written.jsonURL)
         metadata.transcriptStatus = .completed
         metadata.transcriptLocale = transcript.localeIdentifier
+        // transcriptionAudioURL fell back to mic.caf while system.caf is there too: the others aren't in this transcript
+        let tracks = [MeetingTrackWriter.micFileName, MeetingTrackWriter.systemFileName]
+        if audioURL.lastPathComponent != MeetingTrackMixer.audioFileName,
+           Set(MeetingTrackMixer.audioFileNames(in: sessionDir)).isSuperset(of: tracks) {
+            warnings.append(MeetingBubble.micOnlyWarning)
+        }
         if let partialWarning = transcript.warning {
             warnings.append(partialWarning)
         }
@@ -499,6 +514,16 @@ public final class MeetingRecorderService: ObservableObject {
             Self.copyPathToClipboard(written.txtURL.path)
         }
         return written
+    }
+
+    /// Why a Transcribe Again keeps `previous` (nil: unreadable, treated as a complete transcript) over `new`; nil replaces it.
+    /// Empty never replaces text, partial never replaces complete, and partial replaces partial only with more words.
+    nonisolated static func keptTranscriptWarning(new: MeetingTranscript, previous: MeetingTranscript?) -> String? {
+        if let previous, !previous.hasText { return nil }
+        if !new.hasText { return MeetingBubble.noSpeechKeptWarning }
+        guard new.warning != nil else { return nil }
+        guard let previous, previous.warning != nil else { return MeetingBubble.stoppedEarlyKeptWarning }
+        return new.wordCount > previous.wordCount ? nil : MeetingBubble.noMoreTextKeptWarning
     }
 
     private func showCompletion(_ result: MeetingRecordingResult) {
@@ -543,31 +568,35 @@ public final class MeetingRecorderService: ObservableObject {
         }
     }
 
-    /// The newest session Bitz made (decodable `metadata.json`) with playable audio and no `transcript.txt`.
+    /// Only the newest session Bitz made (decodable `metadata.json`, latest `startedAt`), so the last recording is never an
+    /// older one. It is offered when it has no `transcript.txt`, its transcription never failed (that result was already
+    /// shown, with Transcribe Again), its audio is mixed (recovery mixes it first; tracks alone would give a mic-only
+    /// transcript), it is not still held by another Bitz instance, and its audio plays.
     nonisolated static func newestUntranscribedSession(in root: URL) -> MeetingRecordingResult? {
         let folders = (try? FileManager.default.contentsOfDirectory(
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
             options: .skipsHiddenFiles
         )) ?? []
-        let candidates = folders.compactMap { sessionDir -> (url: URL, metadata: MeetingRecordingMetadata)? in
+        let sessions = folders.compactMap { sessionDir -> (url: URL, metadata: MeetingRecordingMetadata)? in
             guard isSessionFolder(sessionDir),
-                  !FileManager.default.fileExists(atPath: sessionDir.appendingPathComponent("transcript.txt").path),
                   let metadata = decodedMetadata(at: sessionDir.appendingPathComponent("metadata.json")) else { return nil }
             return (sessionDir, metadata)
         }
-        for (sessionDir, metadata) in candidates.sorted(by: { $0.metadata.startedAt > $1.metadata.startedAt }) {
-            let audioURL = transcriptionAudioURL(in: sessionDir)
-            guard (try? AVAudioFile(forReading: audioURL)) != nil else { continue }
-            return MeetingRecordingResult(
-                sessionID: sessionDir.lastPathComponent,
-                sessionDirectoryURL: sessionDir,
-                audioFileURL: audioURL,
-                metadataFileURL: sessionDir.appendingPathComponent("metadata.json"),
-                durationSeconds: metadata.durationSeconds
-            )
-        }
-        return nil
+        guard let (sessionDir, metadata) = sessions.max(by: { $0.metadata.startedAt < $1.metadata.startedAt }),
+              !FileManager.default.fileExists(atPath: sessionDir.appendingPathComponent("transcript.txt").path),
+              metadata.transcriptStatus != .failed,
+              !MeetingTrackMixer.needsMix(sessionDir),
+              MeetingSessionLock.state(of: sessionDir) != .live else { return nil }
+        let audioURL = transcriptionAudioURL(in: sessionDir)
+        guard (try? AVAudioFile(forReading: audioURL)) != nil else { return nil }
+        return MeetingRecordingResult(
+            sessionID: sessionDir.lastPathComponent,
+            sessionDirectoryURL: sessionDir,
+            audioFileURL: audioURL,
+            metadataFileURL: sessionDir.appendingPathComponent("metadata.json"),
+            durationSeconds: metadata.durationSeconds
+        )
     }
 
     /// Launch recovery (D1): mixes sessions a crash or quit left as tracks, one at a time at utility priority,
@@ -662,20 +691,29 @@ public final class MeetingRecorderService: ObservableObject {
             && name.dropFirst(prefix.count).wholeMatch(of: #/[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}(-[0-9]+)?/#) != nil
     }
 
-    /// A session touched this recently may be another Bitz instance's live recording (dev and release builds share the
-    /// folder); a live writer touches its track about every 85 ms, so recovery leaves it alone.
+    /// Fallback where the volume has no `flock` (some network volumes): a session touched this recently may be another Bitz
+    /// instance's live recording (dev and release builds share the folder), so recovery leaves it alone.
     nonisolated static let liveSessionWindow: TimeInterval = 120
 
-    /// `modificationDate` reads the file's date; tests inject one.
+    /// A session another Bitz instance still holds (`MeetingSessionLock`) is skipped. `lockState` and `modificationDate`
+    /// read the files; tests inject them.
     nonisolated static func needsRecovery(
         _ sessionDir: URL,
         now: Date,
+        lockState: (URL) -> MeetingSessionLock.State = MeetingSessionLock.state(of:),
         modificationDate: (URL) -> Date? = MeetingRecorderService.modificationDate(of:)
     ) -> Bool {
         guard isSessionFolder(sessionDir) else { return false }
-        // A date ahead of `now` (clock set back) also counts as live: never mix a folder that might still be written
-        let touched = ([sessionDir] + MeetingTrackMixer.trackURLs(in: sessionDir)).compactMap(modificationDate)
-        guard touched.allSatisfy({ $0 < now.addingTimeInterval(-liveSessionWindow) }) else { return false }
+        switch lockState(sessionDir) {
+        case .live:
+            return false
+        case .notLive:
+            break
+        case .unsupported:
+            // A date ahead of `now` (clock set back) also counts as live: never mix a folder that might still be written
+            let touched = ([sessionDir] + MeetingTrackMixer.trackURLs(in: sessionDir)).compactMap(modificationDate)
+            guard touched.allSatisfy({ $0 < now.addingTimeInterval(-liveSessionWindow) }) else { return false }
+        }
         if MeetingTrackMixer.needsMix(sessionDir) { return true }
         // A verified mix whose track cleanup or final metadata write was cut short (kill right after the rename)
         guard MeetingTrackMixer.mixedLength(in: sessionDir) != nil,
@@ -690,6 +728,8 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     nonisolated static func recoverSession(_ sessionDir: URL) {
+        // A crash's stale lock; nobody held it at the scan, and a session folder never gets a new recording
+        try? FileManager.default.removeItem(at: sessionDir.appendingPathComponent(MeetingSessionLock.fileName))
         let metadataURL = sessionDir.appendingPathComponent("metadata.json")
         // Read before the mix deletes the tracks the derived metadata is measured from
         let metadata = recoveryMetadata(at: metadataURL, sessionDir: sessionDir)
@@ -952,6 +992,53 @@ public final class MeetingRecorderService: ObservableObject {
             return app.name ?? app.bundleID
         }
         return Array(Set(names)).sorted()
+    }
+}
+
+// MARK: - Session Lock (D1)
+
+/// `<session>/.recording.lock`, held with `flock` by the recording process from start until the stop's last metadata
+/// write. The kernel drops the lock when that process dies, so another Bitz instance (dev and release builds share the
+/// folder) tells a live recording, however long it has been silent, from a crashed one at once.
+final class MeetingSessionLock {
+    static let fileName = ".recording.lock"
+
+    enum State: Equatable {
+        case live
+        /// No lock file, or one nobody holds: released, or its owner crashed.
+        case notLive
+        /// `flock` failed for another reason than a holder (e.g. `ENOTSUP` on a network volume): callers fall back.
+        case unsupported
+    }
+
+    private let path: String
+    private var fd: Int32
+
+    /// nil when the file can't be created. On a volume without `flock` the file is kept anyway; probes there fall back.
+    init?(sessionDirectory: URL) {
+        path = sessionDirectory.appendingPathComponent(Self.fileName).path
+        fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return nil }
+        _ = flock(fd, LOCK_EX | LOCK_NB)
+    }
+
+    deinit { release() }
+
+    /// Unlinks the file and closes it, which drops the lock. Safe to call twice.
+    func release() {
+        guard fd >= 0 else { return }
+        unlink(path)
+        close(fd)
+        fd = -1
+    }
+
+    static func state(of sessionDirectory: URL) -> State {
+        let probe = open(sessionDirectory.appendingPathComponent(fileName).path, O_RDONLY | O_CLOEXEC)
+        guard probe >= 0 else { return errno == ENOENT ? .notLive : .unsupported }
+        // Closing drops the probe's own lock at once
+        defer { close(probe) }
+        if flock(probe, LOCK_EX | LOCK_NB) == 0 { return .notLive }
+        return errno == EWOULDBLOCK ? .live : .unsupported
     }
 }
 

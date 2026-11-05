@@ -75,7 +75,10 @@ public struct MeetingBubble: Equatable, Sendable {
     public static let speechNotAllowedReason = "Speech Recognition is not allowed — Settings → Audio."
     public static let transcriptionOffReason = "Transcription is turned off."
     public static let previousTranscriptKeptWarning = "Transcribe Again failed — previous transcript kept"
-    public static let lessTextKeptWarning = "Transcribe Again found less text — previous transcript kept"
+    public static let noSpeechKeptWarning = "Transcribe Again found no speech — previous transcript kept"
+    public static let stoppedEarlyKeptWarning = "Transcribe Again stopped early — previous complete transcript kept"
+    public static let noMoreTextKeptWarning = "Transcribe Again found no more text — previous transcript kept"
+    public static let micOnlyWarning = "Transcribed from the microphone track only — the meeting audio wasn't mixed yet."
     public static let transcriptNotSavedError = "Transcript recognized but could not be saved"
     public static let metadataUnreadableError = "metadata.json could not be read."
 
