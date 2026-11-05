@@ -537,7 +537,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let oneSecond = try XCTUnwrap(MockMeetingAudioCaptureEngine.makeSineWaveBuffer(frequency: 880.0, frameCount: 48_000))
         let mic = try XCTUnwrap(MockMeetingAudioCaptureEngine.makeSineWaveBuffer(frequency: 440.0, frameCount: 4_800))
 
-        // 1 s of system audio queued during a mic gap is written unmixed, so fresh mic audio is not mixed against it
+        // 1 s of system audio queued while the mic starts (first start or device-change restart) is flushed right after
+        // `engine.start()`, so fresh mic audio is not mixed against it. Engine-level start needs a real mic, so test the mixer.
         mixer.appendSystemAudioBuffer(oneSecond, mixWithMic: true)
         mixer.flushSecondary()
         mixer.appendMicrophoneBuffer(mic)

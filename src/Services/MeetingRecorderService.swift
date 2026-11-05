@@ -366,6 +366,8 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
     private var mixer: MeetingAudioStreamMixer?
     private var isCapturingMic: Bool = false
     private var configurationObserver: NSObjectProtocol?
+    /// Set once voice processing fails in this session, so device-change restarts never loop enable → fail → disable.
+    private var voiceProcessingFailed = false
     private var interruptionHandler: (@Sendable (String) -> Void)?
     private let sampleQueue = DispatchQueue(label: "com.bitz.meetingrecorder.audio", qos: .userInitiated)
     /// Serializes device-change restarts with teardown, so a restart can never revive a stopped engine.
@@ -395,6 +397,7 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
         lock.withLock {
             self.mixer = streamMixer
             self.isCapturingMic = captureMicrophone
+            self.voiceProcessingFailed = false
         }
 
         do {
@@ -484,15 +487,18 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
     private func startMicrophone(on engine: AVAudioEngine) throws {
         let inputNode = engine.inputNode
         // Echo cancellation so speaker output is not re-recorded by the mic; also re-applied on device-change restarts
-        do {
-            try inputNode.setVoiceProcessingEnabled(true)
-            // `.min` is the lowest ducking level, not none: other audio is still lowered slightly while recording
-            inputNode.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
-                enableAdvancedDucking: false,
-                duckingLevel: .min
-            )
-        } catch {
-            NSLog("Bitz meeting recorder: voice processing unavailable, recording without it: \(error.localizedDescription)")
+        if !lock.withLock({ voiceProcessingFailed }) {
+            do {
+                try inputNode.setVoiceProcessingEnabled(true)
+                // `.min` is the lowest ducking level, not none: other audio is still lowered slightly while recording
+                inputNode.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+                    enableAdvancedDucking: false,
+                    duckingLevel: .min
+                )
+            } catch {
+                lock.withLock { voiceProcessingFailed = true }
+                NSLog("Bitz meeting recorder: voice processing unavailable, recording without it: \(error.localizedDescription)")
+            }
         }
 
         do {
@@ -500,6 +506,7 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
         } catch where inputNode.isVoiceProcessingEnabled {
             // Voice processing enabled but the engine would not start with it: retry once without it
             NSLog("Bitz meeting recorder: start failed with voice processing, retrying without it: \(error.localizedDescription)")
+            lock.withLock { voiceProcessingFailed = true }
             inputNode.removeTap(onBus: 0)
             engine.stop()
             try inputNode.setVoiceProcessingEnabled(false)
@@ -526,15 +533,15 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
             throw MeetingRecorderError.captureStartFailed("Capture was stopped.")
         }
         try engine.start()
+        // System audio queued while the mic was starting (first start or restart) is written unmixed;
+        // left in the queue it would offset every later mic buffer for the rest of the recording
+        lock.withLock { self.mixer }?.flushSecondary()
     }
 
     /// The input device changed (AirPods, unplugged mic): the engine has stopped, so rebuild the tap with the new format.
     /// Runs on `micQueue`.
     private func restartMicrophone(_ engine: AVAudioEngine) {
-        let (isCurrent, activeMixer) = lock.withLock { (self.audioEngine === engine, self.mixer) }
-        guard isCurrent else { return }
-        // System audio queued during the gap is written unmixed, so it is not mixed later against fresh mic audio
-        activeMixer?.flushSecondary()
+        guard lock.withLock({ self.audioEngine === engine }) else { return }
         engine.inputNode.removeTap(onBus: 0)
         do {
             try startMicrophone(on: engine)
