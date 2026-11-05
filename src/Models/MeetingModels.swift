@@ -233,6 +233,12 @@ public struct MeetingTranscript: Codable, Equatable, Sendable {
     }
 }
 
+/// Why a recording has no transcript although transcription did not fail; the raw value is the bubble text.
+public enum MeetingTranscriptSkipReason: String, Equatable, Sendable {
+    case speechRecognitionNotAllowed = "Audio saved. Transcript skipped: Speech Recognition not allowed — Settings → Audio."
+    case transcriptionTurnedOff = "Audio saved. Transcript skipped: transcription is turned off."
+}
+
 /// Summary of a completed meeting recording & transcription session (#43).
 public struct MeetingRecordingResult: Equatable, Sendable {
     public let sessionID: String
@@ -244,6 +250,7 @@ public struct MeetingRecordingResult: Equatable, Sendable {
     public let durationSeconds: TimeInterval
     /// Capture interruption or transcription failure the user must see (nil when everything succeeded).
     public let warning: String?
+    public let transcriptSkipReason: MeetingTranscriptSkipReason?
 
     public init(
         sessionID: String,
@@ -253,7 +260,8 @@ public struct MeetingRecordingResult: Equatable, Sendable {
         transcriptTextURL: URL? = nil,
         transcriptJSONURL: URL? = nil,
         durationSeconds: TimeInterval,
-        warning: String? = nil
+        warning: String? = nil,
+        transcriptSkipReason: MeetingTranscriptSkipReason? = nil
     ) {
         self.sessionID = sessionID
         self.sessionDirectoryURL = sessionDirectoryURL
@@ -263,9 +271,13 @@ public struct MeetingRecordingResult: Equatable, Sendable {
         self.transcriptJSONURL = transcriptJSONURL
         self.durationSeconds = durationSeconds
         self.warning = warning
+        self.transcriptSkipReason = transcriptSkipReason
     }
 
     public var bubbleHeadline: String {
+        if let transcriptSkipReason {
+            return "⚠️ \(transcriptSkipReason.rawValue)" + (warning.map { " \($0)" } ?? "")
+        }
         if let warning {
             return "⚠️ Meeting audio saved. \(warning)"
         }

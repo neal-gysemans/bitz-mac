@@ -9,10 +9,7 @@ import XCTest
 final class MeetingTranscriptionTests: XCTestCase {
     func testSpeechFrameworkRequestRequiresOnDeviceRecognition() {
         let dummyURL = FileManager.default.temporaryDirectory.appendingPathComponent("audio.m4a")
-        let request = SpeechFrameworkTranscriptionService.makeRecognitionRequest(
-            audioFileURL: dummyURL,
-            enforceOnDevice: true
-        )
+        let request = SpeechFrameworkTranscriptionService.makeRecognitionRequest(audioFileURL: dummyURL)
         XCTAssertTrue(request.requiresOnDeviceRecognition, "Must enforce 100% offline on-device recognition")
         XCTAssertFalse(request.shouldReportPartialResults)
     }
@@ -100,5 +97,83 @@ final class MeetingTranscriptionTests: XCTestCase {
         XCTAssertEqual(transcript.fullText, "Hello team, welcome Bye")
         XCTAssertEqual(transcript.segments.count, 4)
         XCTAssertEqual(transcript.warning, "partial")
+    }
+
+    func testUtteranceAccumulatorDropsOverlappedUtterances() {
+        // Re-delivered utterance whose start shifted a little later
+        let shifted = UtteranceAccumulator()
+        shifted.add(segments: segments("Hello team", from: 2.0), formattedString: "Hello team")
+        shifted.add(segments: segments("Hello team today", from: 1.9), formattedString: "Hello team today")
+        XCTAssertEqual(shifted.transcript(sessionID: "s", localeIdentifier: "en-US").fullText, "Hello team today")
+
+        // One cumulative result spanning several earlier utterances replaces them all, later ones stay
+        let cumulative = UtteranceAccumulator()
+        cumulative.add(segments: segments("One two", from: 0.0), formattedString: "One two")
+        cumulative.add(segments: segments("Three four", from: 3.0), formattedString: "Three four")
+        cumulative.add(segments: segments("Later", from: 20.0), formattedString: "Later")
+        let span = segments("One two", from: 0.0) + segments("three four", from: 3.0)
+        cumulative.add(segments: span, formattedString: "One two three four")
+        let transcript = cumulative.transcript(sessionID: "s", localeIdentifier: "en-US")
+        XCTAssertEqual(transcript.fullText, "One two three four Later")
+        XCTAssertEqual(transcript.segments.count, 5)
+    }
+
+    // MARK: - Recognition callback handling
+
+    private typealias Step = SpeechFrameworkTranscriptionService.RecognitionStep
+
+    private func step(
+        words: String? = nil,
+        isFinal: Bool = false,
+        error: Error? = nil,
+        priorUtterance: Bool = false
+    ) -> (step: Step, transcript: MeetingTranscript) {
+        let utterances = UtteranceAccumulator()
+        if priorUtterance {
+            utterances.add(segments: segments("Earlier words", from: 0.0), formattedString: "Earlier words")
+        }
+        let result = words.map { (segments: segments($0, from: 10.0), text: $0, isFinal: isFinal) }
+        let step = SpeechFrameworkTranscriptionService.recognitionStep(result: result, error: error, utterances: utterances)
+        return (step, utterances.transcript(sessionID: "s", localeIdentifier: "en-US"))
+    }
+
+    func testRecognitionCallbackTable() {
+        let noSpeech = NSError(domain: "kAFAssistantErrorDomain", code: 1110, userInfo: [NSLocalizedDescriptionKey: "Anything"])
+        let otherError = NSError(domain: "kAFAssistantErrorDomain", code: 1101, userInfo: [NSLocalizedDescriptionKey: "Model crashed"])
+        // Detected by domain and code, never by the English message
+        let noSpeechText = NSError(domain: "SomeOtherDomain", code: 1110, userInfo: [NSLocalizedDescriptionKey: "No speech detected"])
+
+        let silent = step(error: noSpeech)
+        XCTAssertEqual(silent.step, .finishSuccess)
+        XCTAssertEqual(silent.transcript.fullText, "")
+
+        let partial = step(error: otherError, priorUtterance: true)
+        XCTAssertEqual(partial.step, .finishPartial(warning: "Transcript may be incomplete: Model crashed"))
+        XCTAssertEqual(partial.transcript.fullText, "Earlier words")
+
+        XCTAssertEqual(step(error: otherError).step, .finishFailure(.recognitionFailed("Model crashed")))
+        XCTAssertEqual(step(error: noSpeechText).step, .finishFailure(.recognitionFailed("No speech detected")))
+
+        // Precedence: an error delivered with a result still counts that result, and is not a full success
+        let errorWithResult = step(words: "Last words", error: otherError)
+        XCTAssertEqual(errorWithResult.step, .finishPartial(warning: "Transcript may be incomplete: Model crashed"))
+        XCTAssertEqual(errorWithResult.transcript.fullText, "Last words")
+
+        let final = step(words: "Last words", isFinal: true, priorUtterance: true)
+        XCTAssertEqual(final.step, .finishSuccess)
+        XCTAssertEqual(final.transcript.fullText, "Earlier words Last words")
+
+        let interim = step(words: "Middle words")
+        XCTAssertEqual(interim.step, .accumulate)
+        XCTAssertEqual(interim.transcript.fullText, "Middle words")
+    }
+
+    func testTimeoutKeepsPartialTranscript() {
+        let timeout = MeetingTranscriptionError.timedOut(60)
+        XCTAssertEqual(
+            step(error: timeout, priorUtterance: true).step,
+            .finishPartial(warning: "Transcript may be incomplete: transcription timed out")
+        )
+        XCTAssertEqual(step(error: timeout).step, .finishFailure(timeout))
     }
 }

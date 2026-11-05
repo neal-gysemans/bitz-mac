@@ -1039,6 +1039,14 @@ struct BitzMenuBarContentView: View {
                 }
             }
 
+            if meetingRecorder.canTranscribeAgain {
+                Button("Transcribe Last Recording Again") {
+                    Task {
+                        await meetingRecorder.transcribeAgain()
+                    }
+                }
+            }
+
             Toggle("Show Mascot", isOn: $positionStore.isMascotVisible)
 
             if positionStore.isPositionUnlocked {

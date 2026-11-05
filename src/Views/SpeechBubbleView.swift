@@ -269,6 +269,21 @@ public struct SpeechBubbleView: View {
                 .lineLimit(4)
                 .minimumScaleFactor(0.75)
 
+            // Transcript failed or was skipped (D6); its own row, three buttons do not fit the bubble width
+            if result.transcriptTextURL == nil {
+                Button(action: { Task { await meetingRecorder.transcribeAgain() } }) {
+                    Text("TRANSCRIBE AGAIN")
+                        .font(.system(size: 8, weight: .heavy, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(accentColor))
+                        .foregroundStyle(Color.black)
+                }
+                .buttonStyle(.plain)
+                .help("Run on-device transcription on this recording again")
+                .accessibilityLabel("Transcribe Recording Again")
+            }
+
             HStack(spacing: 6) {
                 Button(action: { meetingRecorder.revealInFinder(result.sessionDirectoryURL) }) {
                     Text("OPEN IN FINDER")

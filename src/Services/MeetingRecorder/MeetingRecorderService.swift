@@ -242,7 +242,11 @@ public final class MeetingRecorderService: ObservableObject {
         let endedAt = nowProvider()
         let duration = max(0, endedAt.timeIntervalSince(startedAt))
         let metadataURL = sessionDir.appendingPathComponent("metadata.json")
-        let shouldTranscribe = transcribe && settingsStore.autoTranscribeOnStop && permissionState.canTranscribe
+        let skipReason: MeetingTranscriptSkipReason? = !transcribe ? nil
+            : !settingsStore.autoTranscribeOnStop ? .transcriptionTurnedOff
+            : !permissionState.canTranscribe ? .speechRecognitionNotAllowed
+            : nil
+        let shouldTranscribe = transcribe && skipReason == nil
         var warnings = [activeCaptureWarning].compactMap { $0 }
 
         var metadata = MeetingRecordingMetadata(
@@ -282,79 +286,33 @@ public final class MeetingRecorderService: ObservableObject {
         // Audio and metadata are final; transcription below never blocks quit or a new start's guard
         isStopping = false
 
-        // The mix is preferred; without it, transcribe the mic track, or system audio when there is no mic track
-        let audioURL = mixed
-            ? mixedURL
-            : MeetingTrackMixer.trackURLs(in: sessionDir).first { FileManager.default.fileExists(atPath: $0.path) } ?? mixedURL
+        let audioURL = Self.transcriptionAudioURL(in: sessionDir)
 
         onPlaySound?(.charging)
 
-        var txtURL: URL?
-        var jsonURL: URL?
-
+        var transcriptURLs: (txtURL: URL, jsonURL: URL)?
         if shouldTranscribe {
             isTranscribing = true
-            state = .transcribing(sessionID: sessionID, sessionDirectoryURL: sessionDir)
-            statusMessage = "✨ Meeting saved! Transcribing audio on-device..."
-
-            transcribingMetadata = (metadata, metadataURL)
-            defer { transcribingMetadata = nil }
-            do {
-                let transcript = try await transcriptionService.transcribe(
-                    audioFileURL: audioURL,
-                    sessionID: sessionID,
-                    locale: settingsStore.transcriptionLocaleIdentifier.map(Locale.init(identifier:))
-                )
-                let written = try MeetingTranscriptWriter.write(transcript, to: sessionDir)
-                Self.restrictToOwner(written.txtURL, written.jsonURL)
-                txtURL = written.txtURL
-                jsonURL = written.jsonURL
-                metadata.transcriptStatus = "completed"
-                metadata.transcriptLocale = transcript.localeIdentifier
-                if let partialWarning = transcript.warning {
-                    warnings.append(partialWarning)
-                }
-                if let exportDirectory = settingsStore.transcriptExportDirectoryURL {
-                    do {
-                        let exported = try Self.exportTranscript(written.txtURL, sessionID: sessionID, to: exportDirectory)
-                        metadata.transcriptExportPath = exported.path
-                    } catch {
-                        warnings.append("Transcript saved, but copy to export folder failed: \(error.localizedDescription)")
-                    }
-                }
-                Self.writeMetadata(metadata, to: metadataURL)
-
-                if settingsStore.copyTranscriptPathToClipboard {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(written.txtURL.path, forType: .string)
-                }
-            } catch {
-                metadata.transcriptStatus = "failed"
-                Self.writeMetadata(metadata, to: metadataURL)
-                warnings.append("Transcript not saved: \(error.localizedDescription)")
-            }
-            isTranscribing = false
+            transcriptURLs = await transcribeSession(
+                sessionDir,
+                audioURL: audioURL,
+                metadata: &metadata,
+                metadataURL: metadataURL,
+                warnings: &warnings
+            )
         }
 
-        let result = MeetingRecordingResult(
+        showCompletion(MeetingRecordingResult(
             sessionID: sessionID,
             sessionDirectoryURL: sessionDir,
             audioFileURL: audioURL,
             metadataFileURL: metadataURL,
-            transcriptTextURL: txtURL,
-            transcriptJSONURL: jsonURL,
+            transcriptTextURL: transcriptURLs?.txtURL,
+            transcriptJSONURL: transcriptURLs?.jsonURL,
             durationSeconds: duration,
-            warning: warnings.isEmpty ? nil : warnings.joined(separator: " ")
-        )
-        lastCompletedResult = result
-        state = .completed(result)
-        isCompletionBubbleVisible = true
-        statusMessage = txtURL != nil
-            ? "Saved \(audioURL.lastPathComponent) & on-device transcript to \(sessionDir.lastPathComponent)."
-            : "Saved \(audioURL.lastPathComponent) to \(sessionDir.lastPathComponent)."
-        if let warning = result.warning {
-            statusMessage += " ⚠️ \(warning)"
-        }
+            warning: warnings.isEmpty ? nil : warnings.joined(separator: " "),
+            transcriptSkipReason: skipReason
+        ))
         onPlaySound?(.allAgentsDone)
 
         activeSessionID = nil
@@ -362,6 +320,126 @@ public final class MeetingRecorderService: ObservableObject {
         activeStartedAt = nil
         activeDetectedApps = []
         activeCaptureWarning = nil
+    }
+
+    /// Nothing is recording, stopping or transcribing, and there is a last recording to transcribe again (D6).
+    public var canTranscribeAgain: Bool {
+        lastCompletedResult != nil && !hasUnfinalizedRecording && !isTranscribing
+    }
+
+    /// Transcribe Again (D6): re-runs transcription and export on the last recording's session folder, overwriting its
+    /// transcript files and updating its metadata. Runs even with auto-transcribe off, since the user asked for it.
+    public func transcribeAgain() async {
+        guard canTranscribeAgain, let last = lastCompletedResult else { return }
+        // Set before the first await, so a double click or a start in between is refused
+        isTranscribing = true
+        let sessionDir = last.sessionDirectoryURL
+        let metadataURL = last.metadataFileURL
+        let audioURL = Self.transcriptionAudioURL(in: sessionDir)
+        refreshPermissions()
+        var warnings: [String] = []
+        var transcriptURLs: (txtURL: URL, jsonURL: URL)?
+        if !permissionState.canTranscribe {
+            isTranscribing = false
+        } else if var metadata = Self.recoveryMetadata(at: metadataURL, sessionDir: sessionDir) {
+            transcriptURLs = await transcribeSession(
+                sessionDir,
+                audioURL: audioURL,
+                metadata: &metadata,
+                metadataURL: metadataURL,
+                warnings: &warnings
+            )
+        } else {
+            isTranscribing = false
+            warnings.append("Transcript not saved: metadata.json could not be read.")
+        }
+        showCompletion(MeetingRecordingResult(
+            sessionID: last.sessionID,
+            sessionDirectoryURL: sessionDir,
+            audioFileURL: audioURL,
+            metadataFileURL: metadataURL,
+            transcriptTextURL: transcriptURLs?.txtURL,
+            transcriptJSONURL: transcriptURLs?.jsonURL,
+            durationSeconds: last.durationSeconds,
+            warning: warnings.isEmpty ? nil : warnings.joined(separator: " "),
+            transcriptSkipReason: permissionState.canTranscribe ? nil : .speechRecognitionNotAllowed
+        ))
+    }
+
+    /// The mixed `audio.m4a` is preferred; without a readable one, the mic track, or system audio when there is no mic track.
+    nonisolated static func transcriptionAudioURL(in sessionDir: URL) -> URL {
+        let mixedURL = sessionDir.appendingPathComponent(MeetingTrackMixer.audioFileName)
+        if MeetingTrackMixer.mixedLength(in: sessionDir) != nil { return mixedURL }
+        return MeetingTrackMixer.trackURLs(in: sessionDir).first { FileManager.default.fileExists(atPath: $0.path) } ?? mixedURL
+    }
+
+    /// Transcribes `audioURL` into the session's transcript files (replacing earlier ones), copies the text to the export
+    /// folder, and records the outcome in `metadata.json`. The caller sets `isTranscribing` before its first await.
+    private func transcribeSession(
+        _ sessionDir: URL,
+        audioURL: URL,
+        metadata: inout MeetingRecordingMetadata,
+        metadataURL: URL,
+        warnings: inout [String]
+    ) async -> (txtURL: URL, jsonURL: URL)? {
+        let sessionID = sessionDir.lastPathComponent
+        state = .transcribing(sessionID: sessionID, sessionDirectoryURL: sessionDir)
+        statusMessage = "✨ Meeting saved! Transcribing audio on-device..."
+        transcribingMetadata = (metadata, metadataURL)
+        defer {
+            transcribingMetadata = nil
+            isTranscribing = false
+        }
+        do {
+            let transcript = try await transcriptionService.transcribe(
+                audioFileURL: audioURL,
+                sessionID: sessionID,
+                locale: settingsStore.transcriptionLocaleIdentifier.map(Locale.init(identifier:))
+            )
+            let written = try MeetingTranscriptWriter.write(transcript, to: sessionDir)
+            Self.restrictToOwner(written.txtURL, written.jsonURL)
+            metadata.transcriptStatus = "completed"
+            metadata.transcriptLocale = transcript.localeIdentifier
+            if let partialWarning = transcript.warning {
+                warnings.append(partialWarning)
+            }
+            if let exportDirectory = settingsStore.transcriptExportDirectoryURL {
+                do {
+                    let exported = try Self.exportTranscript(written.txtURL, sessionID: sessionID, to: exportDirectory)
+                    metadata.transcriptExportPath = exported.path
+                } catch {
+                    warnings.append("Transcript saved, but copy to export folder failed: \(error.localizedDescription)")
+                }
+            }
+            Self.writeMetadata(metadata, to: metadataURL)
+
+            if settingsStore.copyTranscriptPathToClipboard {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(written.txtURL.path, forType: .string)
+            }
+            return written
+        } catch {
+            metadata.transcriptStatus = "failed"
+            Self.writeMetadata(metadata, to: metadataURL)
+            warnings.append("Transcript not saved: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func showCompletion(_ result: MeetingRecordingResult) {
+        lastCompletedResult = result
+        state = .completed(result)
+        isCompletionBubbleVisible = true
+        let folder = result.sessionDirectoryURL.lastPathComponent
+        statusMessage = result.transcriptTextURL != nil
+            ? "Saved \(result.audioFileURL.lastPathComponent) & on-device transcript to \(folder)."
+            : "Saved \(result.audioFileURL.lastPathComponent) to \(folder)."
+        if let reason = result.transcriptSkipReason {
+            statusMessage += " \(reason.rawValue)"
+        }
+        if let warning = result.warning {
+            statusMessage += " ⚠️ \(warning)"
+        }
     }
 
     /// Quit path: waits for an in-flight start/stop, then finalizes without transcribing. The mix only runs if it fits

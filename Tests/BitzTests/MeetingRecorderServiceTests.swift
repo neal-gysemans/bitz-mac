@@ -307,6 +307,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         captureEngine: MockMeetingAudioCaptureEngine,
         transcription: MockMeetingTranscriptionService = MockMeetingTranscriptionService(),
         microphone: MeetingPermissionState.Status = .authorized,
+        speechRecognition: MeetingPermissionState.Status = .authorized,
         nowProvider: @escaping () -> Date = { Date() },
         freeBytes: Int64? = .max
     ) -> MeetingRecorderService {
@@ -317,7 +318,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
             captureEngine: captureEngine,
             transcriptionService: transcription,
             permissionChecker: MockMeetingPermissionChecker(
-                state: MeetingPermissionState(microphone: microphone, screenAudio: .authorized, speechRecognition: .authorized)
+                state: MeetingPermissionState(microphone: microphone, screenAudio: .authorized, speechRecognition: speechRecognition)
             ),
             nowProvider: nowProvider,
             freeBytesProvider: { _ in freeBytes },
@@ -478,6 +479,93 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let meta = try decoder.decode(MeetingRecordingMetadata.self, from: Data(contentsOf: metadataURL))
         XCTAssertEqual(meta.transcriptStatus, "interrupted")
         await stop.value
+    }
+
+    // MARK: - Skipped transcription and Transcribe Again (D4, D6)
+
+    func testSkippedTranscriptSaysWhy() async throws {
+        let turnedOff = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        turnedOff.settingsStore.setAutoTranscribeOnStop(false)
+        await turnedOff.startRecording()
+        await turnedOff.stopRecording()
+        let offResult = try XCTUnwrap(turnedOff.lastCompletedResult)
+        XCTAssertEqual(offResult.transcriptSkipReason, .transcriptionTurnedOff)
+        XCTAssertEqual(turnedOff.activeSpeechBubbleText, "⚠️ Audio saved. Transcript skipped: transcription is turned off.")
+        XCTAssertEqual(try decodeMetadata(offResult.metadataFileURL).transcriptStatus, "skipped")
+
+        let notAllowed = makeService(captureEngine: MockMeetingAudioCaptureEngine(), speechRecognition: .denied)
+        notAllowed.settingsStore.setMeetingsRootDirectoryURL(tempDir.appendingPathComponent("denied", isDirectory: true))
+        notAllowed.settingsStore.setAutoTranscribeOnStop(true) // same defaults suite as the first service
+        await notAllowed.startRecording()
+        await notAllowed.stopRecording()
+        XCTAssertEqual(notAllowed.lastCompletedResult?.transcriptSkipReason, .speechRecognitionNotAllowed)
+        XCTAssertEqual(
+            notAllowed.activeSpeechBubbleText,
+            "⚠️ Audio saved. Transcript skipped: Speech Recognition not allowed — Settings → Audio."
+        )
+        XCTAssertTrue(notAllowed.statusMessage.contains("Speech Recognition not allowed"))
+    }
+
+    func testTranscribeAgainRewritesTranscriptUpdatesMetadataAndReexports() async throws {
+        final class URLLog: @unchecked Sendable { var urls: [URL] = [] }
+        let log = URLLog()
+        var transcription = MockMeetingTranscriptionService()
+        transcription.onTranscribe = { log.urls.append($0) }
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), transcription: transcription)
+        service.settingsStore.setMeetingsRootDirectoryURL(tempDir.appendingPathComponent("Meetings", isDirectory: true))
+        service.settingsStore.setAutoTranscribeOnStop(false)
+        await service.startRecording()
+        await service.stopRecording()
+        let first = try XCTUnwrap(service.lastCompletedResult)
+        XCTAssertNil(first.transcriptTextURL)
+        XCTAssertTrue(log.urls.isEmpty)
+        XCTAssertTrue(service.canTranscribeAgain)
+
+        let staleTxt = first.sessionDirectoryURL.appendingPathComponent("transcript.txt")
+        try "stale".write(to: staleTxt, atomically: true, encoding: .utf8)
+        let exportDir = tempDir.appendingPathComponent("Export", isDirectory: true)
+        service.settingsStore.setTranscriptExportDirectoryURL(exportDir)
+        service.settingsStore.setTranscriptionLocaleIdentifier("nl-BE")
+
+        await service.transcribeAgain()
+
+        let again = try XCTUnwrap(service.lastCompletedResult)
+        XCTAssertEqual(log.urls.map(\.lastPathComponent), ["audio.m4a"])
+        XCTAssertEqual(again.sessionDirectoryURL, first.sessionDirectoryURL)
+        XCTAssertNil(again.transcriptSkipReason)
+        XCTAssertNil(again.warning)
+        XCTAssertEqual(again.transcriptTextURL, staleTxt)
+        XCTAssertTrue(try String(contentsOf: staleTxt, encoding: .utf8).contains("[00:00] Hello team."))
+        XCTAssertFalse(service.isTranscribing)
+        XCTAssertTrue(service.isInteractiveBubbleActive)
+        XCTAssertEqual(service.activeSpeechBubbleText, "✨ Meeting saved & transcribed!")
+
+        let meta = try decodeMetadata(again.metadataFileURL)
+        XCTAssertEqual(meta.transcriptStatus, "completed")
+        XCTAssertEqual(meta.transcriptLocale, "nl-BE")
+        let exported = try XCTUnwrap(meta.transcriptExportPath)
+        XCTAssertEqual(try String(contentsOfFile: exported, encoding: .utf8), try String(contentsOf: staleTxt, encoding: .utf8))
+        XCTAssertEqual(meta.durationSeconds, first.durationSeconds, accuracy: 0.01, "recording metadata is kept")
+    }
+
+    func testTranscribeAgainIsRefusedWhileRecording() async throws {
+        final class URLLog: @unchecked Sendable { var urls: [URL] = [] }
+        let log = URLLog()
+        var transcription = MockMeetingTranscriptionService()
+        transcription.onTranscribe = { log.urls.append($0) }
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), transcription: transcription)
+        await service.startRecording()
+        await service.stopRecording()
+        XCTAssertEqual(log.urls.count, 1)
+
+        await service.startRecording()
+        XCTAssertTrue(service.isRecording)
+        XCTAssertFalse(service.canTranscribeAgain)
+        await service.transcribeAgain()
+        XCTAssertEqual(log.urls.count, 1, "no transcription while recording")
+        XCTAssertTrue(service.isRecording)
+        guard case .recording = service.state else { return XCTFail("still recording") }
+        await service.stopRecording()
     }
 
     // MARK: - Transcription language setting
