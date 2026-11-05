@@ -387,8 +387,9 @@ final class MeetingTrackWriterTests: XCTestCase {
         XCTAssertEqual(MeetingTrackMixer.audioFileNames(in: tempDir), ["audio.m4a", "system.caf"])
         // The next launch sees a finished mix, not a session to mix again
         XCTAssertFalse(MeetingTrackMixer.needsMix(tempDir))
-        XCTAssertEqual(MeetingTrackMixer.tracksCoveredByMix(in: tempDir), [])
-        XCTAssertEqual(MeetingTrackMixer.audioStatus(in: tempDir), "mixed")
+        XCTAssertEqual(outcome.mixedTracks, ["mic.caf"])
+        XCTAssertEqual(MeetingTrackMixer.tracksCoveredByMix(in: tempDir, mixedTracks: outcome.mixedTracks), [])
+        XCTAssertEqual(MeetingTrackMixer.audioStatus(in: tempDir), .mixed)
     }
 
     func testCancelledMixKeepsTracksAndLeavesNoPartialFile() async throws {

@@ -260,7 +260,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
 
         let metaData = try Data(contentsOf: result.metadataFileURL)
         let decodedMeta = try decoder.decode(MeetingRecordingMetadata.self, from: metaData)
-        XCTAssertEqual(decodedMeta.transcriptStatus, "completed")
+        XCTAssertEqual(decodedMeta.transcriptStatus, .completed)
 
         // Meeting data is owner-only: 0700 session dir, 0600 files (atomic rewrites included)
         func posixMode(_ url: URL) throws -> Int {
@@ -272,7 +272,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         }
         XCTAssertEqual(decodedMeta.transcriptLocale, "en-US", "metadata.json records the locale actually used")
         XCTAssertEqual(decodedMeta.audioFileNames, ["audio.m4a"], "the verified mix replaced the tracks")
-        XCTAssertEqual(decodedMeta.audioStatus, "mixed")
+        XCTAssertEqual(decodedMeta.audioStatus, .mixed)
         XCTAssertNil(decodedMeta.recovered)
 
         // One-click reveal in Finder dismisses completion bubble and opens session directory
@@ -400,7 +400,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let meta = try decoder.decode(MeetingRecordingMetadata.self, from: Data(contentsOf: result.metadataFileURL))
-        XCTAssertEqual(meta.transcriptStatus, "skipped")
+        XCTAssertEqual(meta.transcriptStatus, .skipped)
     }
 
     func testFailureBubbleStaysUntilDismissedAndOpenSettingsOpensAudioSettings() async throws {
@@ -713,7 +713,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let meta = try decoder.decode(MeetingRecordingMetadata.self, from: Data(contentsOf: metadataURL))
-        XCTAssertEqual(meta.transcriptStatus, "interrupted")
+        XCTAssertEqual(meta.transcriptStatus, .interrupted)
         await stop.value
     }
 
@@ -728,7 +728,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(offResult.transcriptSkipReason, .transcriptionTurnedOff)
         XCTAssertEqual(turnedOff.bubble?.text, MeetingBubble.transcriptSkippedText)
         XCTAssertEqual(turnedOff.bubble?.detail, "Transcription is turned off.")
-        XCTAssertEqual(try decodeMetadata(offResult.metadataFileURL).transcriptStatus, "skipped")
+        XCTAssertEqual(try decodeMetadata(offResult.metadataFileURL).transcriptStatus, .skipped)
 
         let notAllowed = makeService(captureEngine: MockMeetingAudioCaptureEngine(), speechRecognition: .denied)
         notAllowed.settingsStore.setMeetingsRootDirectoryURL(tempDir.appendingPathComponent("denied", isDirectory: true))
@@ -775,9 +775,9 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(service.bubble?.text, MeetingBubble.savedAndTranscribedText)
 
         let meta = try decodeMetadata(again.metadataFileURL)
-        XCTAssertEqual(meta.transcriptStatus, "completed")
+        XCTAssertEqual(meta.transcriptStatus, .completed)
         XCTAssertEqual(meta.transcriptLocale, "nl-BE")
-        let exported = try XCTUnwrap(meta.transcriptExportPath)
+        let exported = exportDir.appendingPathComponent(try XCTUnwrap(meta.transcriptExportFileName)).path
         XCTAssertEqual(try String(contentsOfFile: exported, encoding: .utf8), try String(contentsOf: staleTxt, encoding: .utf8))
         XCTAssertEqual(meta.durationSeconds, first.durationSeconds, accuracy: 0.01, "recording metadata is kept")
     }
@@ -842,7 +842,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let txtURL = try XCTUnwrap(first.transcriptTextURL)
         let transcriptBefore = try Data(contentsOf: txtURL)
         let metadataBefore = try Data(contentsOf: first.metadataFileURL)
-        XCTAssertNotNil(try decodeMetadata(first.metadataFileURL).transcriptExportPath)
+        XCTAssertNotNil(try decodeMetadata(first.metadataFileURL).transcriptExportFileName)
 
         fail.on = true
         await service.transcribeAgain()
@@ -855,7 +855,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertFalse(service.isTranscribing)
     }
 
-    func testReexportReplacesItsOwnCopyButNeverAnotherFile() async throws {
+    func testReexportReplacesItsOwnUneditedCopyButNeverAnotherFile() async throws {
         let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
         service.settingsStore.setMeetingsRootDirectoryURL(tempDir.appendingPathComponent("Meetings", isDirectory: true))
         let exportDir = tempDir.appendingPathComponent("Export", isDirectory: true)
@@ -864,28 +864,137 @@ final class MeetingRecorderServiceTests: XCTestCase {
         await service.stopRecording()
         let first = try XCTUnwrap(service.lastCompletedResult)
         let txtURL = try XCTUnwrap(first.transcriptTextURL)
-        let exported = URL(fileURLWithPath: try XCTUnwrap(decodeMetadata(first.metadataFileURL).transcriptExportPath))
-        let name = exported.lastPathComponent
+        let name = try XCTUnwrap(decodeMetadata(first.metadataFileURL).transcriptExportFileName)
+        let exported = exportDir.appendingPathComponent(name)
 
-        // Same folder, previous export still there: overwritten in place, no "(2)" copy
-        try "old run".write(to: exported, atomically: true, encoding: .utf8)
+        // Previous export unchanged since the last run: overwritten in place with the new transcript, no "(2)" copy
+        service.settingsStore.setTranscriptionLocaleIdentifier("nl-BE")
         await service.transcribeAgain()
         XCTAssertNil(service.lastCompletedResult?.warning)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: exportDir.path), [name])
+        XCTAssertTrue(try String(contentsOf: exported, encoding: .utf8).contains("Locale: nl-BE"))
         XCTAssertEqual(try Data(contentsOf: exported), try Data(contentsOf: txtURL))
-        XCTAssertEqual(try decodeMetadata(first.metadataFileURL).transcriptExportPath, exported.path)
+        XCTAssertEqual(try decodeMetadata(first.metadataFileURL).transcriptExportFileName, name)
+
+        // Edited by hand since: kept, the new transcript goes to "(2)"
+        try "my notes".write(to: exported, atomically: true, encoding: .utf8)
+        service.settingsStore.setTranscriptionLocaleIdentifier("de-DE")
+        await service.transcribeAgain()
+        XCTAssertEqual(try String(contentsOf: exported, encoding: .utf8), "my notes")
+        let edited = try XCTUnwrap(decodeMetadata(first.metadataFileURL).transcriptExportFileName)
+        XCTAssertTrue(edited.hasSuffix("transcript (2).txt"), edited)
+        XCTAssertEqual(try Data(contentsOf: exportDir.appendingPathComponent(edited)), try Data(contentsOf: txtURL))
 
         // Export folder changed and holds an unrelated file of the same name: suffix, nothing overwritten
         let newDir = tempDir.appendingPathComponent("Other Export", isDirectory: true)
         try FileManager.default.createDirectory(at: newDir, withIntermediateDirectories: true)
-        try "keep me".write(to: newDir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        try "keep me".write(to: newDir.appendingPathComponent(edited), atomically: true, encoding: .utf8)
         service.settingsStore.setTranscriptExportDirectoryURL(newDir)
         await service.transcribeAgain()
-        XCTAssertEqual(try String(contentsOf: newDir.appendingPathComponent(name), encoding: .utf8), "keep me")
-        let copy = try XCTUnwrap(decodeMetadata(first.metadataFileURL).transcriptExportPath)
-        XCTAssertEqual(URL(fileURLWithPath: copy).deletingLastPathComponent().standardizedFileURL.path, newDir.standardizedFileURL.path)
-        XCTAssertTrue(copy.hasSuffix("transcript (2).txt"))
-        XCTAssertEqual(try Data(contentsOf: exported), try Data(contentsOf: txtURL), "the old folder's copy is left alone")
+        XCTAssertEqual(try String(contentsOf: newDir.appendingPathComponent(edited), encoding: .utf8), "keep me")
+        let copy = try XCTUnwrap(decodeMetadata(first.metadataFileURL).transcriptExportFileName)
+        XCTAssertEqual(copy, name, "the first free name in the new folder")
+        XCTAssertEqual(try Data(contentsOf: newDir.appendingPathComponent(copy)), try Data(contentsOf: txtURL))
+        XCTAssertEqual(try String(contentsOf: exported, encoding: .utf8), "my notes", "the old folder's copies are left alone")
+    }
+
+    func testExportRetriesTheNextSuffixWhenANameIsTaken() throws {
+        let txt = tempDir.appendingPathComponent("transcript.txt")
+        try "new".write(to: txt, atomically: true, encoding: .utf8)
+        let exportDir = tempDir.appendingPathComponent("Export", isDirectory: true)
+        try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+        // Taken by another app: copyItem fails with "file exists" and the next suffix is tried
+        for taken in ["S transcript.txt", "S transcript (2).txt"] {
+            try "other".write(to: exportDir.appendingPathComponent(taken), atomically: true, encoding: .utf8)
+        }
+        let exported = try MeetingRecorderService.exportTranscript(txt, sessionID: "S", to: exportDir)
+        XCTAssertEqual(exported.lastPathComponent, "S transcript (3).txt")
+        XCTAssertEqual(try String(contentsOf: exported, encoding: .utf8), "new")
+
+        // Bounded: once every name is taken it gives up instead of looping
+        for suffix in 4...MeetingRecorderService.maxExportAttempts {
+            try "other".write(to: exportDir.appendingPathComponent("S transcript (\(suffix)).txt"), atomically: true, encoding: .utf8)
+        }
+        XCTAssertThrowsError(try MeetingRecorderService.exportTranscript(txt, sessionID: "S", to: exportDir))
+    }
+
+    func testCopiedPathIsMarkedTransientAndConcealed() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        MeetingRecorderService.copyPathToClipboard("/tmp/x/transcript.txt", pasteboard: pasteboard)
+        XCTAssertEqual(pasteboard.string(forType: .string), "/tmp/x/transcript.txt")
+        let types = pasteboard.types ?? []
+        XCTAssertTrue(types.contains(NSPasteboard.PasteboardType("org.nspasteboard.TransientType")))
+        XCTAssertTrue(types.contains(NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")))
+    }
+
+    func testDetectedAppsMatchMeetingAppsByBundleIDAndNeverBrowsers() {
+        let names = MeetingRecorderService.meetingAppNames(in: [
+            ("us.zoom.xos", "zoom.us"),
+            ("com.microsoft.teams2", "Microsoft Teams"),
+            ("com.microsoft.teams2", "Microsoft Teams"),
+            ("com.apple.FaceTime", "FaceTime"),
+            ("com.tinyspeck.slackmacgap", nil),
+            ("com.google.Chrome", "Google Chrome"),
+            ("com.apple.Safari", "Safari"),
+            ("company.thebrowser.Browser", "Arc"),
+            ("com.example.renamed", "Zoom"),
+            (nil, "Microsoft Teams")
+        ])
+        XCTAssertEqual(names, ["FaceTime", "Microsoft Teams", "com.tinyspeck.slackmacgap", "zoom.us"])
+    }
+
+    func testTranscribeAgainWriteFailureIsNotReportedAsARecognitionFailure() async throws {
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        await service.startRecording()
+        await service.stopRecording()
+        let first = try XCTUnwrap(service.lastCompletedResult)
+        let metadataBefore = try Data(contentsOf: first.metadataFileURL)
+        // Recognition succeeds, but transcript.json can no longer be written (a non-empty folder took its name)
+        let json = first.sessionDirectoryURL.appendingPathComponent("transcript.json")
+        try FileManager.default.removeItem(at: json)
+        try FileManager.default.createDirectory(at: json, withIntermediateDirectories: false)
+        try "x".write(to: json.appendingPathComponent("blocker"), atomically: true, encoding: .utf8)
+
+        await service.transcribeAgain()
+
+        let warning = try XCTUnwrap(service.lastCompletedResult?.warning)
+        XCTAssertTrue(warning.hasPrefix(MeetingBubble.transcriptNotSavedError), warning)
+        XCTAssertFalse(warning.contains(MeetingBubble.previousTranscriptKeptWarning), warning)
+        XCTAssertEqual(try Data(contentsOf: first.metadataFileURL), metadataBefore)
+    }
+
+    func testWriteFailureOnAFreshRecordingFailsTheTranscript() async throws {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        let service = makeService(captureEngine: captureEngine)
+        await service.startRecording()
+        let txt = try XCTUnwrap(captureEngine.lastSessionDirectoryURL).appendingPathComponent("transcript.txt")
+        try FileManager.default.createDirectory(at: txt, withIntermediateDirectories: false)
+        try "x".write(to: txt.appendingPathComponent("blocker"), atomically: true, encoding: .utf8)
+        await service.stopRecording()
+
+        let result = try XCTUnwrap(service.lastCompletedResult)
+        XCTAssertNil(result.transcriptTextURL)
+        XCTAssertTrue(result.transcriptError?.hasPrefix(MeetingBubble.transcriptNotSavedError) ?? false, "\(String(describing: result.transcriptError))")
+        XCTAssertEqual(try decodeMetadata(result.metadataFileURL).transcriptStatus, .failed)
+    }
+
+    func testQuitDuringTranscribeAgainKeepsTheEarlierStatus() async throws {
+        var transcription = MockMeetingTranscriptionService()
+        transcription.delayNanoseconds = 100_000_000
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), transcription: transcription)
+        await service.startRecording()
+        await service.stopRecording()
+        let first = try XCTUnwrap(service.lastCompletedResult)
+        XCTAssertEqual(try decodeMetadata(first.metadataFileURL).transcriptStatus, .completed)
+
+        let again = Task { await service.transcribeAgain() }
+        while !service.isTranscribing {
+            await Task.yield()
+        }
+        service.markTranscriptionInterrupted()
+        XCTAssertEqual(try decodeMetadata(first.metadataFileURL).transcriptStatus, .completed, "transcript.txt from the first run is still there")
+        await again.value
     }
 
     // MARK: - Transcription language setting
@@ -946,7 +1055,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let meta = try decoder.decode(MeetingRecordingMetadata.self, from: Data(contentsOf: result.metadataFileURL))
-        XCTAssertEqual(meta.transcriptExportPath, copy.path)
+        XCTAssertEqual(meta.transcriptExportFileName, copy.lastPathComponent)
         let copyPermissions = try FileManager.default.attributesOfItem(atPath: copy.path)[.posixPermissions] as? NSNumber
         XCTAssertEqual(copyPermissions?.intValue, 0o600)
     }
@@ -970,8 +1079,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let meta = try decoder.decode(MeetingRecordingMetadata.self, from: Data(contentsOf: result.metadataFileURL))
-        XCTAssertEqual(meta.transcriptStatus, "completed")
-        XCTAssertNil(meta.transcriptExportPath)
+        XCTAssertEqual(meta.transcriptStatus, .completed)
+        XCTAssertNil(meta.transcriptExportFileName)
     }
 
     func testSyncWarningFlagsCloudSyncedFolders() {
@@ -985,6 +1094,82 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(warning("Library/CloudStorage/OneDrive-Contoso/Meetings"), "This folder is synced to a cloud service.")
         XCTAssertNil(warning("Library/Application Support/Bitz/Meetings"))
         XCTAssertNil(warning("DocumentsArchive"), "Only the folder itself and its children count")
+    }
+
+    func testSyncWarningFlagsFoldersInsideAGitWorkTree() throws {
+        let repo = tempDir.appendingPathComponent("repo", isDirectory: true)
+        let nested = repo.appendingPathComponent("notes/meetings", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let plain = tempDir.appendingPathComponent("plain", isDirectory: true)
+        XCTAssertNil(MeetingSettingsStore.syncWarning(for: nested, home: tempDir))
+
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent(".git"), withIntermediateDirectories: false)
+        let expected = "This folder is inside a git repository, so transcripts could be committed and pushed."
+        XCTAssertEqual(MeetingSettingsStore.syncWarning(for: nested, home: tempDir), expected)
+        XCTAssertEqual(MeetingSettingsStore.syncWarning(for: repo, home: tempDir), expected)
+        XCTAssertNil(MeetingSettingsStore.syncWarning(for: plain, home: tempDir), "a folder that does not exist yet, outside the repo")
+        XCTAssertFalse(MeetingSettingsStore.isInsideGitWorkTree(nested, maxDepth: 2), "the walk is bounded")
+
+        // A linked worktree has a .git file, not a folder
+        let worktree = tempDir.appendingPathComponent("worktree/sub", isDirectory: true)
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        try "gitdir: elsewhere".write(to: tempDir.appendingPathComponent("worktree/.git"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(MeetingSettingsStore.syncWarning(for: worktree, home: tempDir), expected)
+    }
+
+    // MARK: - metadata.json schema
+
+    func testMetadataEncodesSnakeCaseKeysAndRoundTrips() throws {
+        let metadata = MeetingRecordingMetadata(
+            sessionID: "2026-11-05_09-00-00", startedAt: Date(timeIntervalSince1970: 1_762_333_200),
+            endedAt: Date(timeIntervalSince1970: 1_762_333_260), durationSeconds: 60,
+            captureMicrophone: true, captureSystemAudio: false, detectedAppNames: ["zoom.us"],
+            audioFileNames: ["audio.m4a"], audioStatus: .mixed, recovered: true, mixedTracks: ["mic.caf"],
+            transcriptStatus: .completed, transcriptLocale: "nl-BE", transcriptExportFileName: "x transcript.txt"
+        )
+        let url = tempDir.appendingPathComponent("metadata.json")
+        MeetingRecorderService.writeMetadata(metadata, to: url)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        XCTAssertEqual(Set(object.keys), [
+            "session_id", "started_at", "ended_at", "duration_seconds", "capture_microphone", "capture_system_audio",
+            "detected_apps", "audio_files", "audio_status", "recovered", "mixed_tracks", "transcript_status",
+            "transcript_locale", "transcript_export_file_name"
+        ])
+        XCTAssertEqual(object["transcript_status"] as? String, "completed")
+        XCTAssertEqual(object["audio_status"] as? String, "mixed")
+        XCTAssertEqual(try decodeMetadata(url), metadata)
+
+        // Optional fields are left out, not written as null
+        var minimal = metadata
+        minimal.recovered = nil
+        minimal.mixedTracks = nil
+        minimal.transcriptLocale = nil
+        minimal.transcriptExportFileName = nil
+        MeetingRecorderService.writeMetadata(minimal, to: url)
+        let keys = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]).keys
+        XCTAssertEqual(keys.count, 10)
+        XCTAssertEqual(try decodeMetadata(url), minimal)
+    }
+
+    func testMetadataFromEarlierBuildsDecodes() throws {
+        let camelCase = """
+            {"sessionID":"2026-11-05_09-00-00","startedAt":"2025-11-05T09:00:00Z","endedAt":"2025-11-05T09:01:00Z",
+             "durationSeconds":60,"captureMicrophone":true,"captureSystemAudio":true,"detectedAppNames":["Slack"],
+             "audioFileNames":["mic.caf","system.caf"],"audioStatus":"unmixed","recovered":true,"transcriptStatus":"interrupted",
+             "transcriptLocale":"en-GB","transcriptExportPath":"/Users/someone/Notes/2026-11-05_09-00-00 transcript (2).txt"}
+            """
+        let decoded = try decodeMetadata(writeMetadataJSON(camelCase, in: tempDir))
+        XCTAssertEqual(decoded, MeetingRecordingMetadata(
+            sessionID: "2026-11-05_09-00-00", startedAt: Date(timeIntervalSince1970: 1_762_333_200),
+            endedAt: Date(timeIntervalSince1970: 1_762_333_260), durationSeconds: 60,
+            captureMicrophone: true, captureSystemAudio: true, detectedAppNames: ["Slack"],
+            audioFileNames: ["mic.caf", "system.caf"], audioStatus: .unmixed, recovered: true,
+            transcriptStatus: .interrupted, transcriptLocale: "en-GB",
+            transcriptExportFileName: "2026-11-05_09-00-00 transcript (2).txt"
+        ), "only the file name of the old absolute export path is kept")
+
+        let missingField = #"{"session_id":"x","started_at":"2026-11-05T09:00:00Z"}"#
+        XCTAssertThrowsError(try decodeMetadata(writeMetadataJSON(missingField, in: tempDir)))
     }
 
     // MARK: - Stop-time mix, quit budget, launch recovery
@@ -1001,18 +1186,18 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(result.audioFileURL.lastPathComponent, "mic.caf")
         XCTAssertTrue(result.warning?.contains("mixed at next launch") ?? false)
         var meta = try decodeMetadata(result.metadataFileURL)
-        XCTAssertEqual(meta.audioStatus, "unmixed")
+        XCTAssertEqual(meta.audioStatus, .unmixed)
         XCTAssertEqual(meta.audioFileNames, ["mic.caf"])
-        XCTAssertEqual(meta.transcriptStatus, "skipped")
+        XCTAssertEqual(meta.transcriptStatus, .skipped)
 
         // Next launch mixes what the quit left behind
         await service.recoverUnmixedSessions()
         meta = try decodeMetadata(result.metadataFileURL)
-        XCTAssertEqual(meta.audioStatus, "mixed")
+        XCTAssertEqual(meta.audioStatus, .mixed)
         XCTAssertEqual(meta.audioFileNames, ["audio.m4a"])
         XCTAssertEqual(meta.recovered, true)
         XCTAssertEqual(meta.sessionID, result.sessionID, "existing metadata is kept, not rebuilt")
-        XCTAssertEqual(meta.transcriptStatus, "skipped", "recovery never transcribes")
+        XCTAssertEqual(meta.transcriptStatus, .skipped, "recovery never transcribes")
     }
 
     func testQuitWithinBudgetMixesBeforeExit() async throws {
@@ -1026,7 +1211,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(result.audioFileURL.lastPathComponent, "audio.m4a")
         XCTAssertNil(result.warning)
         let meta = try decodeMetadata(result.metadataFileURL)
-        XCTAssertEqual(meta.audioStatus, "mixed")
+        XCTAssertEqual(meta.audioStatus, .mixed)
         XCTAssertEqual(meta.audioFileNames, ["audio.m4a"])
         XCTAssertNil(meta.recovered)
     }
@@ -1040,7 +1225,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
 
         let result = try XCTUnwrap(service.lastCompletedResult)
         let sessionDir = result.sessionDirectoryURL
-        XCTAssertEqual(try decodeMetadata(result.metadataFileURL).audioStatus, "empty")
+        XCTAssertEqual(try decodeMetadata(result.metadataFileURL).audioStatus, .empty)
         XCTAssertFalse(MeetingTrackMixer.needsMix(sessionDir))
         let metadataBefore = try Data(contentsOf: result.metadataFileURL)
 
@@ -1071,7 +1256,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
             XCTAssertNotNil(result.transcriptTextURL)
             XCTAssertTrue(result.warning?.contains("mixing them into audio.m4a failed") ?? false)
             let meta = try decodeMetadata(result.metadataFileURL)
-            XCTAssertEqual(meta.audioStatus, "unmixed")
+            XCTAssertEqual(meta.audioStatus, .unmixed)
             XCTAssertEqual(meta.audioFileNames, [track], "the folder at audio.m4a is not audio")
         }
     }
@@ -1131,11 +1316,11 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(Double(mixed.length), 14_400, accuracy: Double(MeetingTrackMixer.chunkFrames))
         let meta = try decodeMetadata(orphan.appendingPathComponent("metadata.json"))
         XCTAssertEqual(meta.recovered, true)
-        XCTAssertEqual(meta.audioStatus, "mixed")
+        XCTAssertEqual(meta.audioStatus, .mixed)
         XCTAssertEqual(meta.sessionID, "2026-11-05_09-00-00")
         XCTAssertEqual(meta.durationSeconds, 0.3, accuracy: 0.001, "derived from the longest track")
         XCTAssertTrue(meta.captureMicrophone && meta.captureSystemAudio)
-        XCTAssertEqual(meta.transcriptStatus, "skipped")
+        XCTAssertEqual(meta.transcriptStatus, .skipped)
 
         XCTAssertEqual(try fm.contentsOfDirectory(atPath: complete.path).sorted(), completeBefore)
         XCTAssertEqual(try String(contentsOf: complete.appendingPathComponent("audio.m4a"), encoding: .utf8), "finished audio")
@@ -1160,26 +1345,96 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let system = session.appendingPathComponent(MeetingTrackWriter.systemFileName)
         try writeTrack(mic, frames: 144_000)
         try writeTrack(system, frames: 48_000)
-        XCTAssertTrue(MeetingTrackMixer.mixSession(in: session).mixed)
+        let outcome = MeetingTrackMixer.mixSession(in: session)
+        XCTAssertTrue(outcome.mixed)
+        XCTAssertEqual(outcome.mixedTracks, ["mic.caf", "system.caf"])
         let audioURL = session.appendingPathComponent("audio.m4a")
         let mixedBefore = try Data(contentsOf: audioURL)
         XCTAssertEqual(try AVAudioFile(forReading: audioURL).length, 144_000)
         // Killed after deleting mic.caf, before system.caf: only the shorter track is left over
         try writeTrack(system, frames: 48_000)
 
+        // Without metadata listing the mixed tracks (older sessions) a leftover is never deleted
         XCTAssertFalse(MeetingTrackMixer.needsMix(session))
+        await service.recoverUnmixedSessions()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: system.path))
+
+        writeSessionMetadata(in: session, audioFileNames: ["audio.m4a"], audioStatus: .mixed, mixedTracks: outcome.mixedTracks)
         await service.recoverUnmixedSessions()
 
         XCTAssertEqual(try Data(contentsOf: audioURL), mixedBefore, "the verified two-track mix is kept")
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: session.path).sorted(), ["audio.m4a"], "the covered leftover is deleted")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: session.path).sorted(), ["audio.m4a", "metadata.json"], "the listed leftover is deleted")
 
-        // Even when asked directly, the mixer refuses to replace a readable audio.m4a
+        // Even when asked directly, the mixer refuses to replace a readable audio.m4a, and records no mixed tracks
         try writeTrack(system, frames: 48_000)
-        let direct = MeetingTrackMixer.mixSession(in: session)
+        let direct = MeetingTrackMixer.mixSession(in: session) { _ in XCTFail("nothing is mixed, so nothing is recorded") }
         XCTAssertFalse(direct.mixed)
         XCTAssertEqual(try Data(contentsOf: audioURL), mixedBefore)
         XCTAssertTrue(FileManager.default.fileExists(atPath: system.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: session.appendingPathComponent("audio.mixing.m4a").path))
+    }
+
+    private func writeSessionMetadata(
+        in session: URL,
+        audioFileNames: [String],
+        audioStatus: MeetingRecordingMetadata.AudioStatus,
+        mixedTracks: [String]?
+    ) {
+        MeetingRecorderService.writeMetadata(MeetingRecordingMetadata(
+            sessionID: session.lastPathComponent, startedAt: Date(), endedAt: Date(), durationSeconds: 1,
+            captureMicrophone: true, captureSystemAudio: true, detectedAppNames: [],
+            audioFileNames: audioFileNames, audioStatus: audioStatus, mixedTracks: mixedTracks, transcriptStatus: .skipped
+        ), to: session.appendingPathComponent("metadata.json"))
+    }
+
+    func testATrackUnreadableAtMixTimeIsNeverDeletedAsALeftover() async throws {
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        let session = try makeSession("2026-11-05_10-30-00")
+        let system = session.appendingPathComponent(MeetingTrackWriter.systemFileName)
+        try writeTrack(session.appendingPathComponent(MeetingTrackWriter.micFileName), frames: 96_000)
+        try Data("not audio yet".utf8).write(to: system)
+        final class Names: @unchecked Sendable { var recorded: [String]? }
+        let names = Names()
+        let outcome = MeetingTrackMixer.mixSession(in: session) { names.recorded = $0 }
+        XCTAssertTrue(outcome.mixed)
+        XCTAssertEqual(names.recorded, ["mic.caf"], "recorded before audio.m4a appears")
+        XCTAssertEqual(outcome.mixedTracks, ["mic.caf"])
+        // Readable later (and shorter than the mix), metadata stale so recovery looks at the session
+        try writeTrack(system, frames: 48_000)
+        writeSessionMetadata(in: session, audioFileNames: ["mic.caf", "system.caf"], audioStatus: .unmixed, mixedTracks: outcome.mixedTracks)
+
+        await service.recoverUnmixedSessions()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: system.path), "system.caf never went into the mix")
+        let meta = try decodeMetadata(session.appendingPathComponent("metadata.json"))
+        XCTAssertEqual(meta.audioStatus, .mixed)
+        XCTAssertEqual(meta.audioFileNames, ["audio.m4a", "system.caf"])
+    }
+
+    func testRecoveryReconcilesOlderMetadataAKillLeftStale() async throws {
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        let session = try makeSession("2026-11-05_10-45-00")
+        try writeTrack(session.appendingPathComponent(MeetingTrackWriter.micFileName))
+        XCTAssertTrue(MeetingTrackMixer.mixSession(in: session).mixed)
+        // Killed after the mix deleted the tracks, before the final metadata write; written by an earlier build
+        let metadataURL = try writeMetadataJSON("""
+            {"sessionID":"2026-11-05_10-45-00","startedAt":"2026-11-05T10:45:00Z","endedAt":"2026-11-05T10:46:00Z",
+             "durationSeconds":60,"captureMicrophone":true,"captureSystemAudio":true,"detectedAppNames":["zoom.us"],
+             "audioFileNames":["mic.caf","system.caf"],"audioStatus":"unmixed","transcriptStatus":"skipped"}
+            """, in: session)
+        XCTAssertTrue(MeetingRecorderService.needsRecovery(session))
+
+        await service.recoverUnmixedSessions()
+
+        let meta = try decodeMetadata(metadataURL)
+        XCTAssertEqual(meta.audioStatus, .mixed)
+        XCTAssertEqual(meta.audioFileNames, ["audio.m4a"])
+        XCTAssertNil(meta.recovered, "nothing was mixed at launch")
+        XCTAssertEqual(meta.detectedAppNames, ["zoom.us"])
+        XCTAssertEqual(meta.durationSeconds, 60)
+        let keys = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: metadataURL)) as? [String: Any]).keys
+        XCTAssertTrue(keys.contains("audio_status") && !keys.contains("audioStatus"), "rewritten in the new schema")
+        XCTAssertFalse(MeetingRecorderService.needsRecovery(session), "settled after one launch")
     }
 
     func testMixedSessionWithAnUnreadableTrackStaysMixedAcrossLaunches() async throws {
@@ -1188,7 +1443,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         try writeTrack(session.appendingPathComponent(MeetingTrackWriter.micFileName))
         try Data("not audio".utf8).write(to: session.appendingPathComponent(MeetingTrackWriter.systemFileName))
         XCTAssertTrue(MeetingTrackMixer.mixSession(in: session).mixed)
-        XCTAssertEqual(MeetingTrackMixer.audioStatus(in: session), "mixed")
+        XCTAssertEqual(MeetingTrackMixer.audioStatus(in: session), .mixed)
         let metadataURL = try writeMetadataJSON("""
             {"sessionID":"2026-11-05_11-00-00","startedAt":"2026-11-05T11:00:00Z","endedAt":"2026-11-05T11:00:01Z",
              "durationSeconds":1,"captureMicrophone":true,"captureSystemAudio":true,"detectedAppNames":[],
@@ -1235,7 +1490,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try decoder.decode(MeetingRecordingMetadata.self, from: Data(legacy.utf8))
         XCTAssertEqual(decoded.audioFileNames, ["audio.m4a"])
-        XCTAssertEqual(decoded.audioStatus, "mixed")
+        XCTAssertEqual(decoded.audioStatus, .mixed)
         XCTAssertNil(decoded.recovered)
 
         // Recovery keeps what older metadata holds and only updates the audio fields
@@ -1251,10 +1506,10 @@ final class MeetingRecorderServiceTests: XCTestCase {
 
         let merged = try decodeMetadata(metadataURL)
         XCTAssertEqual(merged.detectedAppNames, ["zoom.us"])
-        XCTAssertEqual(merged.transcriptStatus, "completed")
+        XCTAssertEqual(merged.transcriptStatus, .completed)
         XCTAssertEqual(merged.transcriptLocale, "nl-BE")
         XCTAssertEqual(merged.durationSeconds, 1800)
-        XCTAssertEqual(merged.audioStatus, "mixed")
+        XCTAssertEqual(merged.audioStatus, .mixed)
         XCTAssertEqual(merged.recovered, true)
         XCTAssertEqual(try String(contentsOf: unreadableMetadataURL, encoding: .utf8), "{ not json")
         XCTAssertEqual(MeetingTrackMixer.audioFileNames(in: unreadable), ["audio.m4a"], "the audio is still mixed")

@@ -78,6 +78,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
     <string>Bitz uses native on-device speech recognition to generate private local meeting transcripts.</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>Bitz captures system meeting audio locally when you start a Meeting Audio Recording session.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Bitz saves meeting recordings and transcripts in the folder you choose, which can be in Documents.</string>
 </dict>
 </plist>
 EOF

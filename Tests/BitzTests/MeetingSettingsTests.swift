@@ -171,6 +171,21 @@ final class MeetingSettingsTests: XCTestCase {
         )
     }
 
+    func testRetentionStillExpiresSessionsWithMetadataFromEarlierBuilds() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let folder = tempDir.appendingPathComponent("2026-01-01_10-00-00", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        // camelCase keys with a single audioFileName: the oldest schema this branch wrote
+        try Data("""
+            {"sessionID":"2026-01-01_10-00-00","startedAt":"2026-01-01T10:00:00Z","endedAt":"2026-01-01T10:30:00Z",
+             "durationSeconds":1800,"captureMicrophone":true,"captureSystemAudio":false,"detectedAppNames":[],
+             "audioFileName":"audio.m4a","transcriptStatus":"completed"}
+            """.utf8).write(to: folder.appendingPathComponent("metadata.json"))
+        try backdate(folder, to: now.addingTimeInterval(-60 * 86_400))
+
+        XCTAssertEqual(MeetingRecorderService.expiredSessions(in: tempDir, olderThanDays: 30, now: now).map(\.lastPathComponent), [folder.lastPathComponent])
+    }
+
     func testExpiredSessionsNeedTheFolderDateToAgreeWithMetadata() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         // metadata says old, but the folder changed yesterday: a wrong startedAt alone never expires a session

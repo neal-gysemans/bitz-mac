@@ -67,10 +67,12 @@ public final class MeetingRecorderService: ObservableObject {
     private(set) var isRecovering = false
     private var transcribingMetadata: (metadata: MeetingRecordingMetadata, url: URL)?
 
-    private static let knownMeetingAppNames: Set<String> = [
-        "zoom.us", "Zoom", "Microsoft Teams", "Slack", "FaceTime", "Discord",
-        "Webex", "Around", "Tuple", "Google Chrome", "Arc", "Brave Browser", "Safari", "Firefox"
-    ]
+    /// Meeting apps by bundle ID, as `ActivityMonitorService` matches them; browsers are never listed.
+    nonisolated static let meetingAppBundleKeywords = ActivityMonitorService.workMeetingBundleKeywords + ["discord"]
+    /// Bound on ` (N)` suffixes when another app keeps taking the export name.
+    nonisolated static let maxExportAttempts = 100
+    static let transientPasteboardType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+    static let concealedPasteboardType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
 
     public init(
         settingsStore: MeetingSettingsStore = MeetingSettingsStore(),
@@ -280,8 +282,8 @@ public final class MeetingRecorderService: ObservableObject {
             captureSystemAudio: settingsStore.captureSystemAudio,
             detectedAppNames: activeDetectedApps,
             audioFileNames: MeetingTrackMixer.audioFileNames(in: sessionDir),
-            audioStatus: "unmixed",
-            transcriptStatus: shouldTranscribe ? "pending" : "skipped"
+            audioStatus: .unmixed,
+            transcriptStatus: shouldTranscribe ? .pending : .skipped
         )
         // Written before the mix, so a quit that cuts the mix short still leaves metadata pointing at the tracks
         Self.writeMetadata(metadata, to: metadataURL)
@@ -292,11 +294,19 @@ public final class MeetingRecorderService: ObservableObject {
             mixed = false
         } else {
             // Off the main actor; if quit's safety net cuts it short, mic.caf / system.caf stay intact
+            let beforeMix = metadata
             let outcome = await Task.detached(priority: .userInitiated) {
-                MeetingTrackMixer.mixSession(in: sessionDir)
+                MeetingTrackMixer.mixSession(in: sessionDir) { names in
+                    var recorded = beforeMix
+                    recorded.mixedTracks = names
+                    Self.writeMetadata(recorded, to: metadataURL)
+                }
             }.value
             warnings += outcome.warnings
             mixed = outcome.mixed
+            if mixed {
+                metadata.mixedTracks = outcome.mixedTracks
+            }
         }
         let mixedURL = sessionDir.appendingPathComponent(MeetingTrackMixer.audioFileName)
         if mixed {
@@ -435,54 +445,65 @@ public final class MeetingRecorderService: ObservableObject {
             transcribingMetadata = nil
             isTranscribing = false
         }
-        // Only a Transcribe Again finds transcript files here; a fresh session folder has none
+        // Only a Transcribe Again finds transcript files here; a fresh session folder has none. Read before the run:
+        // the previous export is replaced only while it still holds exactly these bytes (not edited by hand).
         let previousTxtURL = sessionDir.appendingPathComponent("transcript.txt")
         let previousJSONURL = sessionDir.appendingPathComponent("transcript.json")
-        let hasPreviousTranscript = FileManager.default.fileExists(atPath: previousTxtURL.path)
+        let previousTranscript = try? Data(contentsOf: previousTxtURL)
+        func giveUp(_ message: String, keptWarning: String) -> (txtURL: URL, jsonURL: URL)? {
+            if previousTranscript != nil {
+                // Metadata (status, locale, export name) still describes the kept transcript, so it is not rewritten
+                warnings.append(keptWarning)
+                return (previousTxtURL, previousJSONURL)
+            }
+            metadata.transcriptStatus = .failed
+            Self.writeMetadata(metadata, to: metadataURL)
+            transcriptError = message
+            return nil
+        }
+        let transcript: MeetingTranscript
         do {
-            let transcript = try await transcriptionService.transcribe(
+            transcript = try await transcriptionService.transcribe(
                 audioFileURL: audioURL,
                 sessionID: sessionID,
                 locale: settingsStore.transcriptionLocaleIdentifier.map(Locale.init(identifier:))
             )
-            let written = try MeetingTranscriptWriter.write(transcript, to: sessionDir)
-            Self.restrictToOwner(written.txtURL, written.jsonURL)
-            metadata.transcriptStatus = "completed"
-            metadata.transcriptLocale = transcript.localeIdentifier
-            if let partialWarning = transcript.warning {
-                warnings.append(partialWarning)
-            }
-            if let exportDirectory = settingsStore.transcriptExportDirectoryURL {
-                do {
-                    let exported = try Self.exportTranscript(
-                        written.txtURL,
-                        sessionID: sessionID,
-                        to: exportDirectory,
-                        replacing: metadata.transcriptExportPath.map(URL.init(fileURLWithPath:))
-                    )
-                    metadata.transcriptExportPath = exported.path
-                } catch {
-                    warnings.append("Transcript saved, but copy to export folder failed: \(error.localizedDescription)")
-                }
-            }
-            Self.writeMetadata(metadata, to: metadataURL)
-
-            if settingsStore.copyTranscriptPathToClipboard {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(written.txtURL.path, forType: .string)
-            }
-            return written
         } catch {
-            if hasPreviousTranscript {
-                // Metadata (status, locale, export path) still describes the kept transcript, so it is not rewritten
-                warnings.append("\(MeetingBubble.previousTranscriptKeptWarning): \(error.localizedDescription)")
-                return (previousTxtURL, previousJSONURL)
-            }
-            metadata.transcriptStatus = "failed"
-            Self.writeMetadata(metadata, to: metadataURL)
-            transcriptError = error.localizedDescription
-            return nil
+            return giveUp(error.localizedDescription, keptWarning: "\(MeetingBubble.previousTranscriptKeptWarning): \(error.localizedDescription)")
         }
+        let written: (txtURL: URL, jsonURL: URL)
+        do {
+            written = try MeetingTranscriptWriter.write(transcript, to: sessionDir)
+        } catch {
+            let message = "\(MeetingBubble.transcriptNotSavedError): \(error.localizedDescription)"
+            return giveUp(message, keptWarning: message)
+        }
+        Self.restrictToOwner(written.txtURL, written.jsonURL)
+        metadata.transcriptStatus = .completed
+        metadata.transcriptLocale = transcript.localeIdentifier
+        if let partialWarning = transcript.warning {
+            warnings.append(partialWarning)
+        }
+        if let exportDirectory = settingsStore.transcriptExportDirectoryURL {
+            do {
+                let exported = try Self.exportTranscript(
+                    written.txtURL,
+                    sessionID: sessionID,
+                    to: exportDirectory,
+                    replacing: metadata.transcriptExportFileName,
+                    ifUnchangedFrom: previousTranscript
+                )
+                metadata.transcriptExportFileName = exported.lastPathComponent
+            } catch {
+                warnings.append("Transcript saved, but copy to export folder failed: \(error.localizedDescription)")
+            }
+        }
+        Self.writeMetadata(metadata, to: metadataURL)
+
+        if settingsStore.copyTranscriptPathToClipboard {
+            Self.copyPathToClipboard(written.txtURL.path)
+        }
+        return written
     }
 
     private func showCompletion(_ result: MeetingRecordingResult) {
@@ -610,23 +631,37 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     nonisolated static func needsRecovery(_ sessionDir: URL) -> Bool {
-        isSessionFolder(sessionDir)
-            && (MeetingTrackMixer.needsMix(sessionDir) || !MeetingTrackMixer.tracksCoveredByMix(in: sessionDir).isEmpty)
+        guard isSessionFolder(sessionDir) else { return false }
+        if MeetingTrackMixer.needsMix(sessionDir) { return true }
+        // A verified mix whose track cleanup or final metadata write was cut short (kill right after the rename)
+        guard MeetingTrackMixer.mixedLength(in: sessionDir) != nil,
+              let metadata = decodedMetadata(at: sessionDir.appendingPathComponent("metadata.json")) else { return false }
+        return !MeetingTrackMixer.tracksCoveredByMix(in: sessionDir, mixedTracks: metadata.mixedTracks).isEmpty
+            || metadata.audioStatus != .mixed
+            || metadata.audioFileNames != MeetingTrackMixer.audioFileNames(in: sessionDir)
     }
 
     nonisolated static func recoverSession(_ sessionDir: URL) {
         let metadataURL = sessionDir.appendingPathComponent("metadata.json")
         // Read before the mix deletes the tracks the derived metadata is measured from
         let metadata = recoveryMetadata(at: metadataURL, sessionDir: sessionDir)
+        var mixedTracks = metadata?.mixedTracks
         let mixedNow: Bool
         // Rechecked: a recording stopped since the scan may have mixed this folder already
         if MeetingTrackMixer.needsMix(sessionDir) {
-            mixedNow = MeetingTrackMixer.mixSession(in: sessionDir).mixed
+            let outcome = MeetingTrackMixer.mixSession(in: sessionDir) { names in
+                guard var recorded = metadata else { return }
+                recorded.mixedTracks = names
+                writeMetadata(recorded, to: metadataURL)
+            }
+            mixedNow = outcome.mixed
+            if mixedNow {
+                mixedTracks = outcome.mixedTracks
+            }
         } else {
-            // audio.m4a is a verified mix; the tracks it covers are left over from a cleanup cut short (kill, failed delete)
-            let leftovers = MeetingTrackMixer.tracksCoveredByMix(in: sessionDir)
-            guard !leftovers.isEmpty else { return }
-            leftovers.forEach { try? FileManager.default.removeItem(at: $0) }
+            // audio.m4a is a verified mix; the tracks the metadata lists as mixed are left over from a cleanup cut short
+            MeetingTrackMixer.tracksCoveredByMix(in: sessionDir, mixedTracks: mixedTracks)
+                .forEach { try? FileManager.default.removeItem(at: $0) }
             // Metadata derived from a leftover track would understate the recording; only existing metadata is updated
             guard FileManager.default.fileExists(atPath: metadataURL.path) else { return }
             mixedNow = false
@@ -639,6 +674,8 @@ public final class MeetingRecorderService: ObservableObject {
         if mixedNow {
             metadata.recovered = true
         }
+        // Also reconciles metadata a kill left saying "unmixed" or listing deleted tracks
+        metadata.mixedTracks = mixedTracks
         metadata.audioStatus = MeetingTrackMixer.audioStatus(in: sessionDir)
         metadata.audioFileNames = MeetingTrackMixer.audioFileNames(in: sessionDir)
         writeMetadata(metadata, to: metadataURL)
@@ -652,7 +689,7 @@ public final class MeetingRecorderService: ObservableObject {
         return decodedMetadata(at: url)
     }
 
-    nonisolated private static func decodedMetadata(at url: URL) -> MeetingRecordingMetadata? {
+    nonisolated static func decodedMetadata(at url: URL) -> MeetingRecordingMetadata? {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return (try? Data(contentsOf: url)).flatMap { try? decoder.decode(MeetingRecordingMetadata.self, from: $0) }
@@ -670,8 +707,8 @@ public final class MeetingRecorderService: ObservableObject {
             captureMicrophone: fileExists(MeetingTrackWriter.micFileName),
             captureSystemAudio: fileExists(MeetingTrackWriter.systemFileName),
             detectedAppNames: [],
-            audioStatus: "unmixed",
-            transcriptStatus: "skipped"
+            audioStatus: .unmixed,
+            transcriptStatus: .skipped
         )
     }
 
@@ -712,9 +749,12 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     /// Quit path while transcribing: synchronously replaces the "pending" status so metadata never stays stale.
+    /// A Transcribe Again that finds a transcript from the earlier run keeps that run's status: the transcript is still there.
     public func markTranscriptionInterrupted() {
-        guard var pending = transcribingMetadata else { return }
-        pending.metadata.transcriptStatus = "interrupted"
+        guard var pending = transcribingMetadata,
+              !FileManager.default.fileExists(atPath: pending.url.deletingLastPathComponent().appendingPathComponent("transcript.txt").path)
+        else { return }
+        pending.metadata.transcriptStatus = .interrupted
         Self.writeMetadata(pending.metadata, to: pending.url)
     }
 
@@ -790,26 +830,45 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     /// Copies `transcript.txt` into the export folder as `<sessionID> transcript.txt`, adding ` (2)`, ` (3)`… instead of overwriting.
-    /// `previous` (this session's earlier export) is the one file replaced in place, when it still exists in this folder.
-    static func exportTranscript(_ txtURL: URL, sessionID: String, to directory: URL, replacing previous: URL? = nil) throws -> URL {
+    /// `previousName` (this session's earlier export) is replaced in place only when that file in this folder still holds
+    /// exactly `previousTranscript`, the session's transcript before this run: anything else is another file or a hand edit.
+    static func exportTranscript(
+        _ txtURL: URL,
+        sessionID: String,
+        to directory: URL,
+        replacing previousName: String? = nil,
+        ifUnchangedFrom previousTranscript: Data? = nil
+    ) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        if let previous,
-           previous.deletingLastPathComponent().standardizedFileURL.path == directory.standardizedFileURL.path,
-           FileManager.default.fileExists(atPath: previous.path) {
-            try Data(contentsOf: txtURL).write(to: previous, options: .atomic)
-            restrictToOwner(previous)
-            return previous
+        if let previousName, let previousTranscript {
+            let previous = directory.appendingPathComponent((previousName as NSString).lastPathComponent)
+            if (try? Data(contentsOf: previous)) == previousTranscript {
+                try Data(contentsOf: txtURL).write(to: previous, options: .atomic)
+                restrictToOwner(previous)
+                return previous
+            }
         }
-        var destination = directory.appendingPathComponent("\(sessionID) transcript.txt")
-        var suffix = 2
-        while FileManager.default.fileExists(atPath: destination.path) {
-            destination = directory.appendingPathComponent("\(sessionID) transcript (\(suffix)).txt")
-            suffix += 1
+        for attempt in 1...maxExportAttempts {
+            let name = attempt == 1 ? "\(sessionID) transcript.txt" : "\(sessionID) transcript (\(attempt)).txt"
+            let destination = directory.appendingPathComponent(name)
+            do {
+                // copyItem never replaces an existing file; a name taken (even in the meantime) moves on to the next suffix
+                try FileManager.default.copyItem(at: txtURL, to: destination)
+                restrictToOwner(destination)
+                return destination
+            } catch CocoaError.fileWriteFileExists {
+                continue
+            }
         }
-        // copyItem never replaces an existing file, so a name taken in the meantime fails instead of overwriting
-        try FileManager.default.copyItem(at: txtURL, to: destination)
-        restrictToOwner(destination)
-        return destination
+        throw CocoaError(.fileWriteFileExists)
+    }
+
+    /// Transient and concealed markers (nspasteboard.org) ask clipboard managers not to keep the path in their history.
+    static func copyPathToClipboard(_ path: String, pasteboard: NSPasteboard = .general) {
+        pasteboard.clearContents()
+        pasteboard.setString(path, forType: .string)
+        pasteboard.setData(Data(), forType: transientPasteboardType)
+        pasteboard.setData(Data(), forType: concealedPasteboardType)
     }
 
     /// Meeting files are private (0600), like `FileDropInboxService`. Reapply after every write: atomic writes recreate at 0644.
@@ -819,7 +878,7 @@ public final class MeetingRecorderService: ObservableObject {
         }
     }
 
-    nonisolated private static func writeMetadata(_ metadata: MeetingRecordingMetadata, to url: URL) {
+    nonisolated static func writeMetadata(_ metadata: MeetingRecordingMetadata, to url: URL) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -839,8 +898,17 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     private static func detectRunningMeetingApps() -> [String] {
-        let names = NSWorkspace.shared.runningApplications.compactMap(\.localizedName)
-        return Array(Set(names.filter { knownMeetingAppNames.contains($0) })).sorted()
+        meetingAppNames(in: NSWorkspace.shared.runningApplications.map { ($0.bundleIdentifier, $0.localizedName) })
+    }
+
+    /// Names of the apps whose bundle ID matches a meeting app keyword, sorted and unique.
+    nonisolated static func meetingAppNames(in apps: [(bundleID: String?, name: String?)]) -> [String] {
+        let names = apps.compactMap { app -> String? in
+            guard let bundleID = app.bundleID?.lowercased(),
+                  meetingAppBundleKeywords.contains(where: { bundleID.contains($0) }) else { return nil }
+            return app.name ?? app.bundleID
+        }
+        return Array(Set(names)).sorted()
     }
 }
 

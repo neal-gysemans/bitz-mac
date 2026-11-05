@@ -829,7 +829,7 @@ public final class ActivityMonitorService: ObservableObject {
     ]
 
     /// Work meeting and collaboration call bundle ID keywords where video/screen sharing is productive work.
-    private static let workMeetingBundleKeywords: [String] = [
+    nonisolated static let workMeetingBundleKeywords: [String] = [
         "zoom.xos", "microsoft.teams", "slack", "webex", "facetime"
     ]
 

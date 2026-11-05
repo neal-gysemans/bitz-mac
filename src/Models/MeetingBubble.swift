@@ -93,6 +93,7 @@ public struct MeetingBubble: Equatable, Sendable {
     public static let speechNotAllowedReason = "Speech Recognition is not allowed — Settings → Audio."
     public static let transcriptionOffReason = "Transcription is turned off."
     public static let previousTranscriptKeptWarning = "Transcribe Again failed — previous transcript kept"
+    public static let transcriptNotSavedError = "Transcript recognized but could not be saved"
     public static let metadataUnreadableError = "metadata.json could not be read."
 
     public static let needsPermissionText = "⚠️ Recording needs permission"

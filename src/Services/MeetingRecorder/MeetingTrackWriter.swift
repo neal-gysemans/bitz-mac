@@ -321,11 +321,11 @@ public enum MeetingTrackMixer {
         try? AVAudioFile(forReading: sessionDirectory.appendingPathComponent(audioFileName)).length
     }
 
-    /// Metadata `audioStatus` from the files: "mixed" (readable `audio.m4a`), "empty" (every track holds no frames), else "unmixed".
-    static func audioStatus(in sessionDirectory: URL) -> String {
-        if mixedLength(in: sessionDirectory) != nil { return "mixed" }
+    /// Metadata `audio_status` from the files: mixed (readable `audio.m4a`), empty (every track holds no frames), else unmixed.
+    static func audioStatus(in sessionDirectory: URL) -> MeetingRecordingMetadata.AudioStatus {
+        if mixedLength(in: sessionDirectory) != nil { return .mixed }
         let tracks = trackURLs(in: sessionDirectory).filter { FileManager.default.fileExists(atPath: $0.path) }
-        return tracks.allSatisfy { (try? AVAudioFile(forReading: $0).length) == 0 } ? "empty" : "unmixed"
+        return tracks.allSatisfy { (try? AVAudioFile(forReading: $0).length) == 0 } ? .empty : .unmixed
     }
 
     static func estimatedMixSeconds(in sessionDirectory: URL) -> Double {
@@ -341,29 +341,37 @@ public enum MeetingTrackMixer {
         return mixedLength(in: sessionDirectory) == nil
     }
 
-    /// Readable tracks a verified `audio.m4a` already covers: left over when deleting them after the mix was cut short.
-    static func tracksCoveredByMix(in sessionDirectory: URL) -> [URL] {
-        guard let mixed = mixedLength(in: sessionDirectory) else { return [] }
+    /// Tracks a verified `audio.m4a` already covers: left over when deleting them after the mix was cut short.
+    /// Only tracks the metadata lists as mixed (`mixedTracks`) count; without that list nothing is a leftover.
+    static func tracksCoveredByMix(in sessionDirectory: URL, mixedTracks: [String]?) -> [URL] {
+        guard let mixedTracks, let mixed = mixedLength(in: sessionDirectory) else { return [] }
         return trackURLs(in: sessionDirectory).filter { url in
-            (try? AVAudioFile(forReading: url).length).map { $0 <= mixed + lengthToleranceFrames } ?? false
+            mixedTracks.contains(url.lastPathComponent)
+                && (try? AVAudioFile(forReading: url).length).map { $0 <= mixed + lengthToleranceFrames } ?? false
         }
     }
 
     /// Mixes the session's tracks into `audio.m4a`, verifies it, then deletes the tracks that went in.
-    /// On failure the tracks stay and `mixed` is false; `warnings` also lists tracks that could not be read.
-    static func mixSession(in sessionDirectory: URL) -> (mixed: Bool, warnings: [String]) {
+    /// `recordMixedTracks` gets their names just before `audio.m4a` appears, so the caller can store them in metadata
+    /// and a cleanup cut short later deletes only those. On failure the tracks stay and `mixed` is false;
+    /// `warnings` also lists tracks that could not be read.
+    static func mixSession(
+        in sessionDirectory: URL,
+        recordMixedTracks: ([String]) -> Void = { _ in }
+    ) -> (mixed: Bool, mixedTracks: [String], warnings: [String]) {
         var warnings: [String] = []
         do {
             let mixedTracks = try mixTracks(
                 trackURLs(in: sessionDirectory),
                 into: sessionDirectory.appendingPathComponent(audioFileName),
-                warnings: &warnings
+                warnings: &warnings,
+                beforeCommit: { recordMixedTracks($0.map(\.lastPathComponent)) }
             )
             mixedTracks.forEach { try? FileManager.default.removeItem(at: $0) }
-            return (true, warnings)
+            return (true, mixedTracks.map(\.lastPathComponent), warnings)
         } catch {
             warnings.append("Audio tracks were kept, but mixing them into audio.m4a failed: \(error.localizedDescription)")
-            return (false, warnings)
+            return (false, [], warnings)
         }
     }
 
@@ -378,7 +386,8 @@ public enum MeetingTrackMixer {
         into outputURL: URL,
         chunkFrames: AVAudioFrameCount = chunkFrames,
         outputSettings: [String: Any] = m4aSettings,
-        warnings: inout [String]
+        warnings: inout [String],
+        beforeCommit: ([URL]) -> Void = { _ in }
     ) throws -> [URL] {
         var mixedTracks: [URL] = []
         var readers: [AVAudioFile] = []
@@ -426,7 +435,7 @@ public enum MeetingTrackMixer {
                 }
             } // `output` is released here, which finishes the AAC file
             try verifyMix(at: partialURL, expectedFrames: expectedFrames)
-            try replaceOutput(outputURL, with: partialURL)
+            try replaceOutput(outputURL, with: partialURL) { beforeCommit(mixedTracks) }
         } catch {
             try? FileManager.default.removeItem(at: partialURL)
             throw error
@@ -443,12 +452,15 @@ public enum MeetingTrackMixer {
     }
 
     /// Replaces only a damaged `audio.m4a` (a regular file that does not open); a readable one is a verified mix and stays.
-    private static func replaceOutput(_ outputURL: URL, with partialURL: URL) throws {
+    /// `beforeCommit` runs only once the output is known to be replaceable, right before the rename.
+    private static func replaceOutput(_ outputURL: URL, with partialURL: URL, beforeCommit: () -> Void) throws {
         guard let type = (try? FileManager.default.attributesOfItem(atPath: outputURL.path))?[.type] as? FileAttributeType else {
+            beforeCommit()
             try FileManager.default.moveItem(at: partialURL, to: outputURL)
             return
         }
         guard type == .typeRegular, (try? AVAudioFile(forReading: outputURL)) == nil else { throw MeetingTrackMixError.outputOccupied }
+        beforeCommit()
         _ = try FileManager.default.replaceItemAt(outputURL, withItemAt: partialURL)
     }
 }

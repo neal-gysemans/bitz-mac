@@ -77,10 +77,25 @@ public final class MeetingSettingsStore: ObservableObject {
         if isInside("Library/Mobile Documents") || isInside("Library/CloudStorage") {
             return "This folder is synced to a cloud service."
         }
+        if isInsideGitWorkTree(url) {
+            return "This folder is inside a git repository, so transcripts could be committed and pushed."
+        }
         if isInside("Documents") || isInside("Desktop") {
             return "macOS may sync this folder to iCloud (Desktop & Documents)."
         }
         return nil
+    }
+
+    /// True when `url` or one of its parents (at most `maxDepth` levels up) holds `.git`, a folder or a worktree's file.
+    nonisolated static func isInsideGitWorkTree(_ url: URL, maxDepth: Int = 64) -> Bool {
+        var folder = url.standardizedFileURL
+        for _ in 0..<maxDepth {
+            if FileManager.default.fileExists(atPath: folder.appendingPathComponent(".git").path) { return true }
+            let parent = folder.deletingLastPathComponent()
+            if parent.path == folder.path { return false }
+            folder = parent
+        }
+        return false
     }
 
     public init(userDefaults: UserDefaults = .standard) {

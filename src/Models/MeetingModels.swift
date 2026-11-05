@@ -47,26 +47,43 @@ public struct MeetingPermissionState: Equatable, Sendable {
 
 // MARK: - Meeting Recording Metadata & Transcript Models
 
-/// Metadata written to `metadata.json` inside each meeting recording directory (#43).
+/// Metadata written to `metadata.json` inside each meeting recording directory (#43). Keys are snake_case like
+/// `transcript.json`; files from earlier builds (camelCase keys, or one `audioFileName`) still decode, because
+/// retention and launch recovery only touch sessions whose metadata decodes.
 public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
+    public enum TranscriptStatus: String, Codable, Sendable {
+        case pending, skipped, completed, failed, interrupted
+    }
+
+    public enum AudioStatus: String, Codable, Sendable {
+        /// `audio.m4a` is a verified mix.
+        case mixed
+        /// Only the tracks exist; launch recovery mixes them.
+        case unmixed
+        /// Every track holds no frames.
+        case empty
+    }
+
     public let sessionID: String
     public let startedAt: Date
     public let endedAt: Date
     public let durationSeconds: TimeInterval
     public let captureMicrophone: Bool
     public let captureSystemAudio: Bool
+    /// Names of the running meeting apps, matched by bundle ID (browsers are never listed).
     public let detectedAppNames: [String]
     /// Files the audio is in: `audio.m4a`, or `mic.caf` / `system.caf` while unmixed.
     public var audioFileNames: [String]
-    /// "mixed" once `audio.m4a` is verified, "unmixed" while only the tracks exist (launch recovery mixes them).
-    public var audioStatus: String
+    public var audioStatus: AudioStatus
     /// True when launch recovery mixed the tracks after a crash or quit (absent otherwise).
     public var recovered: Bool?
-    public var transcriptStatus: String
+    /// Tracks that went into `audio.m4a`, recorded before it appears; only these are deleted as leftovers.
+    public var mixedTracks: [String]?
+    public var transcriptStatus: TranscriptStatus
     /// Locale the on-device recognizer actually used (nil until a transcript is written).
     public var transcriptLocale: String?
-    /// Where the transcript copy was exported (nil when export is off or failed).
-    public var transcriptExportPath: String?
+    /// File name of the transcript copy in the export folder (nil when export is off or failed). No path is stored.
+    public var transcriptExportFileName: String?
 
     public init(
         sessionID: String,
@@ -77,11 +94,12 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
         captureSystemAudio: Bool,
         detectedAppNames: [String],
         audioFileNames: [String] = ["audio.m4a"],
-        audioStatus: String = "mixed",
+        audioStatus: AudioStatus = .mixed,
         recovered: Bool? = nil,
-        transcriptStatus: String = "pending",
+        mixedTracks: [String]? = nil,
+        transcriptStatus: TranscriptStatus = .pending,
         transcriptLocale: String? = nil,
-        transcriptExportPath: String? = nil
+        transcriptExportFileName: String? = nil
     ) {
         self.sessionID = sessionID
         self.startedAt = startedAt
@@ -93,36 +111,65 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
         self.audioFileNames = audioFileNames
         self.audioStatus = audioStatus
         self.recovered = recovered
+        self.mixedTracks = mixedTracks
         self.transcriptStatus = transcriptStatus
         self.transcriptLocale = transcriptLocale
-        self.transcriptExportPath = transcriptExportPath
+        self.transcriptExportFileName = transcriptExportFileName
     }
 
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case startedAt = "started_at"
+        case endedAt = "ended_at"
+        case durationSeconds = "duration_seconds"
+        case captureMicrophone = "capture_microphone"
+        case captureSystemAudio = "capture_system_audio"
+        case detectedAppNames = "detected_apps"
+        case audioFileNames = "audio_files"
+        case audioStatus = "audio_status"
+        case recovered
+        case mixedTracks = "mixed_tracks"
+        case transcriptStatus = "transcript_status"
+        case transcriptLocale = "transcript_locale"
+        case transcriptExportFileName = "transcript_export_file_name"
+    }
+
+    /// Keys written by earlier builds of this branch.
     private enum LegacyCodingKeys: String, CodingKey {
-        case audioFileName
+        case sessionID, startedAt, endedAt, durationSeconds, captureMicrophone, captureSystemAudio, detectedAppNames
+        case audioFileNames, audioFileName, audioStatus, transcriptStatus, transcriptLocale, transcriptExportPath
     }
 
-    /// Also reads metadata from before the per-source tracks: one `audioFileName` and no `audioStatus`.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        sessionID = try container.decode(String.self, forKey: .sessionID)
-        startedAt = try container.decode(Date.self, forKey: .startedAt)
-        endedAt = try container.decode(Date.self, forKey: .endedAt)
-        durationSeconds = try container.decode(TimeInterval.self, forKey: .durationSeconds)
-        captureMicrophone = try container.decode(Bool.self, forKey: .captureMicrophone)
-        captureSystemAudio = try container.decode(Bool.self, forKey: .captureSystemAudio)
-        detectedAppNames = try container.decode([String].self, forKey: .detectedAppNames)
-        let legacyFileName = try decoder.container(keyedBy: LegacyCodingKeys.self).decodeIfPresent(String.self, forKey: .audioFileName)
-        audioFileNames = try container.decodeIfPresent([String].self, forKey: .audioFileNames)
-            ?? legacyFileName.map { [$0] }
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        func optional<T: Decodable>(_ key: CodingKeys, _ legacyKey: LegacyCodingKeys) throws -> T? {
+            try container.decodeIfPresent(T.self, forKey: key) ?? legacy.decodeIfPresent(T.self, forKey: legacyKey)
+        }
+        func required<T: Decodable>(_ key: CodingKeys, _ legacyKey: LegacyCodingKeys) throws -> T {
+            // Neither key present: the snake_case decode throws keyNotFound
+            try optional(key, legacyKey) ?? container.decode(T.self, forKey: key)
+        }
+        sessionID = try required(.sessionID, .sessionID)
+        startedAt = try required(.startedAt, .startedAt)
+        endedAt = try required(.endedAt, .endedAt)
+        durationSeconds = try required(.durationSeconds, .durationSeconds)
+        captureMicrophone = try required(.captureMicrophone, .captureMicrophone)
+        captureSystemAudio = try required(.captureSystemAudio, .captureSystemAudio)
+        detectedAppNames = try required(.detectedAppNames, .detectedAppNames)
+        // Before the per-source tracks: one `audioFileName` and no `audioStatus`
+        audioFileNames = try optional(.audioFileNames, .audioFileNames)
+            ?? legacy.decodeIfPresent(String.self, forKey: .audioFileName).map { [$0] }
             ?? [MeetingTrackMixer.audioFileName]
         // Older recordings were encoded straight to audio.m4a
-        audioStatus = try container.decodeIfPresent(String.self, forKey: .audioStatus)
-            ?? (audioFileNames.contains(MeetingTrackMixer.audioFileName) ? "mixed" : "unmixed")
+        audioStatus = try optional(.audioStatus, .audioStatus)
+            ?? (audioFileNames.contains(MeetingTrackMixer.audioFileName) ? .mixed : .unmixed)
         recovered = try container.decodeIfPresent(Bool.self, forKey: .recovered)
-        transcriptStatus = try container.decode(String.self, forKey: .transcriptStatus)
-        transcriptLocale = try container.decodeIfPresent(String.self, forKey: .transcriptLocale)
-        transcriptExportPath = try container.decodeIfPresent(String.self, forKey: .transcriptExportPath)
+        mixedTracks = try container.decodeIfPresent([String].self, forKey: .mixedTracks)
+        transcriptStatus = try required(.transcriptStatus, .transcriptStatus)
+        transcriptLocale = try optional(.transcriptLocale, .transcriptLocale)
+        transcriptExportFileName = try container.decodeIfPresent(String.self, forKey: .transcriptExportFileName)
+            ?? legacy.decodeIfPresent(String.self, forKey: .transcriptExportPath).map { ($0 as NSString).lastPathComponent }
     }
 }
 
