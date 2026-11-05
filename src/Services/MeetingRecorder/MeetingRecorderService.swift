@@ -42,6 +42,8 @@ public final class MeetingRecorderService: ObservableObject {
     public var onPlaySound: ((CyberSoundEvent) -> Void)?
     /// OPEN SETTINGS on the failure bubble: the delegate opens Settings → Audio.
     public var onOpenSettings: (() -> Void)?
+    /// First-recording notice (D7): true for Continue. Tests inject one instead of the modal alert.
+    var consentPresenter: @MainActor (_ recordingsFolder: URL) -> Bool = MeetingConsentNotice.present
     /// One-shot delay before a bubble hides itself; tests inject one they release by hand.
     var sleep: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     private(set) var bubbleHideTask: Task<Void, Never>?
@@ -61,6 +63,8 @@ public final class MeetingRecorderService: ObservableObject {
     private var isStopping = false
     /// The launch-recovery mix in progress; a starting recording cancels it so the two never compete for disk and CPU.
     private var recoveryMixTask: Task<Void, Never>?
+    /// Launch recovery is scanning or mixing; retention waits so it never deletes a folder being recovered.
+    private var isRecovering = false
     private var transcribingMetadata: (metadata: MeetingRecordingMetadata, url: URL)?
 
     private static let knownMeetingAppNames: Set<String> = [
@@ -82,7 +86,7 @@ public final class MeetingRecorderService: ObservableObject {
         self.settingsStore = settingsStore
         self.captureEngine = captureEngine ?? ProductionMeetingAudioCaptureEngine()
         self.transcriptionService = transcriptionService ?? SpeechFrameworkTranscriptionService()
-        let resolvedPermissionChecker = permissionChecker ?? SystemMeetingPermissionChecker()
+        let resolvedPermissionChecker = permissionChecker ?? SystemMeetingPermissionChecker(userDefaults: settingsStore.userDefaults)
         self.permissionChecker = resolvedPermissionChecker
         self.permissionState = resolvedPermissionChecker.currentPermissions()
         self.nowProvider = nowProvider
@@ -146,7 +150,6 @@ public final class MeetingRecorderService: ObservableObject {
         guard !isRecording && !isTranscribing && !isStarting && !isStopping else { return }
         isStarting = true
         defer { isStarting = false }
-        recoveryMixTask?.cancel()
 
         let captureMic = settingsStore.captureMicrophone
         let captureSys = settingsStore.captureSystemAudio
@@ -154,6 +157,16 @@ public final class MeetingRecorderService: ObservableObject {
             showFailure(MeetingBubble.noSourceText, message: MeetingRecorderError.noAudioSourcesEnabled.localizedDescription)
             return
         }
+
+        // Before any permission prompt, so the Screen & System Audio Recording scope is explained first
+        if !settingsStore.consentAcknowledged {
+            guard consentPresenter(settingsStore.meetingsRootDirectoryURL) else {
+                statusMessage = "Recording cancelled."
+                return
+            }
+            settingsStore.setConsentAcknowledged(true)
+        }
+        recoveryMixTask?.cancel()
 
         let perms = await requestPermissions()
         guard perms.canRecord(captureMicrophone: captureMic, captureSystemAudio: captureSys) else {
@@ -334,6 +347,10 @@ public final class MeetingRecorderService: ObservableObject {
         activeDetectedApps = []
         activeCaptureWarning = nil
         activeSources = []
+        // Not on the quit path, which must finish within its cap
+        if transcribe {
+            await applyRetention()
+        }
     }
 
     /// Nothing is recording, stopping or transcribing, and there is a last recording to transcribe again (D6).
@@ -500,6 +517,8 @@ public final class MeetingRecorderService: ObservableObject {
     /// Launch recovery (D1): mixes sessions a crash or quit left as tracks, one at a time at utility priority,
     /// never while a recording runs (a start cancels the mix in progress). No transcription; the session gets `recovered: true`.
     public func recoverUnmixedSessions() async {
+        isRecovering = true
+        defer { isRecovering = false }
         let root = settingsStore.meetingsRootDirectoryURL
         let sessions = await Task.detached(priority: .utility) {
             let folders = (try? FileManager.default.contentsOfDirectory(
@@ -518,6 +537,37 @@ public final class MeetingRecorderService: ObservableObject {
             await task.value
         }
         recoveryMixTask = nil
+    }
+
+    /// Retention (D7): deletes finished sessions older than the "Delete recordings after" setting. Skipped while recording,
+    /// transcribing or recovering; it runs again after the next recording and at launch.
+    public func applyRetention() async {
+        guard let days = settingsStore.retentionDays,
+              !hasUnfinalizedRecording, !isTranscribing, !isRecovering else { return }
+        let root = settingsStore.meetingsRootDirectoryURL
+        let now = nowProvider()
+        await Task.detached(priority: .utility) {
+            for sessionDir in Self.expiredSessions(in: root, olderThanDays: days, now: now) {
+                // removeItem deletes a symlink inside the folder, never its target
+                try? FileManager.default.removeItem(at: sessionDir)
+            }
+        }.value
+    }
+
+    /// Session folders Bitz created (its folder name and a decodable `metadata.json`) that started more than `days` ago.
+    /// Symlinks are never candidates. The caller guarantees no session is active, so none is in progress here.
+    nonisolated static func expiredSessions(in root: URL, olderThanDays days: Int, now: Date) -> [URL] {
+        let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
+        let folders = (try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: .skipsHiddenFiles
+        )) ?? []
+        return folders.filter { sessionDir in
+            guard isSessionFolder(sessionDir),
+                  let metadata = decodedMetadata(at: sessionDir.appendingPathComponent("metadata.json")) else { return false }
+            return metadata.startedAt < cutoff
+        }
     }
 
     /// Only folders Bitz names (`yyyy-MM-dd_HH-mm-ss`, optional `-N`), never symlinks: the recordings root can be any folder.
@@ -567,6 +617,10 @@ public final class MeetingRecorderService: ObservableObject {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return recoveredMetadata(for: sessionDir)
         }
+        return decodedMetadata(at: url)
+    }
+
+    nonisolated private static func decodedMetadata(at url: URL) -> MeetingRecordingMetadata? {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return (try? Data(contentsOf: url)).flatMap { try? decoder.decode(MeetingRecordingMetadata.self, from: $0) }
@@ -755,5 +809,37 @@ public final class MeetingRecorderService: ObservableObject {
     private static func detectRunningMeetingApps() -> [String] {
         let names = NSWorkspace.shared.runningApplications.compactMap(\.localizedName)
         return Array(Set(names.filter { knownMeetingAppNames.contains($0) })).sorted()
+    }
+}
+
+// MARK: - First-Recording Notice (D7)
+
+/// One-time notice before the first recording ever: what is captured, where it goes, and that others must be told.
+@MainActor
+enum MeetingConsentNotice {
+    static let title = "Before your first meeting recording"
+
+    static func message(recordingsFolder: URL) -> String {
+        let folder = (recordingsFolder.path as NSString).abbreviatingWithTildeInPath
+        return """
+        Bitz records your microphone and all sound your Mac plays, so everyone in the call is captured. \
+        Recording that sound needs the Screen & System Audio Recording permission. macOS calls it screen recording, \
+        but Bitz only uses the audio.
+
+        Recordings are saved in \(folder). Transcripts are made on this Mac.
+
+        Let other participants know before you record.
+        """
+    }
+
+    /// Modal alert; a menu-bar app activates first so the alert is in front. True for Continue.
+    static func present(recordingsFolder: URL) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message(recordingsFolder: recordingsFolder)
+        alert.addButton(withTitle: "Continue")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertFirstButtonReturn
     }
 }

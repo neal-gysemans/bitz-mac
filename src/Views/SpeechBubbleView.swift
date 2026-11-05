@@ -86,7 +86,7 @@ public struct SpeechBubbleView: View {
         telemetryDashboard: TelemetryDashboardService,
         telemetrySettings: TelemetrySettingsStore,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
-        meetingRecorder: MeetingRecorderService = MeetingRecorderService()
+        meetingRecorder: MeetingRecorderService
     ) {
         self.paletteStore = paletteStore
         self.meetingRecorder = meetingRecorder

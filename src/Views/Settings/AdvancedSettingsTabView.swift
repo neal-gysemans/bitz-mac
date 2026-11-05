@@ -18,9 +18,9 @@ public struct AdvancedSettingsTabView: View {
         activityMonitor: ActivityMonitorService,
         updateStore: AppUpdateStore,
         agentMonitor: AgentMonitorService? = nil,
-        meetingSettings: MeetingSettingsStore? = nil
+        meetingRecorder: MeetingRecorderService
     ) {
-        self.meetingSettings = meetingSettings ?? MeetingSettingsStore()
+        self.meetingSettings = meetingRecorder.settingsStore
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.updateStore = updateStore

@@ -77,7 +77,7 @@ final class MascotOverlayPanelTests: XCTestCase {
         // Launch runs meeting recovery on the recordings folder: point it at an empty temp folder, never the user's
         let meetingSettings = MeetingSettingsStore(userDefaults: defaults)
         meetingSettings.setMeetingsRootDirectoryURL(FileManager.default.temporaryDirectory.appendingPathComponent("bitz-meetings-\(UUID().uuidString)"))
-        let delegate = BitzAppDelegate(telemetryProvider: telemetry, scaleStore: scaleStore, meetingSettings: meetingSettings)
+        let delegate = BitzAppDelegate(telemetryProvider: telemetry, scaleStore: scaleStore, meetingRecorder: MeetingRecorderService(settingsStore: meetingSettings))
 
         delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
 

@@ -261,6 +261,7 @@ final class KeyboardShortcutsTests: XCTestCase {
     ) -> (BitzAppDelegate, MeetingRecorderService, MockMeetingAudioCaptureEngine) {
         let settings = MeetingSettingsStore(userDefaults: defaults)
         settings.setMeetingsRootDirectoryURL(meetingsDirectory)
+        settings.setConsentAcknowledged(true)
         let captureEngine = MockMeetingAudioCaptureEngine()
         let recorder = MeetingRecorderService(
             settingsStore: settings,
@@ -270,7 +271,7 @@ final class KeyboardShortcutsTests: XCTestCase {
                 state: MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .authorized)
             )
         )
-        let delegate = BitzAppDelegate(meetingSettings: settings, meetingRecorder: recorder, userDefaults: defaults)
+        let delegate = BitzAppDelegate(meetingRecorder: recorder, userDefaults: defaults)
         return (delegate, recorder, captureEngine)
     }
 

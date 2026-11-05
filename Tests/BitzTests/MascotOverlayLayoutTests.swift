@@ -19,6 +19,8 @@ final class MascotOverlayLayoutTests: XCTestCase {
     override func setUp() async throws {
         suiteName = "MascotOverlayLayoutTests.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
+        // Recordings started here must not wait on the first-recording notice
+        defaults.set(true, forKey: MeetingSettingsStore.consentAcknowledgedKey)
         OverlayFixture.resetAgentMonitorDefaults()
     }
 
@@ -85,7 +87,8 @@ final class MascotOverlayLayoutTests: XCTestCase {
             positionStore: fixture.positionStore,
             telemetryDashboard: fixture.telemetryDashboard,
             telemetrySettings: fixture.telemetrySettings,
-            paletteStore: paletteStore
+            paletteStore: paletteStore,
+            meetingRecorder: .stub(defaults: defaults)
         )
         try assertNothingDrawnOutside(view, size: MascotOverlayPanel.defaultPanelSize)
     }

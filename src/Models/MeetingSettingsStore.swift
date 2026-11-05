@@ -5,14 +5,32 @@ import Foundation
 /// Persists user preferences for the Local Meeting Recorder & On-Device Transcription (#43).
 @MainActor
 public final class MeetingSettingsStore: ObservableObject {
-    public static let captureMicrophoneKey = "Bitz.MeetingRecorder.CaptureMicrophone"
-    public static let captureSystemAudioKey = "Bitz.MeetingRecorder.CaptureSystemAudio"
-    public static let autoTranscribeKey = "Bitz.MeetingRecorder.AutoTranscribe"
-    public static let copyTranscriptPathKey = "Bitz.MeetingRecorder.CopyTranscriptPath"
-    public static let meetingsDirectoryPathKey = "Bitz.MeetingRecorder.DirectoryPath"
-    public static let transcriptionLocaleKey = "Bitz.MeetingRecorder.TranscriptionLocale"
-    public static let transcriptExportDirectoryPathKey = "Bitz.MeetingRecorder.TranscriptExportDirectoryPath"
-    public static let recordingHotkeyKey = "Bitz.MeetingRecorder.RecordingHotkey"
+    nonisolated public static let keyPrefix = "bitz.meeting."
+    public static let captureMicrophoneKey = keyPrefix + "captureMicrophone"
+    public static let captureSystemAudioKey = keyPrefix + "captureSystemAudio"
+    public static let autoTranscribeKey = keyPrefix + "autoTranscribe"
+    public static let copyTranscriptPathKey = keyPrefix + "copyTranscriptPath"
+    public static let meetingsDirectoryPathKey = keyPrefix + "directoryPath"
+    public static let transcriptionLocaleKey = keyPrefix + "transcriptionLocale"
+    public static let transcriptExportDirectoryPathKey = keyPrefix + "transcriptExportDirectoryPath"
+    public static let recordingHotkeyKey = keyPrefix + "recordingHotkey"
+    public static let consentAcknowledgedKey = keyPrefix + "consentAcknowledged"
+    public static let retentionDaysKey = keyPrefix + "retentionDays"
+    /// "Delete recordings after" choices in days; nil (Off) is the default.
+    public static let retentionDayOptions = [30, 90]
+
+    /// Keys written by earlier builds of this branch, mapped to their `bitz.meeting.` replacements.
+    static let legacyKeys: [String: String] = [
+        "Bitz.MeetingRecorder.CaptureMicrophone": captureMicrophoneKey,
+        "Bitz.MeetingRecorder.CaptureSystemAudio": captureSystemAudioKey,
+        "Bitz.MeetingRecorder.AutoTranscribe": autoTranscribeKey,
+        "Bitz.MeetingRecorder.CopyTranscriptPath": copyTranscriptPathKey,
+        "Bitz.MeetingRecorder.DirectoryPath": meetingsDirectoryPathKey,
+        "Bitz.MeetingRecorder.TranscriptionLocale": transcriptionLocaleKey,
+        "Bitz.MeetingRecorder.TranscriptExportDirectoryPath": transcriptExportDirectoryPathKey,
+        "Bitz.MeetingRecorder.RecordingHotkey": recordingHotkeyKey,
+        "Bitz.MeetingRecorder.ScreenCaptureRequested": SystemMeetingPermissionChecker.screenCaptureRequestedKey
+    ]
 
     @Published public private(set) var captureMicrophone: Bool
     @Published public private(set) var captureSystemAudio: Bool
@@ -24,8 +42,13 @@ public final class MeetingSettingsStore: ObservableObject {
     /// Optional folder that also receives a copy of each `transcript.txt` (nil = off).
     @Published public private(set) var transcriptExportDirectoryURL: URL?
     @Published public private(set) var recordingHotkey: MeetingRecordingHotkey
+    /// The first-recording notice was answered with Continue (D7).
+    @Published public private(set) var consentAcknowledged: Bool
+    /// Days after which finished recordings are deleted; nil = Off.
+    @Published public private(set) var retentionDays: Int?
 
-    private let userDefaults: UserDefaults
+    /// Shared with `SystemMeetingPermissionChecker`, so its flag lives (and migrates) in the same domain.
+    let userDefaults: UserDefaults
 
     /// Application Support, not `~/Documents`: Documents is commonly synced (iCloud, OneDrive) and Spotlight-indexed,
     /// so confidential meetings could leave the Mac before the user ever opens Settings.
@@ -62,6 +85,7 @@ public final class MeetingSettingsStore: ObservableObject {
 
     public init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
+        Self.migrateLegacyKeys(in: userDefaults)
 
         if userDefaults.object(forKey: Self.captureMicrophoneKey) != nil {
             self.captureMicrophone = userDefaults.bool(forKey: Self.captureMicrophoneKey)
@@ -107,6 +131,30 @@ public final class MeetingSettingsStore: ObservableObject {
 
         self.recordingHotkey = userDefaults.string(forKey: Self.recordingHotkeyKey)
             .flatMap(MeetingRecordingHotkey.init(rawValue:)) ?? .controlOptionCommandR
+        self.consentAcknowledged = userDefaults.bool(forKey: Self.consentAcknowledgedKey)
+        let savedRetention = userDefaults.integer(forKey: Self.retentionDaysKey)
+        self.retentionDays = Self.retentionDayOptions.contains(savedRetention) ? savedRetention : nil
+    }
+
+    /// Copies each legacy value whose new key is still absent, then removes the legacy key, so it only ever acts once.
+    static func migrateLegacyKeys(in userDefaults: UserDefaults) {
+        for (oldKey, newKey) in legacyKeys {
+            guard let value = userDefaults.object(forKey: oldKey) else { continue }
+            if userDefaults.object(forKey: newKey) == nil {
+                userDefaults.set(value, forKey: newKey)
+            }
+            userDefaults.removeObject(forKey: oldKey)
+        }
+    }
+
+    public func setConsentAcknowledged(_ acknowledged: Bool) {
+        consentAcknowledged = acknowledged
+        userDefaults.set(acknowledged, forKey: Self.consentAcknowledgedKey)
+    }
+
+    public func setRetentionDays(_ days: Int?) {
+        retentionDays = days
+        userDefaults.set(days, forKey: Self.retentionDaysKey)
     }
 
     public func setCaptureMicrophone(_ enabled: Bool) {

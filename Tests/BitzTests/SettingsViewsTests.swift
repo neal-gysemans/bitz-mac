@@ -35,7 +35,8 @@ final class SettingsViewsTests: XCTestCase {
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
-            telemetrySettings: telemetrySettings
+            telemetrySettings: telemetrySettings,
+            meetingRecorder: .stub(defaults: defaults)
         )
 
         // Verify body evaluation
@@ -215,7 +216,8 @@ final class SettingsViewsTests: XCTestCase {
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
-            telemetrySettings: telemetrySettings
+            telemetrySettings: telemetrySettings,
+            meetingRecorder: .stub(defaults: defaults)
         )
         _ = menuView.body
 
@@ -268,7 +270,8 @@ final class SettingsViewsTests: XCTestCase {
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
             interactionSettings: interactionSettings,
-            paletteStore: paletteStore
+            paletteStore: paletteStore,
+            meetingRecorder: .stub(defaults: defaults)
         )
         let rootRendered = String(describing: rootView.body)
         XCTAssertTrue(rootRendered.contains("Show Mascot on Desktop"))
@@ -365,7 +368,8 @@ final class SettingsViewsTests: XCTestCase {
             engine: engine,
             activityMonitor: activityMonitor,
             updateStore: AppUpdateStore(userDefaults: defaults),
-            agentMonitor: monitor
+            agentMonitor: monitor,
+            meetingRecorder: .stub(defaults: defaults)
         )
         let advancedRendered = String(describing: advancedTab.body)
         // C9: agent simulation buttons present in Advanced tab

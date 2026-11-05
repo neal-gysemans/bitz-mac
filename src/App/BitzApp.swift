@@ -34,8 +34,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     public let appActivator: any AppActivating
     public let diffViewer: any DiffViewing
     public let licensingService: LicensingService
-    public let meetingSettings: MeetingSettingsStore
     public let meetingRecorder: MeetingRecorderService
+    public var meetingSettings: MeetingSettingsStore { meetingRecorder.settingsStore }
     private var isAwaitingTerminationReply = false
     @Published public private(set) var menuBarTitle: String = "Bitz"
     /// Red record glyph + "REC" in the status item while a meeting records; static, no per-second updates (#43 D5).
@@ -94,15 +94,12 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         appActivator: (any AppActivating)? = nil,
         diffViewer: (any DiffViewing)? = nil,
         licensingService: LicensingService? = nil,
-        meetingSettings: MeetingSettingsStore? = nil,
         meetingRecorder: MeetingRecorderService? = nil,
         userDefaults: UserDefaults = .standard
     ) {
         self.userDefaults = userDefaults
         self.licensingService = licensingService ?? LicensingService()
-        let resolvedMeetingSettings = meetingSettings ?? meetingRecorder?.settingsStore ?? MeetingSettingsStore(userDefaults: userDefaults)
-        self.meetingSettings = resolvedMeetingSettings
-        self.meetingRecorder = meetingRecorder ?? MeetingRecorderService(settingsStore: resolvedMeetingSettings)
+        self.meetingRecorder = meetingRecorder ?? MeetingRecorderService(settingsStore: MeetingSettingsStore(userDefaults: userDefaults))
         let resolvedApprovalStore = approvalStore ?? AgentApprovalStore()
         self.approvalStore = resolvedApprovalStore
         self.appActivator = appActivator ?? WorkspaceAppActivator()
@@ -373,6 +370,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         updateStore.startPeriodicChecks()
         Task { [meetingRecorder] in
             await meetingRecorder.recoverUnmixedSessions()
+            await meetingRecorder.applyRetention()
         }
         if shouldOpenSettingsOnLaunch() {
             showSettingsWindow()
@@ -595,7 +593,6 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
                 paletteStore: paletteStore,
                 personalitySettings: personalitySettings,
                 licensingService: licensingService,
-                meetingSettings: meetingSettings,
                 meetingRecorder: meetingRecorder,
                 initialTab: tab ?? .general
             ),
@@ -986,13 +983,12 @@ struct BitzMenuBarContentView: View {
         flowShieldSettings: FlowShieldSettingsStore? = nil,
         flowShieldService: FlowShieldService? = nil,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
-        meetingRecorder: MeetingRecorderService? = nil,
+        meetingRecorder: MeetingRecorderService,
         onOpenSettings: @escaping () -> Void = {}
     ) {
         self.paletteStore = paletteStore
-        let resolvedMeetingRecorder = meetingRecorder ?? MeetingRecorderService()
-        self.meetingRecorder = resolvedMeetingRecorder
-        self.meetingSettings = resolvedMeetingRecorder.settingsStore
+        self.meetingRecorder = meetingRecorder
+        self.meetingSettings = meetingRecorder.settingsStore
         self.onOpenSettings = onOpenSettings
         self.engine = engine
         self.activityMonitor = activityMonitor

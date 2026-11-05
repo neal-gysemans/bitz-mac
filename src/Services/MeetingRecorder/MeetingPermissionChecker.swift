@@ -16,9 +16,14 @@ public protocol MeetingPermissionChecking: Sendable {
 
 public struct SystemMeetingPermissionChecker: MeetingPermissionChecking {
     /// `CGPreflightScreenCaptureAccess` stays false until relaunch, so remember that access was already requested.
-    static let screenCaptureRequestedKey = "Bitz.MeetingRecorder.ScreenCaptureRequested"
+    static let screenCaptureRequestedKey = MeetingSettingsStore.keyPrefix + "screenCaptureRequested"
 
-    public init() {}
+    /// UserDefaults is thread-safe but not marked Sendable.
+    nonisolated(unsafe) private let userDefaults: UserDefaults
+
+    public init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+    }
 
     public func currentPermissions() -> MeetingPermissionState {
         let micStatus: MeetingPermissionState.Status
@@ -37,7 +42,7 @@ public struct SystemMeetingPermissionChecker: MeetingPermissionChecking {
         if CGPreflightScreenCaptureAccess() {
             screenStatus = .authorized
         } else {
-            screenStatus = UserDefaults.standard.bool(forKey: Self.screenCaptureRequestedKey) ? .denied : .notDetermined
+            screenStatus = userDefaults.bool(forKey: Self.screenCaptureRequestedKey) ? .denied : .notDetermined
         }
 
         let speechStatus: MeetingPermissionState.Status
@@ -75,7 +80,7 @@ public struct SystemMeetingPermissionChecker: MeetingPermissionChecking {
             if CGPreflightScreenCaptureAccess() {
                 state.screenAudio = .authorized
             } else {
-                UserDefaults.standard.set(true, forKey: Self.screenCaptureRequestedKey)
+                userDefaults.set(true, forKey: Self.screenCaptureRequestedKey)
                 let granted = CGRequestScreenCaptureAccess()
                 state.screenAudio = granted ? .authorized : .denied
             }

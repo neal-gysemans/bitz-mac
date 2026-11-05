@@ -27,7 +27,8 @@ final class MenuBarContentViewTests: XCTestCase {
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
-            telemetrySettings: telemetrySettings
+            telemetrySettings: telemetrySettings,
+            meetingRecorder: .stub(defaults: defaults)
         )
 
         // Verify view body can be evaluated without crashing
@@ -61,7 +62,8 @@ final class MenuBarContentViewTests: XCTestCase {
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
-            telemetrySettings: telemetrySettings
+            telemetrySettings: telemetrySettings,
+            meetingRecorder: .stub(defaults: defaults)
         )
 
         _ = menuView.body
@@ -94,7 +96,8 @@ final class MenuBarContentViewTests: XCTestCase {
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
-            telemetrySettings: telemetrySettings
+            telemetrySettings: telemetrySettings,
+            meetingRecorder: .stub(defaults: defaults)
         )
 
         _ = menuView.body
@@ -110,7 +113,8 @@ final class MenuBarContentViewTests: XCTestCase {
                 agentMonitor: agentMonitor,
                 updateStore: updateStore,
                 telemetryDashboard: telemetryDashboard,
-                telemetrySettings: telemetrySettings
+                telemetrySettings: telemetrySettings,
+                meetingRecorder: .stub(defaults: defaults)
             )
         )
 
@@ -135,7 +139,8 @@ final class MenuBarContentViewTests: XCTestCase {
             agentMonitor: agentMonitor,
             updateStore: AppUpdateStore(userDefaults: defaults),
             telemetryDashboard: TelemetryDashboardService(settingsStore: telemetrySettings),
-            telemetrySettings: telemetrySettings
+            telemetrySettings: telemetrySettings,
+            meetingRecorder: .stub(defaults: defaults)
         )
         XCTAssertFalse(String(describing: menuView.body).contains("Dismiss Agent Warning"), "No warning, no dismiss item")
 
@@ -170,7 +175,8 @@ final class MenuBarContentViewTests: XCTestCase {
             updateStore: AppUpdateStore(userDefaults: defaults),
             telemetryDashboard: TelemetryDashboardService(settingsStore: TelemetrySettingsStore(userDefaults: defaults)),
             telemetrySettings: TelemetrySettingsStore(userDefaults: defaults),
-            paletteStore: paletteStore
+            paletteStore: paletteStore,
+            meetingRecorder: .stub(defaults: defaults)
         )
 
         _ = menuView.body
@@ -197,7 +203,8 @@ final class MenuBarContentViewTests: XCTestCase {
             agentMonitor: AgentMonitorService(adapters: [], userDefaults: defaults),
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
-            telemetrySettings: telemetrySettings
+            telemetrySettings: telemetrySettings,
+            meetingRecorder: .stub(defaults: defaults)
         )
         let stats = telemetryDashboard.snapshot.menuBarItems(enabledMetrics: [.ram]).joined(separator: " | ")
         XCTAssertFalse(stats.isEmpty)
@@ -228,7 +235,8 @@ final class MenuBarContentViewTests: XCTestCase {
             agentMonitor: AgentMonitorService(adapters: [], userDefaults: defaults),
             updateStore: AppUpdateStore(userDefaults: defaults),
             telemetryDashboard: telemetryDashboard,
-            telemetrySettings: telemetrySettings
+            telemetrySettings: telemetrySettings,
+            meetingRecorder: .stub(defaults: defaults)
         )
 
         let rootObservedTypes = Mirror(reflecting: menuView).children.map { String(describing: type(of: $0.value)) }
@@ -267,7 +275,8 @@ final class MenuBarContentViewTests: XCTestCase {
             telemetrySettings: telemetrySettings,
             audioSettings: audioSettings,
             flowShieldSettings: flowSettings,
-            flowShieldService: flowService
+            flowShieldService: flowService,
+            meetingRecorder: .stub(defaults: defaults)
         )
 
         activityMonitor.startSimulation(points: 72.0, continuousWorkMinutes: 25.0)

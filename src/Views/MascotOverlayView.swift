@@ -52,7 +52,7 @@ public struct MascotOverlayView: View {
         interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         agentMonitor: AgentMonitorService = AgentMonitorService(),
-        meetingRecorder: MeetingRecorderService = MeetingRecorderService(),
+        meetingRecorder: MeetingRecorderService,
         isAttentionCueActive: Bool? = nil,
         onFilesDropped: (([URL]) -> Void)? = nil,
         onDragChanged: ((NSPoint, NSScreen?) -> Void)? = nil,

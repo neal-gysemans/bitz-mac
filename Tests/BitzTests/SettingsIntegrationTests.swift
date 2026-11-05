@@ -47,7 +47,8 @@ final class SettingsIntegrationTests: XCTestCase {
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
-            telemetrySettings: telemetrySettings
+            telemetrySettings: telemetrySettings,
+            meetingRecorder: .stub(defaults: defaults)
         )
 
         // 3. Open Settings Window via SettingsWindowManager
@@ -118,7 +119,8 @@ final class SettingsIntegrationTests: XCTestCase {
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
-            telemetrySettings: telemetrySettings
+            telemetrySettings: telemetrySettings,
+            meetingRecorder: .stub(defaults: defaults)
         )
 
         // First open
@@ -201,6 +203,7 @@ final class SettingsIntegrationTests: XCTestCase {
             positionStore: positionStore,
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
+            meetingRecorder: .stub(defaults: defaults),
             onOpenSettings: {
                 settingsOpened = true
             }

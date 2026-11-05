@@ -18,6 +18,7 @@ final class OverlayFixture {
     let updateStore: AppUpdateStore
     let telemetrySettings: TelemetrySettingsStore
     let telemetryDashboard: TelemetryDashboardService
+    let meetingRecorder: MeetingRecorderService
 
     static let release = GitHubReleaseInfo(
         tagName: "v1.3.0",
@@ -40,6 +41,7 @@ final class OverlayFixture {
         opacityStore = AvatarOpacityStore(userDefaults: defaults)
         positionStore = AvatarPositionStore(userDefaults: defaults)
         agentMonitor = AgentMonitorService(adapters: [], userDefaults: defaults)
+        meetingRecorder = .stub(defaults: defaults)
         updateStore = AppUpdateStore(
             currentVersionString: "1.2.0",
             updateService: StubUpdateService(release: Self.release),
@@ -82,6 +84,7 @@ final class OverlayFixture {
             positionStore: positionStore,
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
+            meetingRecorder: meetingRecorder,
             onEarTopChanged: onEarTopChanged
         )
     }
@@ -93,7 +96,8 @@ final class OverlayFixture {
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
-            telemetrySettings: telemetrySettings
+            telemetrySettings: telemetrySettings,
+            meetingRecorder: meetingRecorder
         )
     }
 }
@@ -108,4 +112,19 @@ func spinRunLoop(until condition: () -> Bool, timeout: TimeInterval = 2.0) -> Bo
         RunLoop.main.run(until: Date().addingTimeInterval(0.02))
     }
     return condition()
+}
+
+extension MeetingRecorderService {
+    /// Views take the app's recorder instead of building one; tests pass this mocked one.
+    static func stub(defaults: UserDefaults) -> MeetingRecorderService {
+        MeetingRecorderService(
+            settingsStore: MeetingSettingsStore(userDefaults: defaults),
+            captureEngine: MockMeetingAudioCaptureEngine(),
+            transcriptionService: MockMeetingTranscriptionService(),
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .authorized)
+            ),
+            onRevealURL: { _ in }
+        )
+    }
 }

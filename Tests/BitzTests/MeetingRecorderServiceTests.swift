@@ -147,6 +147,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
     override func setUp() async throws {
         suiteName = "MeetingRecorderServiceTests.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)!
+        // The first-recording notice is tested on its own; the other tests start recordings directly
+        defaults.set(true, forKey: MeetingSettingsStore.consentAcknowledgedKey)
         tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("bitz-meetings-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -565,7 +567,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
 
     func testMenuBarRecIndicatorFollowsRecording() async throws {
         let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
-        let delegate = BitzAppDelegate(meetingSettings: service.settingsStore, meetingRecorder: service, userDefaults: defaults)
+        let delegate = BitzAppDelegate(meetingRecorder: service, userDefaults: defaults)
         XCTAssertFalse(delegate.isRecordingIndicatorVisible)
 
         await service.startRecording()
@@ -586,7 +588,6 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let delegate = BitzAppDelegate(
             personalitySettings: personalitySettings,
             personalityService: personality,
-            meetingSettings: service.settingsStore,
             meetingRecorder: service,
             userDefaults: defaults
         )

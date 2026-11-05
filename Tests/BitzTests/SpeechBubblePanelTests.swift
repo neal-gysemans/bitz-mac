@@ -298,6 +298,7 @@ final class SpeechBubblePanelTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tempDir) }
         let settings = MeetingSettingsStore(userDefaults: defaults)
         settings.setMeetingsRootDirectoryURL(tempDir)
+        settings.setConsentAcknowledged(true)
         let checker = MockMeetingPermissionChecker(
             state: MeetingPermissionState(microphone: .denied, screenAudio: .authorized, speechRecognition: .authorized)
         )

@@ -128,10 +128,42 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
 
     /// On-device transcription languages for the Settings picker, sorted by display name.
     public static func onDeviceLocaleOptions() -> [(id: String, label: String)] {
-        SFSpeechRecognizer.supportedLocales()
-            .filter { SFSpeechRecognizer(locale: $0)?.supportsOnDeviceRecognition ?? false }
-            .map { (id: $0.identifier, label: Locale.current.localizedString(forIdentifier: $0.identifier) ?? $0.identifier) }
-            .sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
+        orderedLocaleOptions(
+            SFSpeechRecognizer.supportedLocales()
+                .filter { SFSpeechRecognizer(locale: $0)?.supportsOnDeviceRecognition ?? false }
+                .map(\.identifier),
+            preferredLanguages: Locale.preferredLanguages,
+            displayLocale: .current
+        )
+    }
+
+    /// Picker entries after "Automatic": the user's preferred languages first (in their order, the exact preferred locale
+    /// before its siblings), then the rest by name. One entry per locale; the region is shown only when the list has more
+    /// than one locale of that language, e.g. English (United States) / English (United Kingdom) but plain "French".
+    static func orderedLocaleOptions(
+        _ identifiers: [String],
+        preferredLanguages: [String],
+        displayLocale: Locale
+    ) -> [(id: String, label: String)] {
+        func normalized(_ id: String) -> String { id.replacingOccurrences(of: "_", with: "-") }
+        func language(_ id: String) -> String { Locale(identifier: id).language.languageCode?.identifier ?? id }
+        var seen = Set<String>()
+        let ids = identifiers.filter { seen.insert(normalized($0)).inserted }
+        let localesPerLanguage = Dictionary(grouping: ids, by: language).mapValues(\.count)
+        let preferredIDs = Set(preferredLanguages.map(normalized))
+        let preferredLanguageCodes = preferredLanguages.map(language)
+        func label(_ id: String) -> String {
+            localesPerLanguage[language(id), default: 0] > 1
+                ? displayLocale.localizedString(forIdentifier: id) ?? id
+                : displayLocale.localizedString(forLanguageCode: language(id)) ?? id
+        }
+        func rank(_ id: String) -> (Int, Int) {
+            (preferredLanguageCodes.firstIndex(of: language(id)) ?? .max, preferredIDs.contains(normalized(id)) ? 0 : 1)
+        }
+        return ids.map { (id: $0, label: label($0)) }.sorted { a, b in
+            let (rankA, rankB) = (rank(a.id), rank(b.id))
+            return rankA != rankB ? rankA < rankB : a.label.localizedStandardCompare(b.label) == .orderedAscending
+        }
     }
 
     public func transcribe(

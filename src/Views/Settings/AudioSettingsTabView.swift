@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Settings tab for configuring Cyber Audio features: master toggle, output volume,
 /// individual sound event toggles with preview triggers, environment suppression rules,
-/// and the Local Meeting Audio Recorder & On-Device Transcription pipeline (#43).
+/// and the meeting recorder and its on-device transcription (#43).
 public struct AudioSettingsTabView: View {
     @ObservedObject public var settingsStore: CyberAudioSettingsStore
     public var audioPlayer: (any CyberAudioPlaying)?
@@ -14,21 +14,16 @@ public struct AudioSettingsTabView: View {
     public init(
         settingsStore: CyberAudioSettingsStore,
         audioPlayer: (any CyberAudioPlaying)? = nil,
-        meetingSettings: MeetingSettingsStore? = nil,
-        meetingRecorder: MeetingRecorderService? = nil
+        meetingRecorder: MeetingRecorderService
     ) {
         self.settingsStore = settingsStore
         self.audioPlayer = audioPlayer
-        let resolvedMeetingSettings = meetingSettings ?? meetingRecorder?.settingsStore ?? MeetingSettingsStore()
-        self.meetingSettings = resolvedMeetingSettings
-        self.meetingRecorder = meetingRecorder ?? MeetingRecorderService(settingsStore: resolvedMeetingSettings)
+        self.meetingSettings = meetingRecorder.settingsStore
+        self.meetingRecorder = meetingRecorder
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            // Local Meeting Audio Recorder & On-Device Transcription (#43)
-            meetingAssistantCard
-
             // Master Toggle & Volume Card
             masterAudioCard
 
@@ -37,16 +32,29 @@ public struct AudioSettingsTabView: View {
 
             // Environmental Suppression Card
             suppressionCard
+
+            // Meeting recorder and its transcription (#43)
+            meetingRecorderCard
+            transcriptionCard
+        }
+        .onAppear {
+            meetingRecorder.refreshPermissions()
+            // Probing ~60 recognizers takes ~0.2 s, so build the list off the main thread
+            Task {
+                transcriptionLocaleOptions = await Task.detached(priority: .utility) {
+                    SpeechFrameworkTranscriptionService.onDeviceLocaleOptions()
+                }.value
+            }
         }
     }
 
-    // MARK: - Local Meeting Audio Recorder & On-Device Transcription Card (#43)
+    // MARK: - Meeting Recorder Card (#43)
 
-    private var meetingAssistantCard: some View {
-        settingsCard(title: "Meeting Audio Recorder & On-Device Transcription", systemImage: "waveform.badge.mic") {
+    private var meetingRecorderCard: some View {
+        settingsCard(title: "Meeting Recorder", systemImage: "waveform.badge.mic") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center, spacing: 10) {
-                    Text("Capture microphone and system meeting audio (Zoom, Meet, Teams, Slack) into the recordings folder below, transcribed on-device with Apple `SFSpeechRecognizer`.")
+                    Text("Records your microphone and the meeting's sound into the recordings folder below.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -100,6 +108,26 @@ public struct AudioSettingsTabView: View {
                     .controlSize(.small)
                 }
 
+                Text(meetingRecorder.statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                Toggle("Microphone", isOn: Binding(
+                    get: { meetingSettings.captureMicrophone },
+                    set: { meetingSettings.setCaptureMicrophone($0) }
+                ))
+                .font(.subheadline)
+                .disabled(meetingRecorder.isRecording)
+
+                Toggle("Meeting / system audio", isOn: Binding(
+                    get: { meetingSettings.captureSystemAudio },
+                    set: { meetingSettings.setCaptureSystemAudio($0) }
+                ))
+                .font(.subheadline)
+                .disabled(meetingRecorder.isRecording)
+
                 HStack(spacing: 10) {
                     Text("Recordings folder")
                         .font(.subheadline)
@@ -123,9 +151,8 @@ public struct AudioSettingsTabView: View {
                 }
                 .disabled(meetingRecorder.isRecording)
 
-                Text((meetingSettings.meetingsRootDirectoryURL.path as NSString).abbreviatingWithTildeInPath)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                caption((meetingSettings.meetingsRootDirectoryURL.path as NSString).abbreviatingWithTildeInPath,
+                        enabled: !meetingRecorder.isRecording)
 
                 if let warning = MeetingSettingsStore.syncWarning(for: meetingSettings.meetingsRootDirectoryURL) {
                     Text("Recordings folder: \(warning)")
@@ -133,50 +160,19 @@ public struct AudioSettingsTabView: View {
                         .foregroundStyle(.orange)
                 }
 
-                Text(meetingRecorder.statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Divider()
-
-                Toggle("Record Microphone Input (AVAudioEngine)", isOn: Binding(
-                    get: { meetingSettings.captureMicrophone },
-                    set: { meetingSettings.setCaptureMicrophone($0) }
-                ))
-                .font(.subheadline)
-                .disabled(meetingRecorder.isRecording)
-
-                Toggle("Record System / Meeting Output Audio (ScreenCaptureKit)", isOn: Binding(
-                    get: { meetingSettings.captureSystemAudio },
-                    set: { meetingSettings.setCaptureSystemAudio($0) }
-                ))
-                .font(.subheadline)
-                .disabled(meetingRecorder.isRecording)
-
-                Toggle("Generate On-Device Transcript (`transcript.txt` & `transcript.json`)", isOn: Binding(
-                    get: { meetingSettings.autoTranscribeOnStop },
-                    set: { meetingSettings.setAutoTranscribeOnStop($0) }
-                ))
-                .font(.subheadline)
-
-                Toggle("Copy Transcript File Path to Clipboard on Completion", isOn: Binding(
-                    get: { meetingSettings.copyTranscriptPathToClipboard },
-                    set: { meetingSettings.setCopyTranscriptPathToClipboard($0) }
-                ))
-                .font(.subheadline)
-                .disabled(!meetingSettings.autoTranscribeOnStop)
-
-                Picker("Transcription Language", selection: Binding(
-                    get: { meetingSettings.transcriptionLocaleIdentifier },
-                    set: { meetingSettings.setTranscriptionLocaleIdentifier($0) }
+                Picker("Delete recordings after", selection: Binding(
+                    get: { meetingSettings.retentionDays },
+                    set: { meetingSettings.setRetentionDays($0) }
                 )) {
-                    Text("Automatic").tag(String?.none)
-                    ForEach(transcriptionLocaleOptions, id: \.id) { option in
-                        Text(option.label).tag(Optional(option.id))
+                    Text("Off").tag(Int?.none)
+                    ForEach(MeetingSettingsStore.retentionDayOptions, id: \.self) { days in
+                        Text("\(days) days").tag(Optional(days))
                     }
                 }
                 .font(.subheadline)
-                .disabled(!meetingSettings.autoTranscribeOnStop)
+
+                caption("Only recordings Bitz made in the recordings folder are deleted, at launch and after each recording.",
+                        enabled: true)
 
                 Picker("Recording shortcut", selection: Binding(
                     get: { meetingSettings.recordingHotkey },
@@ -188,54 +184,12 @@ public struct AudioSettingsTabView: View {
                 }
                 .font(.subheadline)
 
-                Text("Transcription uses one language per recording, so pick the meeting's language.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 10) {
-                    Text("Copy transcripts to folder")
-                        .font(.subheadline)
-
-                    Spacer()
-
-                    Button("Choose…") {
-                        if let url = chooseFolder(message: "Select a folder that also receives a copy of each meeting transcript") {
-                            meetingSettings.setTranscriptExportDirectoryURL(url)
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    Button("Turn Off") {
-                        meetingSettings.setTranscriptExportDirectoryURL(nil)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(meetingSettings.transcriptExportDirectoryURL == nil)
-                }
-                .disabled(!meetingSettings.autoTranscribeOnStop)
-
-                Text(meetingSettings.transcriptExportDirectoryURL.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "Off")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Text("Every transcript is copied, including work meetings — turn this off for recordings that must not leave Bitz's folder.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if let exportURL = meetingSettings.transcriptExportDirectoryURL,
-                   let warning = MeetingSettingsStore.syncWarning(for: exportURL) {
-                    Text("Export folder: \(warning)")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-
                 Divider()
 
                 HStack(spacing: 12) {
-                    permissionPill(label: "Mic", status: meetingRecorder.permissionState.microphone)
-                    permissionPill(label: "System Audio", status: meetingRecorder.permissionState.screenAudio)
-                    permissionPill(label: "On-Device Speech", status: meetingRecorder.permissionState.speechRecognition)
+                    permissionPill(label: "Microphone", status: meetingRecorder.permissionState.microphone)
+                    permissionPill(label: "System audio", status: meetingRecorder.permissionState.screenAudio)
+                    permissionPill(label: "Speech recognition", status: meetingRecorder.permissionState.speechRecognition)
 
                     Spacer()
 
@@ -249,15 +203,105 @@ public struct AudioSettingsTabView: View {
                 }
             }
         }
-        .onAppear {
-            meetingRecorder.refreshPermissions()
-            // Probing ~60 recognizers takes ~0.2 s, so build the list off the main thread
-            Task {
-                transcriptionLocaleOptions = await Task.detached(priority: .utility) {
-                    SpeechFrameworkTranscriptionService.onDeviceLocaleOptions()
-                }.value
+    }
+
+    // MARK: - Transcription Card (#43)
+
+    private var transcriptionCard: some View {
+        settingsCard(title: "Transcription", systemImage: "text.bubble") {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Transcribe after recording", isOn: Binding(
+                    get: { meetingSettings.autoTranscribeOnStop },
+                    set: { meetingSettings.setAutoTranscribeOnStop($0) }
+                ))
+                .font(.subheadline)
+
+                caption("Transcripts are made on this Mac and saved next to the recording.", enabled: true)
+
+                Picker("Language", selection: Binding(
+                    get: { meetingSettings.transcriptionLocaleIdentifier },
+                    set: { meetingSettings.setTranscriptionLocaleIdentifier($0) }
+                )) {
+                    Text("Automatic").tag(String?.none)
+                    ForEach(languageOptions, id: \.id) { option in
+                        Text(option.label).tag(Optional(option.id))
+                    }
+                }
+                .font(.subheadline)
+                .disabled(!meetingSettings.autoTranscribeOnStop)
+
+                caption("Transcription uses one language per recording, so pick the meeting's language.",
+                        enabled: meetingSettings.autoTranscribeOnStop)
+
+                Toggle("Copy transcript path to clipboard", isOn: Binding(
+                    get: { meetingSettings.copyTranscriptPathToClipboard },
+                    set: { meetingSettings.setCopyTranscriptPathToClipboard($0) }
+                ))
+                .font(.subheadline)
+                .disabled(!meetingSettings.autoTranscribeOnStop)
+
+                HStack(spacing: 10) {
+                    Toggle("Copy transcripts to a folder", isOn: Binding(
+                        get: { meetingSettings.transcriptExportDirectoryURL != nil },
+                        set: { isOn in
+                            if isOn {
+                                chooseExportFolder()
+                            } else {
+                                meetingSettings.setTranscriptExportDirectoryURL(nil)
+                            }
+                        }
+                    ))
+                    .font(.subheadline)
+
+                    Spacer()
+
+                    Button("Choose…") {
+                        chooseExportFolder()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(meetingSettings.transcriptExportDirectoryURL == nil)
+                }
+                .disabled(!meetingSettings.autoTranscribeOnStop)
+
+                if let exportURL = meetingSettings.transcriptExportDirectoryURL {
+                    caption((exportURL.path as NSString).abbreviatingWithTildeInPath,
+                            enabled: meetingSettings.autoTranscribeOnStop)
+                }
+
+                caption("Every transcript is copied, including work meetings — turn this off for recordings that must not leave Bitz's folder.",
+                        enabled: meetingSettings.autoTranscribeOnStop)
+
+                if let exportURL = meetingSettings.transcriptExportDirectoryURL,
+                   let warning = MeetingSettingsStore.syncWarning(for: exportURL) {
+                    Text("Export folder: \(warning)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
         }
+    }
+
+    /// Loaded options, plus the saved language while the list loads (or if it is gone), so the selection is always valid.
+    private var languageOptions: [(id: String, label: String)] {
+        guard let selected = meetingSettings.transcriptionLocaleIdentifier,
+              !transcriptionLocaleOptions.contains(where: { $0.id == selected }) else {
+            return transcriptionLocaleOptions
+        }
+        return [(id: selected, label: Locale.current.localizedString(forIdentifier: selected) ?? selected)] + transcriptionLocaleOptions
+    }
+
+    private func chooseExportFolder() {
+        if let url = chooseFolder(message: "Select a folder that also receives a copy of each meeting transcript") {
+            meetingSettings.setTranscriptExportDirectoryURL(url)
+        }
+    }
+
+    /// `.disabled` does not dim plain text, so a caption dims itself along with its row.
+    private func caption(_ text: String, enabled: Bool) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(enabled ? .secondary : .tertiary)
     }
 
     private func chooseFolder(message: String) -> URL? {
@@ -275,11 +319,7 @@ public struct AudioSettingsTabView: View {
         if meetingRecorder.isRecording {
             return "Recording"
         }
-        if let busy = meetingRecorder.busyMenuLabel {
-            return busy
-        }
-        let hotkey = meetingSettings.recordingHotkey
-        return hotkey == .off ? "Ready" : "Ready (\(hotkey.displayString))"
+        return meetingRecorder.busyMenuLabel ?? "Ready"
     }
 
     private var meetingStatusBadgeColor: Color {
@@ -499,9 +539,9 @@ public struct AudioSettingsTabView: View {
         case .charging:
             return "Calm ascending blip when entering offline/break charging"
         case .meetingRecordingStarted:
-            return "Blip when a meeting recording starts (plays even while in a call)"
+            return "Blip when a meeting recording starts — plays while the mic is in use; system mute, Focus suppression and Enable Cyber Audio still silence it"
         case .meetingRecordingSaved:
-            return "Fanfare when a meeting recording is saved (plays even while in a call)"
+            return "Fanfare when a meeting recording is saved — plays while the mic is in use; system mute, Focus suppression and Enable Cyber Audio still silence it"
         }
     }
 }

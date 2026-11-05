@@ -51,7 +51,6 @@ public struct SettingsRootView: View {
     @ObservedObject public var paletteStore: AvatarPaletteStore
     @ObservedObject public var personalitySettings: PersonalitySettingsStore
     @ObservedObject public var licensingService: LicensingService
-    @ObservedObject public var meetingSettings: MeetingSettingsStore
     @ObservedObject public var meetingRecorder: MeetingRecorderService
 
     @State private var selectedTab: SettingsTab = .general
@@ -76,8 +75,7 @@ public struct SettingsRootView: View {
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         personalitySettings: PersonalitySettingsStore? = nil,
         licensingService: LicensingService? = nil,
-        meetingSettings: MeetingSettingsStore? = nil,
-        meetingRecorder: MeetingRecorderService? = nil,
+        meetingRecorder: MeetingRecorderService,
         initialTab: SettingsTab = .general
     ) {
         self._selectedTab = State(initialValue: initialTab)
@@ -86,9 +84,7 @@ public struct SettingsRootView: View {
         self.paletteStore = paletteStore
         self.personalitySettings = personalitySettings ?? PersonalitySettingsStore()
         self.licensingService = licensingService ?? LicensingService()
-        let resolvedMeetingSettings = meetingSettings ?? meetingRecorder?.settingsStore ?? MeetingSettingsStore()
-        self.meetingSettings = resolvedMeetingSettings
-        self.meetingRecorder = meetingRecorder ?? MeetingRecorderService(settingsStore: resolvedMeetingSettings)
+        self.meetingRecorder = meetingRecorder
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.scaleStore = scaleStore
@@ -229,7 +225,6 @@ public struct SettingsRootView: View {
             AudioSettingsTabView(
                 settingsStore: audioSettings,
                 audioPlayer: audioPlayer,
-                meetingSettings: meetingSettings,
                 meetingRecorder: meetingRecorder
             )
         case .telemetry:
@@ -248,7 +243,7 @@ public struct SettingsRootView: View {
                 activityMonitor: activityMonitor,
                 updateStore: updateStore,
                 agentMonitor: agentMonitor,
-                meetingSettings: meetingSettings
+                meetingRecorder: meetingRecorder
             )
         }
     }
