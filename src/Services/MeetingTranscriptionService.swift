@@ -130,6 +130,7 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
             .map { Double($0.length) / max(1, $0.fileFormat.sampleRate) } ?? 0
         let timeout = Self.recognitionTimeout(forAudioDuration: audioDuration)
         let state = ContinuationGate()
+        let utterances = UtteranceAccumulator()
         // The task is cancelled if its recognizer is deallocated, so keep it alive until the result arrives
         defer { withExtendedLifetime(recognizer) {} }
 
@@ -137,44 +138,41 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
             try await withCheckedThrowingContinuation { continuation in
                 state.install(continuation)
                 let task = recognizer.recognitionTask(with: request) { result, error in
+                    if let result {
+                        utterances.add(
+                            segments: result.bestTranscription.segments.map { seg in
+                                MeetingTranscriptSegment(
+                                    text: seg.substring,
+                                    startTime: seg.timestamp,
+                                    endTime: seg.timestamp + seg.duration,
+                                    confidence: seg.confidence
+                                )
+                            },
+                            formattedString: result.bestTranscription.formattedString
+                        )
+                    }
+
                     if let error {
                         // An empty/silent audio file can report "No speech detected"; treat that as an empty transcript
                         let nsError = error as NSError
                         let lowerDesc = nsError.localizedDescription.lowercased()
                         if lowerDesc.contains("no speech") || lowerDesc.contains("retry") && result != nil {
-                            let emptyTranscript = MeetingTranscript(
+                            state.finish(.success(utterances.transcript(sessionID: sessionID, localeIdentifier: resolvedLocaleID)))
+                        } else if !utterances.isEmpty {
+                            // Keep what was recognized before the failure instead of losing the whole meeting
+                            state.finish(.success(utterances.transcript(
                                 sessionID: sessionID,
                                 localeIdentifier: resolvedLocaleID,
-                                generatedAt: Date(),
-                                fullText: "",
-                                segments: []
-                            )
-                            state.finish(.success(emptyTranscript))
+                                warning: "Transcript may be incomplete: \(nsError.localizedDescription)"
+                            )))
                         } else {
                             state.finish(.failure(MeetingTranscriptionError.recognitionFailed(nsError.localizedDescription)))
                         }
                         return
                     }
 
-                    guard let result, result.isFinal else { return }
-
-                    let segments = result.bestTranscription.segments.map { seg in
-                        MeetingTranscriptSegment(
-                            text: seg.substring,
-                            startTime: seg.timestamp,
-                            endTime: seg.timestamp + seg.duration,
-                            confidence: seg.confidence
-                        )
-                    }
-
-                    let transcript = MeetingTranscript(
-                        sessionID: sessionID,
-                        localeIdentifier: resolvedLocaleID,
-                        generatedAt: Date(),
-                        fullText: result.bestTranscription.formattedString,
-                        segments: segments
-                    )
-                    state.finish(.success(transcript))
+                    guard result?.isFinal == true else { return }
+                    state.finish(.success(utterances.transcript(sessionID: sessionID, localeIdentifier: resolvedLocaleID)))
                 }
                 state.attach(task)
                 DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
@@ -184,6 +182,33 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
         } onCancel: {
             state.finish(.failure(CancellationError()))
         }
+    }
+}
+
+/// Collects every recognized utterance. Even with `shouldReportPartialResults = false`, URL recognition delivers one
+/// result per pause-separated utterance and only the last is `isFinal`, holding just the last utterance.
+/// Callbacks arrive serially on `SFSpeechRecognizer.queue`, so no lock is needed.
+final class UtteranceAccumulator: @unchecked Sendable {
+    private var utterances: [TimeInterval: (segments: [MeetingTranscriptSegment], text: String)] = [:]
+
+    var isEmpty: Bool { utterances.isEmpty }
+
+    /// Keyed by the first segment's start time (absolute within the file), so a re-delivered utterance replaces itself.
+    func add(segments: [MeetingTranscriptSegment], formattedString: String) {
+        guard let start = segments.first?.startTime else { return }
+        utterances[start] = (segments, formattedString)
+    }
+
+    func transcript(sessionID: String, localeIdentifier: String, warning: String? = nil) -> MeetingTranscript {
+        let ordered = utterances.keys.sorted().compactMap { utterances[$0] }
+        return MeetingTranscript(
+            sessionID: sessionID,
+            localeIdentifier: localeIdentifier,
+            generatedAt: Date(),
+            fullText: ordered.map(\.text).joined(separator: " "),
+            segments: ordered.flatMap(\.segments),
+            warning: warning
+        )
     }
 }
 

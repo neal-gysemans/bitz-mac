@@ -123,6 +123,8 @@ public struct MeetingTranscript: Codable, Equatable, Sendable {
     public let generatedAt: Date
     public let fullText: String
     public let segments: [MeetingTranscriptSegment]
+    /// Set when recognition stopped early and only part of the recording was transcribed.
+    public let warning: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
@@ -130,6 +132,7 @@ public struct MeetingTranscript: Codable, Equatable, Sendable {
         case generatedAt = "generated_at"
         case fullText = "full_text"
         case segments
+        case warning
     }
 
     public init(
@@ -137,13 +140,15 @@ public struct MeetingTranscript: Codable, Equatable, Sendable {
         localeIdentifier: String,
         generatedAt: Date = Date(),
         fullText: String,
-        segments: [MeetingTranscriptSegment]
+        segments: [MeetingTranscriptSegment],
+        warning: String? = nil
     ) {
         self.sessionID = sessionID
         self.localeIdentifier = localeIdentifier
         self.generatedAt = generatedAt
         self.fullText = fullText
         self.segments = segments
+        self.warning = warning
     }
 
     /// Formats a human-readable plain-text transcript with timestamped lines for `transcript.txt`.

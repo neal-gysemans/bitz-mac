@@ -851,6 +851,9 @@ public final class MeetingRecorderService: ObservableObject {
                 jsonURL = written.jsonURL
                 metadata.transcriptStatus = "completed"
                 metadata.transcriptLocale = transcript.localeIdentifier
+                if let partialWarning = transcript.warning {
+                    warnings.append(partialWarning)
+                }
                 if let exportDirectory = settingsStore.transcriptExportDirectoryURL {
                     do {
                         let exported = try Self.exportTranscript(written.txtURL, sessionID: sessionID, to: exportDirectory)

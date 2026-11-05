@@ -681,4 +681,48 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(meta.transcriptStatus, "completed")
         XCTAssertNil(meta.transcriptExportPath)
     }
+
+    // MARK: - Utterance accumulation (one recognition result per utterance)
+
+    private func segments(_ words: String, from start: TimeInterval) -> [MeetingTranscriptSegment] {
+        words.split(separator: " ").enumerated().map { index, word in
+            let t = start + Double(index) * 0.4
+            return MeetingTranscriptSegment(text: String(word), startTime: t, endTime: t + 0.35, confidence: 0.9)
+        }
+    }
+
+    func testUtteranceAccumulatorKeepsEveryUtteranceInOrder() {
+        // Mirrors the live probe: three pause-separated results, only the last one final
+        let first = "First sentence about the project budget"
+        let second = "Second sentence about the timeline of the next steps"
+        let third = "Third sentence OK I am going to stop recording now"
+        let accumulator = UtteranceAccumulator()
+        accumulator.add(segments: segments(first, from: 0.0), formattedString: first)
+        accumulator.add(segments: segments(second, from: 6.45), formattedString: second)
+        accumulator.add(segments: segments(third, from: 13.77), formattedString: third)
+
+        let transcript = accumulator.transcript(sessionID: "s", localeIdentifier: "en-US")
+        XCTAssertEqual(transcript.fullText, "\(first) \(second) \(third)")
+        XCTAssertEqual(transcript.segments.count, 6 + 9 + 10)
+        XCTAssertEqual(transcript.segments.first?.text, "First")
+        XCTAssertEqual(transcript.segments.last?.text, "now")
+        XCTAssertEqual(transcript.segments.map(\.startTime), transcript.segments.map(\.startTime).sorted())
+        XCTAssertNil(transcript.warning)
+
+        let plain = transcript.formattedPlainText()
+        XCTAssertTrue(plain.contains("budget") && plain.contains("timeline") && plain.contains("recording now"))
+    }
+
+    func testUtteranceAccumulatorReplacesRedeliveredUtterance() {
+        let accumulator = UtteranceAccumulator()
+        accumulator.add(segments: segments("Hello team", from: 2.0), formattedString: "Hello team")
+        accumulator.add(segments: segments("Bye", from: 9.0), formattedString: "Bye")
+        accumulator.add(segments: segments("Hello team, welcome", from: 2.0), formattedString: "Hello team, welcome")
+        accumulator.add(segments: [], formattedString: "")
+
+        let transcript = accumulator.transcript(sessionID: "s", localeIdentifier: "en-US", warning: "partial")
+        XCTAssertEqual(transcript.fullText, "Hello team, welcome Bye")
+        XCTAssertEqual(transcript.segments.count, 4)
+        XCTAssertEqual(transcript.warning, "partial")
+    }
 }
