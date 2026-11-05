@@ -64,7 +64,7 @@ public final class MeetingRecorderService: ObservableObject {
     /// The launch-recovery mix in progress; a starting recording cancels it so the two never compete for disk and CPU.
     private var recoveryMixTask: Task<Void, Never>?
     /// Launch recovery is scanning or mixing; retention waits so it never deletes a folder being recovered.
-    private var isRecovering = false
+    private(set) var isRecovering = false
     private var transcribingMetadata: (metadata: MeetingRecordingMetadata, url: URL)?
 
     private static let knownMeetingAppNames: Set<String> = [
@@ -514,6 +514,12 @@ public final class MeetingRecorderService: ObservableObject {
         await stopRecording(transcribe: false, mixDeadline: mixDeadline)
     }
 
+    /// At launch: recovery first, so a session it rebuilds metadata for is judged by retention with that metadata.
+    public func runLaunchMaintenance() async {
+        await recoverUnmixedSessions()
+        await applyRetention()
+    }
+
     /// Launch recovery (D1): mixes sessions a crash or quit left as tracks, one at a time at utility priority,
     /// never while a recording runs (a start cancels the mix in progress). No transcription; the session gets `recovered: true`.
     public func recoverUnmixedSessions() async {
@@ -540,41 +546,67 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     /// Retention (D7): deletes finished sessions older than the "Delete recordings after" setting. Skipped while recording,
-    /// transcribing or recovering; it runs again after the next recording and at launch.
+    /// transcribing or recovering; it runs again after the next recording and at launch. Each run first finishes deletes
+    /// an earlier run left behind (`.deleting-*`), even with the setting Off, since those sessions were already removed.
     public func applyRetention() async {
-        guard let days = settingsStore.retentionDays,
-              !hasUnfinalizedRecording, !isTranscribing, !isRecovering else { return }
+        guard !hasUnfinalizedRecording, !isTranscribing, !isRecovering else { return }
+        let days = settingsStore.retentionDays
         let root = settingsStore.meetingsRootDirectoryURL
         let now = nowProvider()
         await Task.detached(priority: .utility) {
-            for sessionDir in Self.expiredSessions(in: root, olderThanDays: days, now: now) {
-                // removeItem deletes a symlink inside the folder, never its target
-                try? FileManager.default.removeItem(at: sessionDir)
-            }
+            Self.sweepUnfinishedDeletes(in: root)
+            guard let days else { return }
+            Self.expiredSessions(in: root, olderThanDays: days, now: now).forEach(Self.deleteSession)
         }.value
     }
 
+    nonisolated static let deletingPrefix = ".deleting-"
+
+    /// One atomic rename hides the session, so a delete cut short never leaves a half-empty session in the list.
+    /// removeItem deletes a symlink inside the folder, never its target.
+    nonisolated static func deleteSession(_ sessionDir: URL) {
+        let trash = sessionDir.deletingLastPathComponent().appendingPathComponent(deletingPrefix + sessionDir.lastPathComponent)
+        guard (try? FileManager.default.moveItem(at: sessionDir, to: trash)) != nil else { return }
+        try? FileManager.default.removeItem(at: trash)
+    }
+
+    /// Removes `.deleting-<session>` folders a killed or failed delete left in the recordings root (real folders only).
+    nonisolated static func sweepUnfinishedDeletes(in root: URL) {
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+        )) ?? []
+        for entry in entries where isSessionFolder(entry, prefix: deletingPrefix) {
+            try? FileManager.default.removeItem(at: entry)
+        }
+    }
+
     /// Session folders Bitz created (its folder name and a decodable `metadata.json`) that started more than `days` ago.
+    /// The folder's modification date must agree, so a wrong `startedAt` alone never expires a recent session.
     /// Symlinks are never candidates. The caller guarantees no session is active, so none is in progress here.
     nonisolated static func expiredSessions(in root: URL, olderThanDays days: Int, now: Date) -> [URL] {
         let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
         let folders = (try? FileManager.default.contentsOfDirectory(
             at: root,
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey],
             options: .skipsHiddenFiles
         )) ?? []
         return folders.filter { sessionDir in
             guard isSessionFolder(sessionDir),
+                  let modified = try? sessionDir.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                  modified < cutoff,
                   let metadata = decodedMetadata(at: sessionDir.appendingPathComponent("metadata.json")) else { return false }
             return metadata.startedAt < cutoff
         }
     }
 
-    /// Only folders Bitz names (`yyyy-MM-dd_HH-mm-ss`, optional `-N`), never symlinks: the recordings root can be any folder.
-    nonisolated static func isSessionFolder(_ url: URL) -> Bool {
+    /// Only folders Bitz names (`yyyy-MM-dd_HH-mm-ss`, optional `-N`, after `prefix`), never symlinks: the recordings
+    /// root can be any folder.
+    nonisolated static func isSessionFolder(_ url: URL, prefix: String = "") -> Bool {
         let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        return values?.isDirectory == true && values?.isSymbolicLink == false
-            && url.lastPathComponent.wholeMatch(of: #/[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}(-[0-9]+)?/#) != nil
+        let name = url.lastPathComponent
+        return values?.isDirectory == true && values?.isSymbolicLink == false && name.hasPrefix(prefix)
+            && name.dropFirst(prefix.count).wholeMatch(of: #/[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}(-[0-9]+)?/#) != nil
     }
 
     nonisolated static func needsRecovery(_ sessionDir: URL) -> Bool {
@@ -834,6 +866,11 @@ enum MeetingConsentNotice {
 
     /// Modal alert; a menu-bar app activates first so the alert is in front. True for Continue.
     static func present(recordingsFolder: URL) -> Bool {
+        // runModal would hang a test run forever: fail loudly instead, and act as Cancel where asserts are off
+        if NSClassFromString("XCTestCase") != nil {
+            assertionFailure("Inject consentPresenter in tests")
+            return false
+        }
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message(recordingsFolder: recordingsFolder)

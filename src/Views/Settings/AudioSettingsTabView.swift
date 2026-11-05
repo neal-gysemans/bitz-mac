@@ -228,17 +228,14 @@ public struct AudioSettingsTabView: View {
                     }
                 }
                 .font(.subheadline)
-                .disabled(!meetingSettings.autoTranscribeOnStop)
 
-                caption("Transcription uses one language per recording, so pick the meeting's language.",
-                        enabled: meetingSettings.autoTranscribeOnStop)
+                caption("Transcription uses one language per recording, so pick the meeting's language.", enabled: true)
 
                 Toggle("Copy transcript path to clipboard", isOn: Binding(
                     get: { meetingSettings.copyTranscriptPathToClipboard },
                     set: { meetingSettings.setCopyTranscriptPathToClipboard($0) }
                 ))
                 .font(.subheadline)
-                .disabled(!meetingSettings.autoTranscribeOnStop)
 
                 HStack(spacing: 10) {
                     Toggle("Copy transcripts to a folder", isOn: Binding(
@@ -262,15 +259,13 @@ public struct AudioSettingsTabView: View {
                     .controlSize(.small)
                     .disabled(meetingSettings.transcriptExportDirectoryURL == nil)
                 }
-                .disabled(!meetingSettings.autoTranscribeOnStop)
 
                 if let exportURL = meetingSettings.transcriptExportDirectoryURL {
-                    caption((exportURL.path as NSString).abbreviatingWithTildeInPath,
-                            enabled: meetingSettings.autoTranscribeOnStop)
+                    caption((exportURL.path as NSString).abbreviatingWithTildeInPath, enabled: true)
                 }
 
                 caption("Every transcript is copied, including work meetings — turn this off for recordings that must not leave Bitz's folder.",
-                        enabled: meetingSettings.autoTranscribeOnStop)
+                        enabled: true)
 
                 if let exportURL = meetingSettings.transcriptExportDirectoryURL,
                    let warning = MeetingSettingsStore.syncWarning(for: exportURL) {
@@ -282,13 +277,14 @@ public struct AudioSettingsTabView: View {
         }
     }
 
-    /// Loaded options, plus the saved language while the list loads (or if it is gone), so the selection is always valid.
     private var languageOptions: [(id: String, label: String)] {
-        guard let selected = meetingSettings.transcriptionLocaleIdentifier,
-              !transcriptionLocaleOptions.contains(where: { $0.id == selected }) else {
-            return transcriptionLocaleOptions
-        }
-        return [(id: selected, label: Locale.current.localizedString(forIdentifier: selected) ?? selected)] + transcriptionLocaleOptions
+        Self.languageOptions(selected: meetingSettings.transcriptionLocaleIdentifier, loaded: transcriptionLocaleOptions)
+    }
+
+    /// Loaded options, plus the saved language while the list loads (or if it is gone), so the selection is always valid.
+    static func languageOptions(selected: String?, loaded: [(id: String, label: String)]) -> [(id: String, label: String)] {
+        guard let selected, !loaded.contains(where: { $0.id == selected }) else { return loaded }
+        return [(id: selected, label: Locale.current.localizedString(forIdentifier: selected) ?? selected)] + loaded
     }
 
     private func chooseExportFolder() {

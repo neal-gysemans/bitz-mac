@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 @testable import BitzCore
 
@@ -170,28 +171,186 @@ final class MeetingSettingsTests: XCTestCase {
         )
     }
 
+    func testExpiredSessionsNeedTheFolderDateToAgreeWithMetadata() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        // metadata says old, but the folder changed yesterday: a wrong startedAt alone never expires a session
+        let session = try makeSession("2026-01-01_10-00-00", startedAt: now.addingTimeInterval(-40 * 86_400))
+        try backdate(session, to: now.addingTimeInterval(-86_400))
+
+        XCTAssertEqual(MeetingRecorderService.expiredSessions(in: tempDir, olderThanDays: 30, now: now), [])
+    }
+
+    func testRetentionDeletesASymlinkInsideASessionButNeverItsTarget() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let old = now.addingTimeInterval(-40 * 86_400)
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("bitz-outside-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createDirectory(at: outside.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        try Data("keep".utf8).write(to: outside.appendingPathComponent("keep.txt"))
+        try Data("keep".utf8).write(to: outside.appendingPathComponent("sub/keep.txt"))
+        let session = try makeSession("2026-01-01_10-00-00", startedAt: old)
+        try FileManager.default.createSymbolicLink(at: session.appendingPathComponent("dirlink"), withDestinationURL: outside.appendingPathComponent("sub"))
+        try FileManager.default.createSymbolicLink(at: session.appendingPathComponent("filelink"), withDestinationURL: outside.appendingPathComponent("keep.txt"))
+        try backdate(session, to: old)
+
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), now: { now })
+        service.settingsStore.setRetentionDays(30)
+        await service.applyRetention()
+
+        XCTAssertFalse(exists(session))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.appendingPathComponent("keep.txt").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.appendingPathComponent("sub/keep.txt").path))
+    }
+
+    func testRetentionRenamesASessionAwayBeforeDeletingAndSweepsWhatADeleteLeftBehind() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let old = now.addingTimeInterval(-40 * 86_400)
+        let session = try makeSession("2026-01-01_10-00-00", startedAt: old)
+        // A folder whose contents cannot be removed makes the delete stop halfway
+        let locked = session.appendingPathComponent("locked", isDirectory: true)
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: false)
+        try Data("x".utf8).write(to: locked.appendingPathComponent("file"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: locked.path)
+        try backdate(session, to: old)
+        let leftover = tempDir.appendingPathComponent(".deleting-2026-01-01_10-00-00", isDirectory: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: leftover.appendingPathComponent("locked").path)
+        }
+
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), now: { now })
+        service.settingsStore.setRetentionDays(30)
+        await service.applyRetention()
+
+        XCTAssertFalse(exists(session), "the session leaves the list in one rename")
+        XCTAssertTrue(exists(leftover), "what could not be removed stays hidden under .deleting-")
+
+        // The next run finishes it, even with retention Off; lookalikes and symlinks are left alone
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: leftover.appendingPathComponent("locked").path)
+        let notOurs = tempDir.appendingPathComponent(".deleting-notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: notOurs, withIntermediateDirectories: false)
+        let outside = try makeSession("2026-01-02_10-00-00", startedAt: nil, in: tempDir.appendingPathComponent("outside"))
+        let link = tempDir.appendingPathComponent(".deleting-2026-01-02_10-00-00")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        service.settingsStore.setRetentionDays(nil)
+        await service.applyRetention()
+
+        XCTAssertFalse(exists(leftover))
+        for survivor in [notOurs, link, outside] {
+            XCTAssertTrue(exists(survivor), "\(survivor.lastPathComponent) should survive")
+        }
+    }
+
+    func testRetentionWaitsWhileTranscribing() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let expired = try makeSession("2026-01-01_10-00-00", startedAt: now.addingTimeInterval(-100 * 86_400))
+        var transcription = MockMeetingTranscriptionService()
+        transcription.delayNanoseconds = 300_000_000
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), transcription: transcription, now: { now })
+        service.settingsStore.setRetentionDays(90)
+        service.settingsStore.setAutoTranscribeOnStop(true)
+        service.settingsStore.setConsentAcknowledged(true)
+        await service.startRecording()
+
+        let stop = Task { await service.stopRecording() }
+        try await waitUntil { service.isTranscribing }
+        await service.applyRetention()
+        XCTAssertTrue(exists(expired), "nothing is deleted while transcribing")
+
+        await stop.value
+        XCTAssertFalse(exists(expired), "retention runs once the transcript is done")
+    }
+
+    func testRetentionWaitsWhileRecovering() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let expired = try makeSession("2026-01-01_10-00-00", startedAt: now.addingTimeInterval(-40 * 86_400))
+        _ = try makeOrphanSession("2026-01-02_10-00-00")
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), now: { now })
+        service.settingsStore.setRetentionDays(30)
+
+        let recovery = Task { await service.recoverUnmixedSessions() }
+        try await waitUntil { service.isRecovering }
+        await service.applyRetention()
+        XCTAssertTrue(exists(expired), "nothing is deleted while recovering")
+
+        await recovery.value
+        await service.applyRetention()
+        XCTAssertFalse(exists(expired))
+    }
+
+    /// The orphan has no metadata, so retention alone skips it; only recovery first gives retention a start date to judge.
+    func testLaunchRecoversBeforeApplyingRetention() async throws {
+        let orphan = try makeOrphanSession("2026-01-01_10-00-00")
+        let now = Date().addingTimeInterval(100 * 86_400)
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), now: { now })
+        service.settingsStore.setRetentionDays(30)
+
+        await service.applyRetention()
+        XCTAssertTrue(exists(orphan), "no metadata yet, so not a candidate")
+
+        await service.runLaunchMaintenance()
+        XCTAssertFalse(exists(orphan), "recovery wrote its metadata, then retention found it old")
+    }
+
     // MARK: - Language picker
 
-    func testLanguageOptionsPutPreferredLanguagesFirstAndShowRegionOnlyToDisambiguate() {
+    func testLanguageOptionsPutPreferredLanguagesFirstWithOneEntryPerLanguage() {
         let options = SpeechFrameworkTranscriptionService.orderedLocaleOptions(
             ["fr-FR", "en-GB", "de-DE", "nl-NL", "en-US", "nl-BE", "en_US"],
             preferredLanguages: ["nl-BE", "en-US"],
             displayLocale: Locale(identifier: "en_US")
         )
 
-        XCTAssertEqual(options.map(\.id), ["nl-BE", "nl-NL", "en-US", "en-GB", "fr-FR", "de-DE"])
+        XCTAssertEqual(options.map(\.id), ["nl-BE", "en-US", "fr-FR", "de-DE"])
+        XCTAssertEqual(options.map(\.label), ["Dutch", "English", "French", "German"])
+    }
+
+    /// The variants this Mac offers for a Belgian English/Dutch user: one English entry (the default region), no odd regions.
+    func testLanguageOptionsPickTheDefaultRegionWhenNoPreferredVariantIsAvailable() {
+        let options = SpeechFrameworkTranscriptionService.orderedLocaleOptions(
+            Self.englishHeavyLocales,
+            preferredLanguages: ["en-BE", "nl-BE"],
+            displayLocale: Locale(identifier: "en_US")
+        )
+
+        XCTAssertEqual(options.map(\.id), ["en-US", "nl-BE"])
+        XCTAssertEqual(options.map(\.label), ["English", "Dutch"])
+    }
+
+    func testLanguageOptionsKeepEveryPreferredVariantAndSplitChineseByScript() {
+        let options = SpeechFrameworkTranscriptionService.orderedLocaleOptions(
+            Self.englishHeavyLocales + ["zh-CN", "zh-TW", "zh-HK"],
+            preferredLanguages: ["en-US", "en-GB"],
+            displayLocale: Locale(identifier: "en_US")
+        )
+
+        XCTAssertEqual(options.map(\.id), ["en-GB", "en-US", "zh-CN", "zh-TW", "nl-BE"])
         let labels = Dictionary(uniqueKeysWithValues: options.map { ($0.id, $0.label) })
-        XCTAssertEqual(labels["fr-FR"], "French")
-        XCTAssertEqual(labels["de-DE"], "German")
         XCTAssertEqual(labels["en-US"], "English (United States)")
         XCTAssertEqual(labels["en-GB"], "English (United Kingdom)")
-        XCTAssertEqual(labels["nl-BE"], "Dutch (Belgium)")
+        XCTAssertEqual(labels["zh-TW"], "Chinese (Taiwan)")
+        XCTAssertEqual(labels["nl-BE"], "Dutch")
     }
+
+    func testASavedVariantMissingFromTheListStaysSelectable() {
+        let loaded = SpeechFrameworkTranscriptionService.orderedLocaleOptions(
+            Self.englishHeavyLocales,
+            preferredLanguages: ["en-BE", "nl-BE"],
+            displayLocale: Locale(identifier: "en_US")
+        )
+
+        XCTAssertEqual(AudioSettingsTabView.languageOptions(selected: "en-ID", loaded: loaded).map(\.id), ["en-ID", "en-US", "nl-BE"])
+        XCTAssertEqual(AudioSettingsTabView.languageOptions(selected: "nl-BE", loaded: loaded).map(\.id), ["en-US", "nl-BE"])
+        XCTAssertEqual(AudioSettingsTabView.languageOptions(selected: nil, loaded: loaded).map(\.id), ["en-US", "nl-BE"])
+        XCTAssertEqual(AudioSettingsTabView.languageOptions(selected: "en-ID", loaded: []).map(\.id), ["en-ID"], "valid while loading")
+    }
+
+    private static let englishHeavyLocales = ["en-ID", "en-PH", "en-SA", "en-AE", "en-GB", "en-US", "nl-BE"]
 
     // MARK: - Helpers
 
     private func makeService(
         captureEngine: MockMeetingAudioCaptureEngine,
+        transcription: MockMeetingTranscriptionService = MockMeetingTranscriptionService(),
         now: @escaping () -> Date = { Date() },
         onPermissionRequest: (@Sendable () -> Void)? = nil
     ) -> MeetingRecorderService {
@@ -200,7 +359,7 @@ final class MeetingSettingsTests: XCTestCase {
         return MeetingRecorderService(
             settingsStore: settings,
             captureEngine: captureEngine,
-            transcriptionService: MockMeetingTranscriptionService(),
+            transcriptionService: transcription,
             permissionChecker: MockMeetingPermissionChecker(
                 state: MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .authorized),
                 onRequest: { _, _, _ in onPermissionRequest?() }
@@ -223,8 +382,35 @@ final class MeetingSettingsTests: XCTestCase {
                 captureMicrophone: true, captureSystemAudio: true, detectedAppNames: []
             )
             try encoder.encode(metadata).write(to: folder.appendingPathComponent("metadata.json"))
+            try backdate(folder, to: startedAt)
         }
         return folder
+    }
+
+    /// Sets the folder's modification date, which retention also requires to be past the limit.
+    private func backdate(_ folder: URL, to date: Date) throws {
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: folder.path)
+    }
+
+    /// A session a crash left as a track and no metadata, so launch recovery mixes it and writes its metadata.
+    private func makeOrphanSession(_ name: String) throws -> URL {
+        let folder = tempDir.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let writer = try MeetingTrackWriter(
+            fileURL: folder.appendingPathComponent(MeetingTrackWriter.micFileName), sessionStartHostSeconds: 0
+        )
+        writer.append(try XCTUnwrap(MockMeetingAudioCaptureEngine.makeSineWaveBuffer(frequency: 440, frameCount: 9_600)), hostSeconds: nil)
+        writer.close()
+        return folder
+    }
+
+    /// Yields first so a task just started on the main actor runs to its first suspension, then polls.
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        await Task.yield()
+        for _ in 0..<2_000 where !condition() {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertTrue(condition())
     }
 
     private func exists(_ url: URL) -> Bool {

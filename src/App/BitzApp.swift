@@ -369,8 +369,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         telemetryDashboard.start()
         updateStore.startPeriodicChecks()
         Task { [meetingRecorder] in
-            await meetingRecorder.recoverUnmixedSessions()
-            await meetingRecorder.applyRetention()
+            await meetingRecorder.runLaunchMaintenance()
         }
         if shouldOpenSettingsOnLaunch() {
             showSettingsWindow()
