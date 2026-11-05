@@ -166,6 +166,8 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
             self.configurationObserver = nil
             return current
         }
+        // Close first: the tracks are final even if stopping the engine or stream below hangs (quit waits only 5 s)
+        writers.forEach { $0.close() }
 
         if let observer {
             NotificationCenter.default.removeObserver(observer)
@@ -183,7 +185,6 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
         if let stream {
             try? await stream.stopCapture()
         }
-        writers.forEach { $0.close() }
     }
 
     /// Plain tap at the input's native format. No voice processing: its other-audio ducking cut captured system audio by ~40 dB.

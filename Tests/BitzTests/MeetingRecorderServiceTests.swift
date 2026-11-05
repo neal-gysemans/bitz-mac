@@ -16,6 +16,9 @@ final class MockMeetingAudioCaptureEngine: MeetingAudioCapturing, @unchecked Sen
     var shouldThrowOnStart: Error?
     var startDelayNanoseconds: UInt64 = 0
     var stopDelayNanoseconds: UInt64 = 0
+    var trackFileName = MeetingTrackWriter.micFileName
+    /// Puts a folder at audio.m4a, so the stop-time mix fails and the track is kept.
+    var blocksMixOutput = false
     var onCaptureInterrupted: (@Sendable (String) -> Void)?
 
     func startCapture(
@@ -34,15 +37,18 @@ final class MockMeetingAudioCaptureEngine: MeetingAudioCapturing, @unchecked Sen
         lastCaptureMic = captureMicrophone
         lastCaptureSystem = captureSystemAudio
 
-        // Write a real mic track, so the stop-time mix produces a valid audio.m4a
+        // Write a real track, so the stop-time mix produces a valid audio.m4a
         let writer = try MeetingTrackWriter(
-            fileURL: sessionDirectoryURL.appendingPathComponent(MeetingTrackWriter.micFileName),
+            fileURL: sessionDirectoryURL.appendingPathComponent(trackFileName),
             sessionStartHostSeconds: 0
         )
         if let buffer = Self.makeSineWaveBuffer(frequency: 440.0, frameCount: 4_800) {
             writer.append(buffer, hostSeconds: nil)
         }
         writer.close()
+        if blocksMixOutput {
+            try FileManager.default.createDirectory(at: sessionDirectoryURL.appendingPathComponent("audio.m4a"), withIntermediateDirectories: false)
+        }
     }
 
     func stopCapture() async {
@@ -84,12 +90,14 @@ struct MockMeetingTranscriptionService: MeetingTranscriptionProviding {
     var fullText: String = "Hello team. Let's ship Bitz."
     var error: Error?
     var delayNanoseconds: UInt64 = 0
+    var onTranscribe: (@Sendable (URL) -> Void)?
 
     func transcribe(
         audioFileURL: URL,
         sessionID: String,
         locale: Locale?
     ) async throws -> MeetingTranscript {
+        onTranscribe?(audioFileURL)
         if delayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: delayNanoseconds)
         }
@@ -252,7 +260,9 @@ final class MeetingRecorderServiceTests: XCTestCase {
             XCTAssertEqual(try posixMode(file), 0o600, file.lastPathComponent)
         }
         XCTAssertEqual(decodedMeta.transcriptLocale, "en-US", "metadata.json records the locale actually used")
-        XCTAssertEqual(decodedMeta.audioFileName, "audio.m4a")
+        XCTAssertEqual(decodedMeta.audioFileNames, ["audio.m4a"], "the verified mix replaced the tracks")
+        XCTAssertEqual(decodedMeta.audioStatus, "mixed")
+        XCTAssertNil(decodedMeta.recovered)
 
         // One-click reveal in Finder dismisses completion bubble and opens session directory
         service.revealInFinder()
@@ -296,7 +306,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
         captureEngine: MockMeetingAudioCaptureEngine,
         transcription: MockMeetingTranscriptionService = MockMeetingTranscriptionService(),
         microphone: MeetingPermissionState.Status = .authorized,
-        nowProvider: @escaping () -> Date = { Date() }
+        nowProvider: @escaping () -> Date = { Date() },
+        freeBytes: Int64? = .max
     ) -> MeetingRecorderService {
         let settings = MeetingSettingsStore(userDefaults: defaults)
         settings.setMeetingsRootDirectoryURL(tempDir)
@@ -308,8 +319,15 @@ final class MeetingRecorderServiceTests: XCTestCase {
                 state: MeetingPermissionState(microphone: microphone, screenAudio: .authorized, speechRecognition: .authorized)
             ),
             nowProvider: nowProvider,
+            freeBytesProvider: { _ in freeBytes },
             onRevealURL: { _ in }
         )
+    }
+
+    private func decodeMetadata(_ url: URL) throws -> MeetingRecordingMetadata {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(MeetingRecordingMetadata.self, from: Data(contentsOf: url))
     }
 
     func testDoubleStartOnlyStartsCaptureOnce() async {
@@ -558,5 +576,146 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(warning("Library/CloudStorage/OneDrive-Contoso/Meetings"), "This folder is synced to a cloud service.")
         XCTAssertNil(warning("Library/Application Support/Bitz/Meetings"))
         XCTAssertNil(warning("DocumentsArchive"), "Only the folder itself and its children count")
+    }
+
+    // MARK: - Stop-time mix, quit budget, launch recovery
+
+    func testQuitWithExhaustedBudgetKeepsTracksUnmixedForRecovery() async throws {
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        await service.startRecording()
+
+        await service.finalizeForTermination(mixBudget: .zero)
+
+        let result = try XCTUnwrap(service.lastCompletedResult)
+        let sessionDir = result.sessionDirectoryURL
+        XCTAssertEqual(MeetingTrackMixer.audioFileNames(in: sessionDir), ["mic.caf"])
+        XCTAssertEqual(result.audioFileURL.lastPathComponent, "mic.caf")
+        XCTAssertTrue(result.warning?.contains("mixed at next launch") ?? false)
+        var meta = try decodeMetadata(result.metadataFileURL)
+        XCTAssertEqual(meta.audioStatus, "unmixed")
+        XCTAssertEqual(meta.audioFileNames, ["mic.caf"])
+        XCTAssertEqual(meta.transcriptStatus, "skipped")
+
+        // Next launch mixes what the quit left behind
+        await service.recoverUnmixedSessions()
+        meta = try decodeMetadata(result.metadataFileURL)
+        XCTAssertEqual(meta.audioStatus, "mixed")
+        XCTAssertEqual(meta.audioFileNames, ["audio.m4a"])
+        XCTAssertEqual(meta.recovered, true)
+        XCTAssertEqual(meta.sessionID, result.sessionID, "existing metadata is kept, not rebuilt")
+        XCTAssertEqual(meta.transcriptStatus, "skipped", "recovery never transcribes")
+    }
+
+    func testFailedMixTranscribesTheKeptTrack() async throws {
+        for track in [MeetingTrackWriter.micFileName, MeetingTrackWriter.systemFileName] {
+            let captureEngine = MockMeetingAudioCaptureEngine()
+            captureEngine.trackFileName = track
+            captureEngine.blocksMixOutput = true
+            final class URLLog: @unchecked Sendable { var urls: [URL] = [] }
+            let log = URLLog()
+            var transcription = MockMeetingTranscriptionService()
+            transcription.onTranscribe = { log.urls.append($0) }
+            let service = makeService(captureEngine: captureEngine, transcription: transcription)
+            service.settingsStore.setMeetingsRootDirectoryURL(tempDir.appendingPathComponent(track, isDirectory: true))
+
+            await service.startRecording()
+            await service.stopRecording()
+
+            let result = try XCTUnwrap(service.lastCompletedResult)
+            XCTAssertEqual(log.urls.map(\.lastPathComponent), [track], "a failed mix falls back to the kept track")
+            XCTAssertEqual(result.audioFileURL.lastPathComponent, track)
+            XCTAssertNotNil(result.transcriptTextURL)
+            XCTAssertTrue(result.warning?.contains("mixing them into audio.m4a failed") ?? false)
+            let meta = try decodeMetadata(result.metadataFileURL)
+            XCTAssertEqual(meta.audioStatus, "unmixed")
+            XCTAssertEqual(meta.audioFileNames, [track], "the folder at audio.m4a is not audio")
+        }
+    }
+
+    func testStartIsRefusedWhenTheRecordingsDriveIsNearlyFull() async throws {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        let service = makeService(captureEngine: captureEngine, freeBytes: MeetingRecorderService.minimumFreeBytesToRecord - 1)
+
+        await service.startRecording()
+
+        XCTAssertFalse(service.isRecording)
+        XCTAssertEqual(captureEngine.startCallCount, 0)
+        guard case .failed(let message) = service.state else { return XCTFail("expected a failure, got \(service.state)") }
+        XCTAssertTrue(message.contains("free disk space"), message)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: tempDir.path), [])
+
+        // Unknown free space does not block recording
+        let unknown = makeService(captureEngine: captureEngine, freeBytes: nil)
+        await unknown.startRecording()
+        XCTAssertTrue(unknown.isRecording)
+        await unknown.stopRecording(transcribe: false)
+    }
+
+    func testDefaultFreeSpaceProviderReadsTheNearestExistingFolder() {
+        let notYetCreated = tempDir.appendingPathComponent("Meetings/Nested", isDirectory: true)
+        XCTAssertGreaterThan(MeetingRecorderService.availableBytes(at: notYetCreated) ?? 0, 0)
+    }
+
+    private func writeTrack(_ url: URL, frames: AVAudioFrameCount = 9_600) throws {
+        let writer = try MeetingTrackWriter(fileURL: url, sessionStartHostSeconds: 0)
+        writer.append(try XCTUnwrap(MockMeetingAudioCaptureEngine.makeSineWaveBuffer(frequency: 440, frameCount: frames)), hostSeconds: nil)
+        writer.close()
+    }
+
+    func testLaunchRecoveryMixesOrphanedSessionsAndLeavesCompleteOnesAlone() async throws {
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        let fm = FileManager.default
+
+        // Crash mid-recording: tracks, no metadata, and a partial mix from a quit that was cut short
+        let orphan = tempDir.appendingPathComponent("2026-11-05_09-00-00", isDirectory: true)
+        try fm.createDirectory(at: orphan, withIntermediateDirectories: false)
+        try writeTrack(orphan.appendingPathComponent(MeetingTrackWriter.micFileName))
+        try writeTrack(orphan.appendingPathComponent(MeetingTrackWriter.systemFileName), frames: 14_400)
+        try Data("partial".utf8).write(to: orphan.appendingPathComponent("audio.mixing.m4a"))
+
+        // Finished earlier: audio.m4a and metadata, no tracks
+        let complete = tempDir.appendingPathComponent("2026-11-05_08-00-00", isDirectory: true)
+        try fm.createDirectory(at: complete, withIntermediateDirectories: false)
+        try Data("finished audio".utf8).write(to: complete.appendingPathComponent("audio.m4a"))
+        try Data("{}".utf8).write(to: complete.appendingPathComponent("metadata.json"))
+        let completeBefore = try fm.contentsOfDirectory(atPath: complete.path).sorted()
+
+        await service.recoverUnmixedSessions()
+
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: orphan.path).sorted(), ["audio.m4a", "metadata.json"])
+        let mixed = try AVAudioFile(forReading: orphan.appendingPathComponent("audio.m4a"))
+        XCTAssertEqual(Double(mixed.length), 14_400, accuracy: Double(MeetingTrackMixer.chunkFrames))
+        let meta = try decodeMetadata(orphan.appendingPathComponent("metadata.json"))
+        XCTAssertEqual(meta.recovered, true)
+        XCTAssertEqual(meta.audioStatus, "mixed")
+        XCTAssertEqual(meta.sessionID, "2026-11-05_09-00-00")
+        XCTAssertEqual(meta.durationSeconds, 0.3, accuracy: 0.001, "derived from the longest track")
+        XCTAssertTrue(meta.captureMicrophone && meta.captureSystemAudio)
+        XCTAssertEqual(meta.transcriptStatus, "skipped")
+
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: complete.path).sorted(), completeBefore)
+        XCTAssertEqual(try String(contentsOf: complete.appendingPathComponent("audio.m4a"), encoding: .utf8), "finished audio")
+    }
+
+    func testLaunchRecoveryNeverRunsDuringARecording() async throws {
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        let orphan = tempDir.appendingPathComponent("2026-11-05_09-00-00", isDirectory: true)
+        try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: false)
+        try writeTrack(orphan.appendingPathComponent(MeetingTrackWriter.micFileName))
+
+        await service.startRecording()
+        let active = try XCTUnwrap(service.state.recordingSessionDirectory(in: tempDir))
+        await service.recoverUnmixedSessions()
+
+        XCTAssertEqual(MeetingTrackMixer.audioFileNames(in: orphan), ["mic.caf"])
+        XCTAssertEqual(MeetingTrackMixer.audioFileNames(in: active), ["mic.caf"], "the live session is never touched")
+        await service.stopRecording(transcribe: false)
+    }
+}
+
+private extension MeetingRecorderState {
+    func recordingSessionDirectory(in root: URL) -> URL? {
+        guard case .recording(let sessionID, _, _) = self else { return nil }
+        return root.appendingPathComponent(sessionID, isDirectory: true)
     }
 }

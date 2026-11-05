@@ -359,6 +359,9 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         agentMonitor.startMonitoring()
         telemetryDashboard.start()
         updateStore.startPeriodicChecks()
+        Task { [meetingRecorder] in
+            await meetingRecorder.recoverUnmixedSessions()
+        }
         if shouldOpenSettingsOnLaunch() {
             showSettingsWindow()
         }
@@ -412,7 +415,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         return true
     }
 
-    /// Quitting mid-recording would leave unmixed tracks and no `metadata.json`, so finalize first (#43).
+    /// Quitting mid-recording would leave no `metadata.json`, so finalize first; the mix runs only if it fits the cap (#43).
     public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard meetingRecorder.hasUnfinalizedRecording else { return .terminateNow }
         isAwaitingTerminationReply = true

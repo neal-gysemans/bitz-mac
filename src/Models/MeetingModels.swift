@@ -56,7 +56,12 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
     public let captureMicrophone: Bool
     public let captureSystemAudio: Bool
     public let detectedAppNames: [String]
-    public let audioFileName: String
+    /// Files the audio is in: `audio.m4a`, or `mic.caf` / `system.caf` while unmixed.
+    public var audioFileNames: [String]
+    /// "mixed" once `audio.m4a` is verified, "unmixed" while only the tracks exist (launch recovery mixes them).
+    public var audioStatus: String
+    /// True when launch recovery mixed the tracks after a crash or quit (absent otherwise).
+    public var recovered: Bool?
     public var transcriptStatus: String
     /// Locale the on-device recognizer actually used (nil until a transcript is written).
     public var transcriptLocale: String?
@@ -71,7 +76,9 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
         captureMicrophone: Bool,
         captureSystemAudio: Bool,
         detectedAppNames: [String],
-        audioFileName: String = "audio.m4a",
+        audioFileNames: [String] = ["audio.m4a"],
+        audioStatus: String = "mixed",
+        recovered: Bool? = nil,
         transcriptStatus: String = "pending",
         transcriptLocale: String? = nil,
         transcriptExportPath: String? = nil
@@ -83,7 +90,9 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
         self.captureMicrophone = captureMicrophone
         self.captureSystemAudio = captureSystemAudio
         self.detectedAppNames = detectedAppNames
-        self.audioFileName = audioFileName
+        self.audioFileNames = audioFileNames
+        self.audioStatus = audioStatus
+        self.recovered = recovered
         self.transcriptStatus = transcriptStatus
         self.transcriptLocale = transcriptLocale
         self.transcriptExportPath = transcriptExportPath

@@ -33,6 +33,9 @@ public final class MeetingRecorderService: ObservableObject {
     private let permissionChecker: any MeetingPermissionChecking
     private let onRevealURL: (URL) -> Void
     private let nowProvider: () -> Date
+    private let freeBytesProvider: (URL) -> Int64?
+    /// Two 16-bit tracks take ~1.4 GB per hour, plus the mix; refuse to start below this.
+    static let minimumFreeBytesToRecord: Int64 = 2_000_000_000
 
     /// Optional sound callback so Bitz chimes when recording starts/completes.
     public var onPlaySound: ((CyberSoundEvent) -> Void)?
@@ -40,7 +43,6 @@ public final class MeetingRecorderService: ObservableObject {
     private var elapsedTimerTask: Task<Void, Never>?
     private var activeSessionID: String?
     private var activeSessionDirectoryURL: URL?
-    private var activeAudioFileURL: URL?
     private var activeStartedAt: Date?
     private var activeDetectedApps: [String] = []
     private var activeCaptureWarning: String?
@@ -62,6 +64,7 @@ public final class MeetingRecorderService: ObservableObject {
         transcriptionService: (any MeetingTranscriptionProviding)? = nil,
         permissionChecker: (any MeetingPermissionChecking)? = nil,
         nowProvider: @escaping () -> Date = { Date() },
+        freeBytesProvider: @escaping (URL) -> Int64? = MeetingRecorderService.availableBytes(at:),
         onRevealURL: @escaping (URL) -> Void = { url in
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
@@ -73,6 +76,7 @@ public final class MeetingRecorderService: ObservableObject {
         self.permissionChecker = resolvedPermissionChecker
         self.permissionState = resolvedPermissionChecker.currentPermissions()
         self.nowProvider = nowProvider
+        self.freeBytesProvider = freeBytesProvider
         self.onRevealURL = onRevealURL
         self.captureEngine.onCaptureInterrupted = { [weak self] message in
             Task { @MainActor in self?.handleCaptureInterruption(message) }
@@ -171,6 +175,11 @@ public final class MeetingRecorderService: ObservableObject {
             return
         }
 
+        if let freeBytes = freeBytesProvider(settingsStore.meetingsRootDirectoryURL), freeBytes < Self.minimumFreeBytesToRecord {
+            showFailure("Not enough free disk space to record: Bitz needs about 2 GB free on the recordings drive.")
+            return
+        }
+
         let startDate = nowProvider()
         var createdSessionDir: URL?
 
@@ -181,7 +190,6 @@ public final class MeetingRecorderService: ObservableObject {
             )
             createdSessionDir = sessionDir
             let sessionID = sessionDir.lastPathComponent
-            let audioURL = sessionDir.appendingPathComponent("audio.m4a")
             try await captureEngine.startCapture(
                 sessionDirectoryURL: sessionDir,
                 captureMicrophone: captureMic,
@@ -190,7 +198,6 @@ public final class MeetingRecorderService: ObservableObject {
 
             activeSessionID = sessionID
             activeSessionDirectoryURL = sessionDir
-            activeAudioFileURL = audioURL
             activeStartedAt = startDate
             Self.restrictToOwner(
                 sessionDir.appendingPathComponent(MeetingTrackWriter.micFileName),
@@ -214,12 +221,12 @@ public final class MeetingRecorderService: ObservableObject {
         }
     }
 
-    /// Stops and finalizes `audio.m4a` + `metadata.json`. `transcribe: false` is the fast quit path.
-    public func stopRecording(transcribe: Bool = true) async {
+    /// Stops and finalizes `audio.m4a` + `metadata.json`. `transcribe: false` is the fast quit path; with `mixDeadline`
+    /// the mix only runs if its estimate fits, otherwise the tracks stay for launch recovery.
+    public func stopRecording(transcribe: Bool = true, mixDeadline: ContinuousClock.Instant? = nil) async {
         guard isRecording, !isStopping,
               let sessionID = activeSessionID,
               let sessionDir = activeSessionDirectoryURL,
-              let audioURL = activeAudioFileURL,
               let startedAt = activeStartedAt else {
             return
         }
@@ -243,24 +250,39 @@ public final class MeetingRecorderService: ObservableObject {
             captureMicrophone: settingsStore.captureMicrophone,
             captureSystemAudio: settingsStore.captureSystemAudio,
             detectedAppNames: activeDetectedApps,
-            audioFileName: "audio.m4a",
+            audioFileNames: MeetingTrackMixer.audioFileNames(in: sessionDir),
+            audioStatus: "unmixed",
             transcriptStatus: shouldTranscribe ? "pending" : "skipped"
         )
+        // Written before the mix, so a quit that cuts the mix short still leaves metadata pointing at the tracks
         Self.writeMetadata(metadata, to: metadataURL)
 
-        // Off the main actor; if quit's safety net cuts it short, mic.caf / system.caf stay intact
-        let trackURLs = [MeetingTrackWriter.micFileName, MeetingTrackWriter.systemFileName]
-            .map { sessionDir.appendingPathComponent($0) }
-        do {
-            try await Task.detached(priority: .userInitiated) {
-                try MeetingTrackMixer.mixTracks(trackURLs, into: audioURL)
+        let mixed: Bool
+        if let mixDeadline, ContinuousClock.now + .seconds(MeetingTrackMixer.estimatedMixSeconds(in: sessionDir)) > mixDeadline {
+            warnings.append("Bitz quit before mixing the audio tracks; they are kept and mixed at next launch.")
+            mixed = false
+        } else {
+            // Off the main actor; if quit's safety net cuts it short, mic.caf / system.caf stay intact
+            let outcome = await Task.detached(priority: .userInitiated) {
+                MeetingTrackMixer.mixSession(in: sessionDir)
             }.value
-            Self.restrictToOwner(audioURL)
-        } catch {
-            warnings.append("Audio tracks were kept, but mixing them into audio.m4a failed: \(error.localizedDescription)")
+            warnings += outcome.warnings
+            mixed = outcome.mixed
         }
+        let mixedURL = sessionDir.appendingPathComponent(MeetingTrackMixer.audioFileName)
+        if mixed {
+            Self.restrictToOwner(mixedURL)
+        }
+        metadata.audioStatus = mixed ? "mixed" : "unmixed"
+        metadata.audioFileNames = MeetingTrackMixer.audioFileNames(in: sessionDir)
+        Self.writeMetadata(metadata, to: metadataURL)
         // Audio and metadata are final; transcription below never blocks quit or a new start's guard
         isStopping = false
+
+        // The mix is preferred; without it, transcribe the mic track, or system audio when there is no mic track
+        let audioURL = mixed
+            ? mixedURL
+            : MeetingTrackMixer.trackURLs(in: sessionDir).first { FileManager.default.fileExists(atPath: $0.path) } ?? mixedURL
 
         onPlaySound?(.charging)
 
@@ -325,8 +347,8 @@ public final class MeetingRecorderService: ObservableObject {
         state = .completed(result)
         isCompletionBubbleVisible = true
         statusMessage = txtURL != nil
-            ? "Saved audio.m4a & on-device transcript to \(sessionDir.lastPathComponent)."
-            : "Saved audio.m4a to \(sessionDir.lastPathComponent)."
+            ? "Saved \(audioURL.lastPathComponent) & on-device transcript to \(sessionDir.lastPathComponent)."
+            : "Saved \(audioURL.lastPathComponent) to \(sessionDir.lastPathComponent)."
         if let warning = result.warning {
             statusMessage += " ⚠️ \(warning)"
         }
@@ -334,18 +356,75 @@ public final class MeetingRecorderService: ObservableObject {
 
         activeSessionID = nil
         activeSessionDirectoryURL = nil
-        activeAudioFileURL = nil
         activeStartedAt = nil
         activeDetectedApps = []
         activeCaptureWarning = nil
     }
 
-    /// Quit path: waits for an in-flight start/stop, then finalizes audio + metadata without transcribing.
-    public func finalizeForTermination() async {
+    /// Quit path: waits for an in-flight start/stop, then finalizes without transcribing. The mix only runs if it fits
+    /// `mixBudget` (the delegate's 5 s quit cap minus a margin); otherwise the tracks stay and are mixed at next launch.
+    public func finalizeForTermination(mixBudget: Duration = .milliseconds(4_500)) async {
+        let mixDeadline = ContinuousClock.now + mixBudget
         while isStarting || isStopping {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
-        await stopRecording(transcribe: false)
+        await stopRecording(transcribe: false, mixDeadline: mixDeadline)
+    }
+
+    /// Launch recovery (D1): mixes sessions a crash or quit left as tracks, one at a time at utility priority,
+    /// never while a recording runs. No transcription; the session gets `recovered: true`.
+    public func recoverUnmixedSessions() async {
+        let root = settingsStore.meetingsRootDirectoryURL
+        let sessions = await Task.detached(priority: .utility) {
+            let folders = (try? FileManager.default.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: nil,
+                options: .skipsHiddenFiles
+            )) ?? []
+            return folders.filter(MeetingTrackMixer.needsMix).sorted { $0.path < $1.path }
+        }.value
+        for sessionDir in sessions {
+            guard !hasUnfinalizedRecording else { return }
+            await Task.detached(priority: .utility) {
+                Self.recoverSession(sessionDir)
+            }.value
+        }
+    }
+
+    nonisolated static func recoverSession(_ sessionDir: URL) {
+        // Rechecked: a recording stopped since the scan may have mixed this folder already
+        guard MeetingTrackMixer.needsMix(sessionDir) else { return }
+        let metadataURL = sessionDir.appendingPathComponent("metadata.json")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        // A crash mid-recording leaves no metadata.json; derive what the tracks can tell
+        var metadata = (try? Data(contentsOf: metadataURL)).flatMap { try? decoder.decode(MeetingRecordingMetadata.self, from: $0) }
+            ?? recoveredMetadata(for: sessionDir)
+        let outcome = MeetingTrackMixer.mixSession(in: sessionDir)
+        if outcome.mixed {
+            restrictToOwner(sessionDir.appendingPathComponent(MeetingTrackMixer.audioFileName))
+            metadata.recovered = true
+        }
+        metadata.audioStatus = outcome.mixed ? "mixed" : "unmixed"
+        metadata.audioFileNames = MeetingTrackMixer.audioFileNames(in: sessionDir)
+        writeMetadata(metadata, to: metadataURL)
+    }
+
+    nonisolated private static func recoveredMetadata(for sessionDir: URL) -> MeetingRecordingMetadata {
+        let startedAt = (try? sessionDir.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
+        let duration = Double(MeetingTrackMixer.trackLengths(in: sessionDir).max() ?? 0) / MeetingTrackWriter.sampleRate
+        let fileExists = { FileManager.default.fileExists(atPath: sessionDir.appendingPathComponent($0).path) }
+        return MeetingRecordingMetadata(
+            sessionID: sessionDir.lastPathComponent,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(duration),
+            durationSeconds: duration,
+            captureMicrophone: fileExists(MeetingTrackWriter.micFileName),
+            captureSystemAudio: fileExists(MeetingTrackWriter.systemFileName),
+            detectedAppNames: [],
+            audioStatus: "unmixed",
+            transcriptStatus: "skipped"
+        )
     }
 
     public func revealInFinder(_ targetURL: URL? = nil) {
@@ -450,13 +529,13 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     /// Meeting files are private (0600), like `FileDropInboxService`. Reapply after every write: atomic writes recreate at 0644.
-    static func restrictToOwner(_ urls: URL...) {
+    nonisolated static func restrictToOwner(_ urls: URL...) {
         for url in urls {
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         }
     }
 
-    private static func writeMetadata(_ metadata: MeetingRecordingMetadata, to url: URL) {
+    nonisolated private static func writeMetadata(_ metadata: MeetingRecordingMetadata, to url: URL) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -464,6 +543,15 @@ public final class MeetingRecorderService: ObservableObject {
             try? data.write(to: url, options: .atomic)
             restrictToOwner(url)
         }
+    }
+
+    /// Free space on the recordings volume (the folder may not exist yet, so its nearest existing parent); nil if unknown.
+    public nonisolated static func availableBytes(at url: URL) -> Int64? {
+        var existing = url
+        while !FileManager.default.fileExists(atPath: existing.path) && existing.pathComponents.count > 1 {
+            existing.deleteLastPathComponent()
+        }
+        return try? existing.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
     }
 
     private static func detectRunningMeetingApps() -> [String] {
