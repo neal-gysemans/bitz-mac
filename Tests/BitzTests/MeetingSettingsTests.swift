@@ -55,7 +55,8 @@ final class MeetingSettingsTests: XCTestCase {
             MeetingSettingsStore.meetingsDirectoryPathKey, MeetingSettingsStore.transcriptionLocaleKey,
             MeetingSettingsStore.transcriptExportDirectoryPathKey, MeetingSettingsStore.recordingHotkeyKey,
             MeetingSettingsStore.consentAcknowledgedKey, MeetingSettingsStore.retentionDaysKey,
-            SystemMeetingPermissionChecker.screenCaptureRequestedKey
+            SystemMeetingPermissionChecker.screenCaptureRequestedKey,
+            SystemMeetingPermissionChecker.screenCaptureProbeGrantedKey
         ]
         XCTAssertTrue(keys.allSatisfy { $0.hasPrefix("bitz.meeting.") })
         XCTAssertEqual(MeetingSettingsStore.consentAcknowledgedKey, "bitz.meeting.consentAcknowledged")

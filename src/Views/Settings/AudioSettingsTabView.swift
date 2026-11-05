@@ -41,7 +41,7 @@ public struct AudioSettingsTabView: View {
             transcriptionCard
         }
         .onAppear {
-            meetingRecorder.refreshPermissions()
+            Task { await meetingRecorder.refreshPermissions() }
             updateRecordingsFolderWarning()
             updateExportFolderWarning()
             // Probing ~60 recognizers takes ~0.2 s, so build the list off the main thread

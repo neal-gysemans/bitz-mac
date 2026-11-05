@@ -115,8 +115,10 @@ public final class MeetingRecorderService: ObservableObject {
         isSaving ? MeetingBubble.savingMenuLabel : isTranscribing ? MeetingBubble.transcribingMenuLabel : nil
     }
 
-    public func refreshPermissions() {
+    /// Shows the cheap synchronous state at once, then the async re-check (ScreenCaptureKit probe).
+    public func refreshPermissions() async {
         permissionState = permissionChecker.currentPermissions()
+        permissionState = await permissionChecker.refreshedPermissions()
     }
 
     /// `includeSpeech`: also ask for Speech Recognition when auto-transcribe is off (Settings button; Transcribe Again needs it).
@@ -379,7 +381,7 @@ public final class MeetingRecorderService: ObservableObject {
         let sessionDir = last.sessionDirectoryURL
         let metadataURL = last.metadataFileURL
         let audioURL = Self.transcriptionAudioURL(in: sessionDir)
-        refreshPermissions()
+        permissionState = permissionChecker.currentPermissions()
         if permissionState.speechRecognition == .notDetermined {
             // Speech only: with auto-transcribe off nothing has asked yet, and the capture permissions are not needed here
             permissionState = await permissionChecker.requestPermissions(
