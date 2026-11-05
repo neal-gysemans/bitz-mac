@@ -245,7 +245,8 @@ public struct SettingsRootView: View {
                 engine: engine,
                 activityMonitor: activityMonitor,
                 updateStore: updateStore,
-                agentMonitor: agentMonitor
+                agentMonitor: agentMonitor,
+                meetingSettings: meetingSettings
             )
         }
     }

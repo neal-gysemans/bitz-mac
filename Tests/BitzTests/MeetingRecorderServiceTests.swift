@@ -332,48 +332,6 @@ final class MeetingRecorderServiceTests: XCTestCase {
         }
     }
 
-    func testGlobalHotkeyOptionShiftRTogglesMeetingRecording() throws {
-        let settings = MeetingSettingsStore(userDefaults: defaults)
-        settings.setMeetingsRootDirectoryURL(tempDir)
-        let captureEngine = MockMeetingAudioCaptureEngine()
-        let permissions = MockMeetingPermissionChecker(
-            state: MeetingPermissionState(
-                microphone: .authorized,
-                screenAudio: .authorized,
-                speechRecognition: .authorized
-            )
-        )
-        let recorder = MeetingRecorderService(
-            settingsStore: settings,
-            captureEngine: captureEngine,
-            transcriptionService: MockMeetingTranscriptionService(),
-            permissionChecker: permissions
-        )
-        let delegate = BitzAppDelegate(
-            meetingSettings: settings,
-            meetingRecorder: recorder,
-            userDefaults: defaults
-        )
-
-        let optShiftREvent = try XCTUnwrap(
-            NSEvent.keyEvent(
-                with: .keyDown,
-                location: .zero,
-                modifierFlags: [.option, .shift],
-                timestamp: 0,
-                windowNumber: 0,
-                context: nil,
-                characters: "R",
-                charactersIgnoringModifiers: "r",
-                isARepeat: false,
-                keyCode: 15
-            )
-        )
-
-        let handled = delegate.handleKeyEvent(optShiftREvent, isGlobal: true)
-        XCTAssertTrue(handled, "⌥⇧R must be handled globally from any app")
-    }
-
     // MARK: - Fix cycle 1 (PR #125 review)
 
     private func makeService(

@@ -612,7 +612,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     }
 
     /// Handles keyboard shortcuts locally or globally without stealing key focus.
-    /// `isGlobal` marks keystrokes typed in other apps: only ⌥⌘B, ⌥⇧R, and the Esc/Return lock apply there.
+    /// `isGlobal` marks keystrokes typed in other apps: only ⌥⌘B, the configured meeting-recording chord, and the Esc/Return lock apply there.
     @MainActor
     @discardableResult
     public func handleKeyEvent(_ event: NSEvent, isGlobal: Bool = false) -> Bool {
@@ -620,7 +620,6 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         let cmd = flags.contains(.command)
         let opt = flags.contains(.option)
         let ctrl = flags.contains(.control)
-        let shift = flags.contains(.shift)
         let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
         let keyCode = event.keyCode
 
@@ -630,8 +629,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             return true
         }
 
-        // 1b. Start / Stop Meeting Recording: ⌥⇧R (works from any app, #43)
-        if opt && shift && !cmd && !ctrl && (keyCode == 15 || chars == "r") {
+        // 1b. Start / Stop Meeting Recording: configurable chord, default ⌃⌥⌘R, Off matches nothing (works from any app, #43)
+        if meetingSettings.recordingHotkey.matches(event) {
             toggleMeetingRecordingAction()
             return true
         }
@@ -941,6 +940,7 @@ struct BitzMenuBarContentView: View {
     @ObservedObject var flowShieldSettings: FlowShieldSettingsStore
     let flowShieldService: FlowShieldService
     @ObservedObject var meetingRecorder: MeetingRecorderService
+    @ObservedObject var meetingSettings: MeetingSettingsStore
     var onOpenSettings: () -> Void
 
     public init(
@@ -960,7 +960,9 @@ struct BitzMenuBarContentView: View {
         onOpenSettings: @escaping () -> Void = {}
     ) {
         self.paletteStore = paletteStore
-        self.meetingRecorder = meetingRecorder ?? MeetingRecorderService()
+        let resolvedMeetingRecorder = meetingRecorder ?? MeetingRecorderService()
+        self.meetingRecorder = resolvedMeetingRecorder
+        self.meetingSettings = resolvedMeetingRecorder.settingsStore
         self.onOpenSettings = onOpenSettings
         self.engine = engine
         self.activityMonitor = activityMonitor
@@ -1025,7 +1027,7 @@ struct BitzMenuBarContentView: View {
                     await meetingRecorder.toggleRecording()
                 }
             }
-            .keyboardShortcut("r", modifiers: [.option, .shift])
+            .keyboardShortcut(meetingSettings.recordingHotkey.menuShortcut)
             .disabled(meetingRecorder.isTranscribing)
 
             if let lastRecording = meetingRecorder.lastCompletedResult {
@@ -1151,5 +1153,18 @@ struct BitzMenuBarLabel: View {
                 Text(appDelegate.menuBarTitle)
             }
         }
+    }
+}
+
+private extension MeetingRecordingHotkey {
+    /// Menu bar shortcut mirroring the global chord; nil (no shortcut shown) when Off.
+    var menuShortcut: KeyboardShortcut? {
+        guard let flags = modifierFlags else { return nil }
+        var modifiers: EventModifiers = []
+        if flags.contains(.control) { modifiers.insert(.control) }
+        if flags.contains(.option) { modifiers.insert(.option) }
+        if flags.contains(.command) { modifiers.insert(.command) }
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        return KeyboardShortcut(KeyEquivalent(Character(Self.character)), modifiers: modifiers)
     }
 }

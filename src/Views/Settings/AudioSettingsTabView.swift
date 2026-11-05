@@ -178,6 +178,16 @@ public struct AudioSettingsTabView: View {
                 .font(.subheadline)
                 .disabled(!meetingSettings.autoTranscribeOnStop)
 
+                Picker("Recording shortcut", selection: Binding(
+                    get: { meetingSettings.recordingHotkey },
+                    set: { meetingSettings.setRecordingHotkey($0) }
+                )) {
+                    ForEach(MeetingRecordingHotkey.allCases) { hotkey in
+                        Text(hotkey.displayString).tag(hotkey)
+                    }
+                }
+                .font(.subheadline)
+
                 Text("Transcription uses one language per recording, so pick the meeting's language.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -268,7 +278,8 @@ public struct AudioSettingsTabView: View {
         if meetingRecorder.isTranscribing {
             return "Transcribing"
         }
-        return "Ready (⌥⇧R)"
+        let hotkey = meetingSettings.recordingHotkey
+        return hotkey == .off ? "Ready" : "Ready (\(hotkey.displayString))"
     }
 
     private var meetingStatusBadgeColor: Color {

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // MARK: - Meeting Permission State
@@ -245,6 +246,49 @@ public enum MeetingRecorderState: Equatable, Sendable {
     case failed(String)
 }
 
+// MARK: - Meeting Recording Hotkey
+
+/// Global start/stop chord. A global monitor can't swallow keystrokes, so ⌥⇧R also typed "‰" into the focused app;
+/// the default is a non-typing chord, and Off disables it (#43).
+public enum MeetingRecordingHotkey: String, CaseIterable, Identifiable, Sendable {
+    case controlOptionCommandR
+    case controlOptionR
+    case controlShiftR
+    case off
+
+    public static let keyCode: UInt16 = 15
+    public static let character = "r"
+
+    public var id: String { rawValue }
+
+    /// nil when Off.
+    public var modifierFlags: NSEvent.ModifierFlags? {
+        switch self {
+        case .controlOptionCommandR: return [.control, .option, .command]
+        case .controlOptionR: return [.control, .option]
+        case .controlShiftR: return [.control, .shift]
+        case .off: return nil
+        }
+    }
+
+    public var displayString: String {
+        switch self {
+        case .controlOptionCommandR: return "⌃⌥⌘R"
+        case .controlOptionR: return "⌃⌥R"
+        case .controlShiftR: return "⌃⇧R"
+        case .off: return "Off"
+        }
+    }
+
+    /// Exact modifier match, so ⌃⌥⌘R does not also fire ⌃⌥R.
+    public func matches(_ event: NSEvent) -> Bool {
+        guard let required = modifierFlags else { return false }
+        let pressed = event.modifierFlags.intersection([.control, .option, .command, .shift])
+        let isR = event.keyCode == Self.keyCode || event.charactersIgnoringModifiers?.lowercased() == Self.character
+        return pressed == required && isR
+    }
+}
+
 // MARK: - Meeting Settings Store
 
 /// Persists user preferences for the Local Meeting Recorder & On-Device Transcription (#43).
@@ -257,6 +301,7 @@ public final class MeetingSettingsStore: ObservableObject {
     public static let meetingsDirectoryPathKey = "Bitz.MeetingRecorder.DirectoryPath"
     public static let transcriptionLocaleKey = "Bitz.MeetingRecorder.TranscriptionLocale"
     public static let transcriptExportDirectoryPathKey = "Bitz.MeetingRecorder.TranscriptExportDirectoryPath"
+    public static let recordingHotkeyKey = "Bitz.MeetingRecorder.RecordingHotkey"
 
     @Published public private(set) var captureMicrophone: Bool
     @Published public private(set) var captureSystemAudio: Bool
@@ -267,6 +312,7 @@ public final class MeetingSettingsStore: ObservableObject {
     @Published public private(set) var transcriptionLocaleIdentifier: String?
     /// Optional folder that also receives a copy of each `transcript.txt` (nil = off).
     @Published public private(set) var transcriptExportDirectoryURL: URL?
+    @Published public private(set) var recordingHotkey: MeetingRecordingHotkey
 
     private let userDefaults: UserDefaults
 
@@ -347,6 +393,9 @@ public final class MeetingSettingsStore: ObservableObject {
         } else {
             self.transcriptExportDirectoryURL = nil
         }
+
+        self.recordingHotkey = userDefaults.string(forKey: Self.recordingHotkeyKey)
+            .flatMap(MeetingRecordingHotkey.init(rawValue:)) ?? .controlOptionCommandR
     }
 
     public func setCaptureMicrophone(_ enabled: Bool) {
@@ -373,6 +422,11 @@ public final class MeetingSettingsStore: ObservableObject {
     public func setMeetingsRootDirectoryURL(_ url: URL?) {
         meetingsRootDirectoryURL = url ?? Self.defaultMeetingsDirectoryURL
         userDefaults.set(url?.path, forKey: Self.meetingsDirectoryPathKey)
+    }
+
+    public func setRecordingHotkey(_ hotkey: MeetingRecordingHotkey) {
+        recordingHotkey = hotkey
+        userDefaults.set(hotkey.rawValue, forKey: Self.recordingHotkeyKey)
     }
 
     public func setTranscriptExportDirectoryURL(_ url: URL?) {

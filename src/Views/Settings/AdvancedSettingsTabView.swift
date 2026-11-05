@@ -8,6 +8,7 @@ public struct AdvancedSettingsTabView: View {
     @ObservedObject public var activityMonitor: ActivityMonitorService
     @ObservedObject public var updateStore: AppUpdateStore
     public var agentMonitor: AgentMonitorService?
+    @ObservedObject public var meetingSettings: MeetingSettingsStore
 
     @State private var launchAtLoginEnabled: Bool = (SMAppService.mainApp.status == .enabled)
     @State private var launchAtLoginMessage: String? = Self.launchAtLoginApprovalMessage(for: SMAppService.mainApp.status)
@@ -16,8 +17,10 @@ public struct AdvancedSettingsTabView: View {
         engine: WellnessPointEngine,
         activityMonitor: ActivityMonitorService,
         updateStore: AppUpdateStore,
-        agentMonitor: AgentMonitorService? = nil
+        agentMonitor: AgentMonitorService? = nil,
+        meetingSettings: MeetingSettingsStore? = nil
     ) {
+        self.meetingSettings = meetingSettings ?? MeetingSettingsStore()
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.updateStore = updateStore
@@ -163,7 +166,7 @@ public struct AdvancedSettingsTabView: View {
                         .foregroundStyle(.secondary)
                     shortcutRow(action: "Toggle / Open Settings", keys: ["⌥⌘B"])
                     Divider()
-                    shortcutRow(action: "Start / stop meeting recording", keys: ["⌥ ⇧ R"])
+                    shortcutRow(action: "Start / Stop Meeting Recording", keys: [meetingSettings.recordingHotkey.displayString])
                     Divider()
                     shortcutRow(action: "Move mascot anywhere (drag)", keys: ["⌥ Option", "Drag"])
                     Divider()
