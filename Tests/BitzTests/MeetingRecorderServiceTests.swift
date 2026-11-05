@@ -364,7 +364,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
     private func makeService(
         captureEngine: MockMeetingAudioCaptureEngine,
         transcription: MockMeetingTranscriptionService = MockMeetingTranscriptionService(),
-        microphone: MeetingPermissionState.Status = .authorized
+        microphone: MeetingPermissionState.Status = .authorized,
+        nowProvider: @escaping () -> Date = { Date() }
     ) -> MeetingRecorderService {
         let settings = MeetingSettingsStore(userDefaults: defaults)
         settings.setMeetingsRootDirectoryURL(tempDir)
@@ -375,6 +376,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
             permissionChecker: MockMeetingPermissionChecker(
                 state: MeetingPermissionState(microphone: microphone, screenAudio: .authorized, speechRecognition: .authorized)
             ),
+            nowProvider: nowProvider,
             onRevealURL: { _ in }
         )
     }
@@ -607,5 +609,76 @@ final class MeetingRecorderServiceTests: XCTestCase {
 
         store.setTranscriptionLocaleIdentifier(nil)
         XCTAssertNil(MeetingSettingsStore(userDefaults: defaults).transcriptionLocaleIdentifier)
+    }
+
+    // MARK: - Transcript export folder
+
+    func testTranscriptExportFolderSettingPersists() {
+        let store = MeetingSettingsStore(userDefaults: defaults)
+        XCTAssertNil(store.transcriptExportDirectoryURL, "Export is off by default")
+
+        let exportDir = tempDir.appendingPathComponent("Inbox", isDirectory: true)
+        store.setTranscriptExportDirectoryURL(exportDir)
+        XCTAssertEqual(MeetingSettingsStore(userDefaults: defaults).transcriptExportDirectoryURL?.path, exportDir.path)
+
+        store.setTranscriptExportDirectoryURL(nil)
+        XCTAssertNil(MeetingSettingsStore(userDefaults: defaults).transcriptExportDirectoryURL)
+    }
+
+    func testTranscriptIsCopiedToExportFolderWithoutOverwriting() async throws {
+        let clock = Date(timeIntervalSince1970: 1_762_340_000)
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), nowProvider: { clock })
+        let exportDir = tempDir.appendingPathComponent("Notes Inbox", isDirectory: true) // created on demand
+        service.settingsStore.setMeetingsRootDirectoryURL(tempDir.appendingPathComponent("Meetings", isDirectory: true))
+        service.settingsStore.setTranscriptExportDirectoryURL(exportDir)
+
+        let sessionID = MeetingSettingsStore.sessionFolderName(for: clock)
+        try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+        let existing = exportDir.appendingPathComponent("\(sessionID) transcript.txt")
+        try "keep me".write(to: existing, atomically: true, encoding: .utf8)
+
+        await service.startRecording()
+        await service.stopRecording()
+
+        let result = try XCTUnwrap(service.lastCompletedResult)
+        XCTAssertNil(result.warning)
+        XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "keep me", "An existing export must never be overwritten")
+
+        let copy = exportDir.appendingPathComponent("\(sessionID) transcript (2).txt")
+        let original = try XCTUnwrap(result.transcriptTextURL)
+        XCTAssertEqual(try String(contentsOf: copy, encoding: .utf8), try String(contentsOf: original, encoding: .utf8))
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: exportDir.path).sorted(),
+            ["\(sessionID) transcript (2).txt", "\(sessionID) transcript.txt"],
+            "Only transcript.txt is exported"
+        )
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let meta = try decoder.decode(MeetingRecordingMetadata.self, from: Data(contentsOf: result.metadataFileURL))
+        XCTAssertEqual(meta.transcriptExportPath, copy.path)
+    }
+
+    func testTranscriptExportFailureWarnsButCompletesRecording() async throws {
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        service.settingsStore.setMeetingsRootDirectoryURL(tempDir.appendingPathComponent("Meetings", isDirectory: true))
+        let notAFolder = tempDir.appendingPathComponent("export-is-a-file")
+        try "x".write(to: notAFolder, atomically: true, encoding: .utf8)
+        service.settingsStore.setTranscriptExportDirectoryURL(notAFolder)
+
+        await service.startRecording()
+        await service.stopRecording()
+
+        let result = try XCTUnwrap(service.lastCompletedResult)
+        XCTAssertNotNil(result.transcriptTextURL, "The transcript itself is still saved")
+        XCTAssertTrue(result.warning?.contains("copy to export folder failed") ?? false)
+        XCTAssertTrue(service.statusMessage.contains("copy to export folder failed"))
+        XCTAssertTrue(result.bubbleHeadline.hasPrefix("⚠️"))
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let meta = try decoder.decode(MeetingRecordingMetadata.self, from: Data(contentsOf: result.metadataFileURL))
+        XCTAssertEqual(meta.transcriptStatus, "completed")
+        XCTAssertNil(meta.transcriptExportPath)
     }
 }

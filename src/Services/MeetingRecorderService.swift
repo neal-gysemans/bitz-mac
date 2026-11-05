@@ -851,6 +851,14 @@ public final class MeetingRecorderService: ObservableObject {
                 jsonURL = written.jsonURL
                 metadata.transcriptStatus = "completed"
                 metadata.transcriptLocale = transcript.localeIdentifier
+                if let exportDirectory = settingsStore.transcriptExportDirectoryURL {
+                    do {
+                        let exported = try Self.exportTranscript(written.txtURL, sessionID: sessionID, to: exportDirectory)
+                        metadata.transcriptExportPath = exported.path
+                    } catch {
+                        warnings.append("Transcript saved, but copy to export folder failed: \(error.localizedDescription)")
+                    }
+                }
                 Self.writeMetadata(metadata, to: metadataURL)
 
                 if settingsStore.copyTranscriptPathToClipboard {
@@ -969,6 +977,20 @@ public final class MeetingRecorderService: ObservableObject {
     private func stopElapsedTimer() {
         elapsedTimerTask?.cancel()
         elapsedTimerTask = nil
+    }
+
+    /// Copies `transcript.txt` into the export folder as `<sessionID> transcript.txt`, adding ` (2)`, ` (3)`… instead of overwriting.
+    static func exportTranscript(_ txtURL: URL, sessionID: String, to directory: URL) throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var destination = directory.appendingPathComponent("\(sessionID) transcript.txt")
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: destination.path) {
+            destination = directory.appendingPathComponent("\(sessionID) transcript (\(suffix)).txt")
+            suffix += 1
+        }
+        // copyItem never replaces an existing file, so a name taken in the meantime fails instead of overwriting
+        try FileManager.default.copyItem(at: txtURL, to: destination)
+        return destination
     }
 
     private static func writeMetadata(_ metadata: MeetingRecordingMetadata, to url: URL) {

@@ -153,6 +153,35 @@ public struct AudioSettingsTabView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                HStack(spacing: 10) {
+                    Text("Copy transcripts to folder")
+                        .font(.subheadline)
+
+                    Spacer()
+
+                    Button("Choose…") {
+                        chooseTranscriptExportFolder()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Turn Off") {
+                        meetingSettings.setTranscriptExportDirectoryURL(nil)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(meetingSettings.transcriptExportDirectoryURL == nil)
+                }
+                .disabled(!meetingSettings.autoTranscribeOnStop)
+
+                Text(meetingSettings.transcriptExportDirectoryURL.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "Off")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text("Every transcript is copied, including work meetings — turn this off for recordings that must not leave Bitz's folder.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Divider()
 
                 HStack(spacing: 12) {
@@ -180,6 +209,20 @@ public struct AudioSettingsTabView: View {
                     SpeechFrameworkTranscriptionService.onDeviceLocaleOptions()
                 }.value
             }
+        }
+    }
+
+    private func chooseTranscriptExportFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Select"
+        panel.message = "Select a folder that also receives a copy of each meeting transcript"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            meetingSettings.setTranscriptExportDirectoryURL(url)
         }
     }
 

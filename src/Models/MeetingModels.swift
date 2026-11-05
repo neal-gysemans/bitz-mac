@@ -59,6 +59,8 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
     public var transcriptStatus: String
     /// Locale the on-device recognizer actually used (nil until a transcript is written).
     public var transcriptLocale: String?
+    /// Where the transcript copy was exported (nil when export is off or failed).
+    public var transcriptExportPath: String?
 
     public init(
         sessionID: String,
@@ -70,7 +72,8 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
         detectedAppNames: [String],
         audioFileName: String = "audio.m4a",
         transcriptStatus: String = "pending",
-        transcriptLocale: String? = nil
+        transcriptLocale: String? = nil,
+        transcriptExportPath: String? = nil
     ) {
         self.sessionID = sessionID
         self.startedAt = startedAt
@@ -82,6 +85,7 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
         self.audioFileName = audioFileName
         self.transcriptStatus = transcriptStatus
         self.transcriptLocale = transcriptLocale
+        self.transcriptExportPath = transcriptExportPath
     }
 }
 
@@ -247,6 +251,7 @@ public final class MeetingSettingsStore: ObservableObject {
     public static let copyTranscriptPathKey = "Bitz.MeetingRecorder.CopyTranscriptPath"
     public static let meetingsDirectoryPathKey = "Bitz.MeetingRecorder.DirectoryPath"
     public static let transcriptionLocaleKey = "Bitz.MeetingRecorder.TranscriptionLocale"
+    public static let transcriptExportDirectoryPathKey = "Bitz.MeetingRecorder.TranscriptExportDirectoryPath"
 
     @Published public private(set) var captureMicrophone: Bool
     @Published public private(set) var captureSystemAudio: Bool
@@ -255,6 +260,8 @@ public final class MeetingSettingsStore: ObservableObject {
     @Published public private(set) var meetingsRootDirectoryURL: URL
     /// nil = Automatic; otherwise a locale identifier such as `nl-BE`.
     @Published public private(set) var transcriptionLocaleIdentifier: String?
+    /// Optional folder that also receives a copy of each `transcript.txt` (nil = off).
+    @Published public private(set) var transcriptExportDirectoryURL: URL?
 
     private let userDefaults: UserDefaults
 
@@ -302,6 +309,14 @@ public final class MeetingSettingsStore: ObservableObject {
         }
 
         self.transcriptionLocaleIdentifier = userDefaults.string(forKey: Self.transcriptionLocaleKey)
+
+        if let savedExportPath = userDefaults.string(forKey: Self.transcriptExportDirectoryPathKey),
+           !savedExportPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let expanded = (savedExportPath as NSString).expandingTildeInPath
+            self.transcriptExportDirectoryURL = URL(fileURLWithPath: expanded, isDirectory: true)
+        } else {
+            self.transcriptExportDirectoryURL = nil
+        }
     }
 
     public func setCaptureMicrophone(_ enabled: Bool) {
@@ -327,6 +342,11 @@ public final class MeetingSettingsStore: ObservableObject {
     public func setMeetingsRootDirectoryURL(_ url: URL) {
         meetingsRootDirectoryURL = url
         userDefaults.set(url.path, forKey: Self.meetingsDirectoryPathKey)
+    }
+
+    public func setTranscriptExportDirectoryURL(_ url: URL?) {
+        transcriptExportDirectoryURL = url
+        userDefaults.set(url?.path, forKey: Self.transcriptExportDirectoryPathKey)
     }
 
     public func setTranscriptionLocaleIdentifier(_ identifier: String?) {
