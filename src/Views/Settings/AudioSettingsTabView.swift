@@ -46,7 +46,7 @@ public struct AudioSettingsTabView: View {
         settingsCard(title: "Meeting Audio Recorder & On-Device Transcription", systemImage: "waveform.badge.mic") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center, spacing: 10) {
-                    Text("Capture microphone and system meeting audio (Zoom, Meet, Teams, Slack) into `~/Documents/Bitz/Meetings/<timestamp>/` and generate 100% offline transcripts with Apple `SFSpeechRecognizer`.")
+                    Text("Capture microphone and system meeting audio (Zoom, Meet, Teams, Slack) into the recordings folder below, transcribed on-device with Apple `SFSpeechRecognizer`.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -100,9 +100,38 @@ public struct AudioSettingsTabView: View {
                     .controlSize(.small)
                 }
 
-                Text("Recordings are stored locally in ~/Documents/Bitz/Meetings. If iCloud \"Desktop & Documents\" sync is on, macOS will sync them to iCloud.")
+                HStack(spacing: 10) {
+                    Text("Recordings folder")
+                        .font(.subheadline)
+
+                    Spacer()
+
+                    Button("Choose…") {
+                        if let url = chooseFolder(message: "Select the folder where Bitz stores meeting recordings") {
+                            meetingSettings.setMeetingsRootDirectoryURL(url)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Use Default") {
+                        meetingSettings.setMeetingsRootDirectoryURL(nil)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(meetingSettings.isUsingDefaultMeetingsDirectory)
+                }
+                .disabled(meetingRecorder.isRecording)
+
+                Text((meetingSettings.meetingsRootDirectoryURL.path as NSString).abbreviatingWithTildeInPath)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if let warning = MeetingSettingsStore.syncWarning(for: meetingSettings.meetingsRootDirectoryURL) {
+                    Text("Recordings folder: \(warning)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
 
                 Text(meetingRecorder.statusMessage)
                     .font(.caption)
@@ -160,7 +189,9 @@ public struct AudioSettingsTabView: View {
                     Spacer()
 
                     Button("Choose…") {
-                        chooseTranscriptExportFolder()
+                        if let url = chooseFolder(message: "Select a folder that also receives a copy of each meeting transcript") {
+                            meetingSettings.setTranscriptExportDirectoryURL(url)
+                        }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -181,6 +212,13 @@ public struct AudioSettingsTabView: View {
                 Text("Every transcript is copied, including work meetings — turn this off for recordings that must not leave Bitz's folder.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if let exportURL = meetingSettings.transcriptExportDirectoryURL,
+                   let warning = MeetingSettingsStore.syncWarning(for: exportURL) {
+                    Text("Export folder: \(warning)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
 
                 Divider()
 
@@ -212,18 +250,15 @@ public struct AudioSettingsTabView: View {
         }
     }
 
-    private func chooseTranscriptExportFolder() {
+    private func chooseFolder(message: String) -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
         panel.prompt = "Select"
-        panel.message = "Select a folder that also receives a copy of each meeting transcript"
-
-        if panel.runModal() == .OK, let url = panel.url {
-            meetingSettings.setTranscriptExportDirectoryURL(url)
-        }
+        panel.message = message
+        return panel.runModal() == .OK ? panel.url : nil
     }
 
     private var meetingStatusBadgeText: String {

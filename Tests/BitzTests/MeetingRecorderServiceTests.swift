@@ -144,7 +144,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertTrue(store.captureSystemAudio)
         XCTAssertTrue(store.autoTranscribeOnStop)
         XCTAssertFalse(store.copyTranscriptPathToClipboard)
-        XCTAssertTrue(store.meetingsRootDirectoryURL.path.hasSuffix("/Documents/Bitz/Meetings"))
+        XCTAssertTrue(store.meetingsRootDirectoryURL.path.hasSuffix("/Library/Application Support/Bitz/Meetings"))
+        XCTAssertTrue(store.isUsingDefaultMeetingsDirectory)
 
         store.setCaptureMicrophone(false)
         store.setCaptureSystemAudio(true)
@@ -158,6 +159,11 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertFalse(reloaded.autoTranscribeOnStop)
         XCTAssertTrue(reloaded.copyTranscriptPathToClipboard)
         XCTAssertEqual(reloaded.meetingsRootDirectoryURL.path, tempDir.path)
+        XCTAssertFalse(reloaded.isUsingDefaultMeetingsDirectory)
+
+        reloaded.setMeetingsRootDirectoryURL(nil)
+        XCTAssertEqual(MeetingSettingsStore(userDefaults: defaults).meetingsRootDirectoryURL, MeetingSettingsStore.defaultMeetingsDirectoryURL)
+        XCTAssertTrue(MeetingSettingsStore(userDefaults: defaults).isUsingDefaultMeetingsDirectory)
 
         XCTAssertEqual(MeetingSettingsStore.formatDuration(0), "00:00")
         XCTAssertEqual(MeetingSettingsStore.formatDuration(872), "14:32")
@@ -278,6 +284,15 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let metaData = try Data(contentsOf: result.metadataFileURL)
         let decodedMeta = try decoder.decode(MeetingRecordingMetadata.self, from: metaData)
         XCTAssertEqual(decodedMeta.transcriptStatus, "completed")
+
+        // Meeting data is owner-only: 0700 session dir, 0600 files (atomic rewrites included)
+        func posixMode(_ url: URL) throws -> Int {
+            try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber).intValue
+        }
+        XCTAssertEqual(try posixMode(result.sessionDirectoryURL), 0o700)
+        for file in [result.audioFileURL, result.metadataFileURL, txtURL, jsonURL] {
+            XCTAssertEqual(try posixMode(file), 0o600, file.lastPathComponent)
+        }
         XCTAssertEqual(decodedMeta.transcriptLocale, "en-US", "metadata.json records the locale actually used")
         XCTAssertEqual(decodedMeta.audioFileName, "audio.m4a")
 
@@ -657,6 +672,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
         decoder.dateDecodingStrategy = .iso8601
         let meta = try decoder.decode(MeetingRecordingMetadata.self, from: Data(contentsOf: result.metadataFileURL))
         XCTAssertEqual(meta.transcriptExportPath, copy.path)
+        let copyPermissions = try FileManager.default.attributesOfItem(atPath: copy.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(copyPermissions?.intValue, 0o600)
     }
 
     func testTranscriptExportFailureWarnsButCompletesRecording() async throws {
@@ -724,5 +741,18 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(transcript.fullText, "Hello team, welcome Bye")
         XCTAssertEqual(transcript.segments.count, 4)
         XCTAssertEqual(transcript.warning, "partial")
+    }
+
+    func testSyncWarningFlagsCloudSyncedFolders() {
+        let home = URL(fileURLWithPath: "/Users/tester", isDirectory: true)
+        func warning(_ relative: String) -> String? {
+            MeetingSettingsStore.syncWarning(for: home.appendingPathComponent(relative), home: home)
+        }
+        XCTAssertEqual(warning("Documents/Bitz/Meetings"), "macOS may sync this folder to iCloud (Desktop & Documents).")
+        XCTAssertEqual(warning("Desktop"), "macOS may sync this folder to iCloud (Desktop & Documents).")
+        XCTAssertEqual(warning("Library/Mobile Documents/com~apple~CloudDocs/Notes"), "This folder is synced to a cloud service.")
+        XCTAssertEqual(warning("Library/CloudStorage/OneDrive-Contoso/Meetings"), "This folder is synced to a cloud service.")
+        XCTAssertNil(warning("Library/Application Support/Bitz/Meetings"))
+        XCTAssertNil(warning("DocumentsArchive"), "Only the folder itself and its children count")
     }
 }

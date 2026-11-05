@@ -270,12 +270,37 @@ public final class MeetingSettingsStore: ObservableObject {
 
     private let userDefaults: UserDefaults
 
+    /// Application Support, not `~/Documents`: Documents is commonly synced (iCloud, OneDrive) and Spotlight-indexed,
+    /// so confidential meetings could leave the Mac before the user ever opens Settings.
     nonisolated public static var defaultMeetingsDirectoryURL: URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return home
-            .appendingPathComponent("Documents", isDirectory: true)
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+        return appSupport
             .appendingPathComponent("Bitz", isDirectory: true)
             .appendingPathComponent("Meetings", isDirectory: true)
+    }
+
+    public var isUsingDefaultMeetingsDirectory: Bool {
+        meetingsRootDirectoryURL.standardizedFileURL.path == Self.defaultMeetingsDirectoryURL.standardizedFileURL.path
+    }
+
+    /// Warning when `url` is likely synced off the Mac, nil otherwise.
+    nonisolated public static func syncWarning(
+        for url: URL,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> String? {
+        let path = url.standardizedFileURL.path
+        func isInside(_ relative: String) -> Bool {
+            let base = home.appendingPathComponent(relative).standardizedFileURL.path
+            return path == base || path.hasPrefix(base + "/")
+        }
+        if isInside("Library/Mobile Documents") || isInside("Library/CloudStorage") {
+            return "This folder is synced to a cloud service."
+        }
+        if isInside("Documents") || isInside("Desktop") {
+            return "macOS may sync this folder to iCloud (Desktop & Documents)."
+        }
+        return nil
     }
 
     public init(userDefaults: UserDefaults = .standard) {
@@ -344,9 +369,10 @@ public final class MeetingSettingsStore: ObservableObject {
         userDefaults.set(enabled, forKey: Self.copyTranscriptPathKey)
     }
 
-    public func setMeetingsRootDirectoryURL(_ url: URL) {
-        meetingsRootDirectoryURL = url
-        userDefaults.set(url.path, forKey: Self.meetingsDirectoryPathKey)
+    /// nil resets to the default folder. Existing recordings are never moved.
+    public func setMeetingsRootDirectoryURL(_ url: URL?) {
+        meetingsRootDirectoryURL = url ?? Self.defaultMeetingsDirectoryURL
+        userDefaults.set(url?.path, forKey: Self.meetingsDirectoryPathKey)
     }
 
     public func setTranscriptExportDirectoryURL(_ url: URL?) {

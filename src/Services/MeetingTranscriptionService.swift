@@ -37,7 +37,7 @@ public protocol MeetingTranscriptionProviding: Sendable {
 
 // MARK: - Native Apple Speech.framework On-Device Transcription Service
 
-/// Performs 100% offline, on-device speech recognition using Apple's `SFSpeechRecognizer` (#43).
+/// Performs offline, on-device speech recognition using Apple's `SFSpeechRecognizer` (#43).
 public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding {
     public let enforceOnDeviceRecognition: Bool
 

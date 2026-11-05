@@ -577,7 +577,7 @@ public final class MeetingRecorderService: ObservableObject {
     @Published public private(set) var permissionState: MeetingPermissionState
     @Published public private(set) var lastCompletedResult: MeetingRecordingResult?
     @Published public private(set) var isCompletionBubbleVisible: Bool = false
-    @Published public private(set) var statusMessage: String = "Ready to record meetings locally (100% on-device)."
+    @Published public private(set) var statusMessage: String = "Ready to record meetings locally (transcribed on-device)."
 
     public let timerStore = MeetingRecordingTimerStore()
     public let settingsStore: MeetingSettingsStore
@@ -731,7 +731,11 @@ public final class MeetingRecorderService: ObservableObject {
         let sessionDirExisted = FileManager.default.fileExists(atPath: sessionDir.path)
 
         do {
-            try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: sessionDir,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
             try await captureEngine.startCapture(
                 outputFileURL: audioURL,
                 captureMicrophone: captureMic,
@@ -742,6 +746,7 @@ public final class MeetingRecorderService: ObservableObject {
             activeSessionDirectoryURL = sessionDir
             activeAudioFileURL = audioURL
             activeStartedAt = startDate
+            Self.restrictToOwner(audioURL)
             activeDetectedApps = Self.detectRunningMeetingApps()
             activeCaptureWarning = nil
             failureDismissTask?.cancel()
@@ -773,6 +778,7 @@ public final class MeetingRecorderService: ObservableObject {
         stopElapsedTimer()
         isRecording = false
         await captureEngine.stopCapture()
+        Self.restrictToOwner(audioURL)
 
         let endedAt = nowProvider()
         let duration = max(0, endedAt.timeIntervalSince(startedAt))
@@ -814,6 +820,7 @@ public final class MeetingRecorderService: ObservableObject {
                     locale: settingsStore.transcriptionLocaleIdentifier.map(Locale.init(identifier:))
                 )
                 let written = try MeetingTranscriptWriter.write(transcript, to: sessionDir)
+                Self.restrictToOwner(written.txtURL, written.jsonURL)
                 txtURL = written.txtURL
                 jsonURL = written.jsonURL
                 metadata.transcriptStatus = "completed"
@@ -960,7 +967,15 @@ public final class MeetingRecorderService: ObservableObject {
         }
         // copyItem never replaces an existing file, so a name taken in the meantime fails instead of overwriting
         try FileManager.default.copyItem(at: txtURL, to: destination)
+        restrictToOwner(destination)
         return destination
+    }
+
+    /// Meeting files are private (0600), like `FileDropInboxService`. Reapply after every write: atomic writes recreate at 0644.
+    static func restrictToOwner(_ urls: URL...) {
+        for url in urls {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        }
     }
 
     private static func writeMetadata(_ metadata: MeetingRecordingMetadata, to url: URL) {
@@ -969,6 +984,7 @@ public final class MeetingRecorderService: ObservableObject {
         encoder.dateEncodingStrategy = .iso8601
         if let data = try? encoder.encode(metadata) {
             try? data.write(to: url, options: .atomic)
+            restrictToOwner(url)
         }
     }
 
