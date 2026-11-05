@@ -98,6 +98,10 @@ public struct AudioSettingsTabView: View {
                     .controlSize(.small)
                 }
 
+                Text("Recordings are stored locally in ~/Documents/Bitz/Meetings. If iCloud \"Desktop & Documents\" sync is on, macOS will sync them to iCloud.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Text(meetingRecorder.statusMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -149,6 +153,9 @@ public struct AudioSettingsTabView: View {
                     .controlSize(.small)
                 }
             }
+        }
+        .onAppear {
+            meetingRecorder.refreshPermissions()
         }
     }
 

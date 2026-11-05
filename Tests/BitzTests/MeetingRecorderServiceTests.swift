@@ -14,12 +14,18 @@ final class MockMeetingAudioCaptureEngine: MeetingAudioCapturing, @unchecked Sen
     var lastCaptureMic = false
     var lastCaptureSystem = false
     var shouldThrowOnStart: Error?
+    var startDelayNanoseconds: UInt64 = 0
+    var stopDelayNanoseconds: UInt64 = 0
+    var onCaptureInterrupted: (@Sendable (String) -> Void)?
 
     func startCapture(
         outputFileURL: URL,
         captureMicrophone: Bool,
         captureSystemAudio: Bool
     ) async throws {
+        if startDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: startDelayNanoseconds)
+        }
         if let error = shouldThrowOnStart {
             throw error
         }
@@ -38,6 +44,9 @@ final class MockMeetingAudioCaptureEngine: MeetingAudioCapturing, @unchecked Sen
 
     func stopCapture() async {
         stopCallCount += 1
+        if stopDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: stopDelayNanoseconds)
+        }
     }
 
     static func makeSineWaveBuffer(
@@ -70,13 +79,15 @@ struct MockMeetingTranscriptionService: MeetingTranscriptionProviding {
         MeetingTranscriptSegment(text: "Bitz.", startTime: 12.8, endTime: 13.4, confidence: 0.97)
     ]
     var fullText: String = "Hello team. Let's ship Bitz."
+    var error: Error?
 
     func transcribe(
         audioFileURL: URL,
         sessionID: String,
         locale: Locale
     ) async throws -> MeetingTranscript {
-        MeetingTranscript(
+        if let error { throw error }
+        return MeetingTranscript(
             sessionID: sessionID,
             localeIdentifier: locale.identifier,
             generatedAt: Date(timeIntervalSince1970: 1_762_340_000),
@@ -341,5 +352,156 @@ final class MeetingRecorderServiceTests: XCTestCase {
 
         let handled = delegate.handleKeyEvent(optShiftREvent, isGlobal: true)
         XCTAssertTrue(handled, "⌥⇧R must be handled globally from any app")
+    }
+
+    // MARK: - Fix cycle 1 (PR #125 review)
+
+    private func makeService(
+        captureEngine: MockMeetingAudioCaptureEngine,
+        transcription: MockMeetingTranscriptionService = MockMeetingTranscriptionService(),
+        microphone: MeetingPermissionState.Status = .authorized
+    ) -> MeetingRecorderService {
+        let settings = MeetingSettingsStore(userDefaults: defaults)
+        settings.setMeetingsRootDirectoryURL(tempDir)
+        return MeetingRecorderService(
+            settingsStore: settings,
+            captureEngine: captureEngine,
+            transcriptionService: transcription,
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(microphone: microphone, screenAudio: .authorized, speechRecognition: .authorized)
+            ),
+            onRevealURL: { _ in }
+        )
+    }
+
+    func testDoubleStartOnlyStartsCaptureOnce() async {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        captureEngine.startDelayNanoseconds = 50_000_000
+        let service = makeService(captureEngine: captureEngine)
+
+        let first = Task { await service.startRecording() }
+        let second = Task { await service.startRecording() }
+        await first.value
+        await second.value
+
+        XCTAssertEqual(captureEngine.startCallCount, 1)
+        XCTAssertTrue(service.isRecording)
+    }
+
+    func testStartDuringStopIsRejectedAndRecordingStaysStoppable() async {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        let service = makeService(captureEngine: captureEngine)
+        await service.startRecording()
+        XCTAssertTrue(service.isRecording)
+
+        captureEngine.stopDelayNanoseconds = 50_000_000
+        let stop = Task { await service.stopRecording() }
+        while captureEngine.stopCallCount == 0 {
+            await Task.yield()
+        }
+        await service.startRecording()
+        await stop.value
+
+        XCTAssertEqual(captureEngine.startCallCount, 1, "A start landing mid-stop must be rejected")
+        XCTAssertFalse(service.isRecording)
+        XCTAssertFalse(service.hasUnfinalizedRecording)
+
+        // A later start/stop cycle still works end to end
+        captureEngine.stopDelayNanoseconds = 0
+        await service.startRecording()
+        XCTAssertTrue(service.isRecording)
+        await service.stopRecording()
+        XCTAssertFalse(service.isRecording)
+        XCTAssertEqual(captureEngine.stopCallCount, 2)
+    }
+
+    func testFinalizeForTerminationWritesMetadataWithoutTranscribing() async throws {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        let service = makeService(captureEngine: captureEngine)
+        await service.startRecording()
+        XCTAssertTrue(service.hasUnfinalizedRecording)
+
+        await service.finalizeForTermination()
+
+        XCTAssertFalse(service.hasUnfinalizedRecording)
+        let result = try XCTUnwrap(service.lastCompletedResult)
+        XCTAssertNil(result.transcriptTextURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let meta = try decoder.decode(MeetingRecordingMetadata.self, from: Data(contentsOf: result.metadataFileURL))
+        XCTAssertEqual(meta.transcriptStatus, "skipped")
+    }
+
+    func testFailureBubbleAutoDismisses() async throws {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        let service = makeService(captureEngine: captureEngine, microphone: .denied)
+        service.failureBubbleDurationNanoseconds = 20_000_000
+
+        await service.startRecording()
+        XCTAssertNotNil(service.activeSpeechBubbleText)
+
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertNil(service.activeSpeechBubbleText)
+        XCTAssertEqual(service.state, .idle)
+    }
+
+    func testFailedStartRemovesEmptySessionFolder() async throws {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        captureEngine.shouldThrowOnStart = MeetingRecorderError.captureStartFailed("boom")
+        let service = makeService(captureEngine: captureEngine)
+
+        await service.startRecording()
+
+        let contents = try FileManager.default.contentsOfDirectory(atPath: tempDir.path)
+        XCTAssertTrue(contents.isEmpty, "Failed start must not leave an empty session folder: \(contents)")
+    }
+
+    func testTranscriptionAndCaptureFailuresAreSurfaced() async throws {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        var transcription = MockMeetingTranscriptionService()
+        transcription.error = MeetingTranscriptionError.timedOut(60)
+        let service = makeService(captureEngine: captureEngine, transcription: transcription)
+
+        await service.startRecording()
+        service.handleCaptureInterruption("System audio capture stopped: test")
+        XCTAssertTrue(service.statusMessage.contains("System audio capture stopped"))
+        await service.stopRecording()
+
+        let result = try XCTUnwrap(service.lastCompletedResult)
+        let bubble = try XCTUnwrap(service.activeSpeechBubbleText)
+        XCTAssertTrue(bubble.hasPrefix("⚠️"))
+        XCTAssertTrue(bubble.contains("System audio capture stopped"))
+        XCTAssertTrue(bubble.contains("timed out"))
+        XCTAssertEqual(result.bubbleHeadline, bubble)
+        XCTAssertTrue(service.statusMessage.contains("timed out"))
+    }
+
+    func testMixerKeepsSystemAudioWhenMicBuffersStop() throws {
+        let outputURL = tempDir.appendingPathComponent("system-only.m4a")
+        let mixer = try MeetingAudioStreamMixer(outputFileURL: outputURL)
+        let oneSecond = try XCTUnwrap(MockMeetingAudioCaptureEngine.makeSineWaveBuffer(frequency: 880.0, frameCount: 48_000))
+
+        // Mic is enabled but delivers nothing: 3 s of system audio must still reach the file
+        for _ in 0..<3 {
+            mixer.appendSystemAudioBuffer(oneSecond, mixWithMic: true)
+        }
+        mixer.close()
+
+        let readFile = try AVAudioFile(forReading: outputURL)
+        XCTAssertGreaterThanOrEqual(Double(readFile.length) / readFile.fileFormat.sampleRate, 2.9)
+    }
+
+    func testTranscriptionGateResumesOnceEvenWhenCancelledBeforeStart() async {
+        let gate = ContinuationGate()
+        gate.finish(.failure(CancellationError()))
+        gate.finish(.failure(MeetingTranscriptionError.timedOut(1)))
+        do {
+            _ = try await withCheckedThrowingContinuation { gate.install($0) }
+            XCTFail("Expected cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(SpeechFrameworkTranscriptionService.recognitionTimeout(forAudioDuration: 0), 60)
+        XCTAssertEqual(SpeechFrameworkTranscriptionService.recognitionTimeout(forAudioDuration: 600), 1_260)
     }
 }

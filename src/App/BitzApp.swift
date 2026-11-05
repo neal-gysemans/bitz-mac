@@ -36,6 +36,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     public let licensingService: LicensingService
     public let meetingSettings: MeetingSettingsStore
     public let meetingRecorder: MeetingRecorderService
+    private var isAwaitingTerminationReply = false
     @Published public private(set) var menuBarTitle: String = "Bitz"
     public private(set) var overlayPanels: [MascotOverlayPanel] = []
     public var overlayPanel: MascotOverlayPanel? { overlayPanels.first }
@@ -409,6 +410,28 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showSettingsWindow()
         return true
+    }
+
+    /// Quitting mid-recording would leave an unplayable `audio.m4a` and no `metadata.json`, so finalize first (#43).
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard meetingRecorder.hasUnfinalizedRecording else { return .terminateNow }
+        isAwaitingTerminationReply = true
+        Task { @MainActor [weak self] in
+            await self?.meetingRecorder.finalizeForTermination()
+            self?.replyToPendingTermination(sender)
+        }
+        // Safety net: a stuck capture device must never block quit
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            self?.replyToPendingTermination(sender)
+        }
+        return .terminateLater
+    }
+
+    private func replyToPendingTermination(_ sender: NSApplication) {
+        guard isAwaitingTerminationReply else { return }
+        isAwaitingTerminationReply = false
+        sender.reply(toApplicationShouldTerminate: true)
     }
 
     public func applicationWillTerminate(_ notification: Notification) {

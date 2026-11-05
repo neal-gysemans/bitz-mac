@@ -192,6 +192,8 @@ public struct MeetingRecordingResult: Equatable, Sendable {
     public let transcriptTextURL: URL?
     public let transcriptJSONURL: URL?
     public let durationSeconds: TimeInterval
+    /// Capture interruption or transcription failure the user must see (nil when everything succeeded).
+    public let warning: String?
 
     public init(
         sessionID: String,
@@ -200,7 +202,8 @@ public struct MeetingRecordingResult: Equatable, Sendable {
         metadataFileURL: URL,
         transcriptTextURL: URL? = nil,
         transcriptJSONURL: URL? = nil,
-        durationSeconds: TimeInterval
+        durationSeconds: TimeInterval,
+        warning: String? = nil
     ) {
         self.sessionID = sessionID
         self.sessionDirectoryURL = sessionDirectoryURL
@@ -209,6 +212,14 @@ public struct MeetingRecordingResult: Equatable, Sendable {
         self.transcriptTextURL = transcriptTextURL
         self.transcriptJSONURL = transcriptJSONURL
         self.durationSeconds = durationSeconds
+        self.warning = warning
+    }
+
+    public var bubbleHeadline: String {
+        if let warning {
+            return "⚠️ Meeting audio saved. \(warning)"
+        }
+        return transcriptTextURL != nil ? "✨ Meeting saved & transcribed!" : "✨ Meeting audio saved!"
     }
 }
 

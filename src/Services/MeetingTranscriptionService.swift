@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import Foundation
 import Speech
 
@@ -7,6 +8,7 @@ public enum MeetingTranscriptionError: Error, LocalizedError, Equatable, Sendabl
     case recognizerUnavailable(String)
     case onDeviceRecognitionUnsupported(String)
     case recognitionFailed(String)
+    case timedOut(TimeInterval)
 
     public var errorDescription: String? {
         switch self {
@@ -16,6 +18,8 @@ public enum MeetingTranscriptionError: Error, LocalizedError, Equatable, Sendabl
             return "On-device speech recognition is not supported for locale '\(locale)'."
         case .recognitionFailed(let reason):
             return "Speech transcription failed: \(reason)"
+        case .timedOut(let seconds):
+            return "Speech transcription timed out after \(Int(seconds)) s."
         }
     }
 }
@@ -51,6 +55,11 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
         return request
     }
 
+    /// Generous bound so a stalled recognizer can never leave `isTranscribing` stuck (estimate: on-device runs faster than real time).
+    static func recognitionTimeout(forAudioDuration seconds: TimeInterval) -> TimeInterval {
+        max(60, seconds * 2 + 60)
+    }
+
     public func transcribe(
         audioFileURL: URL,
         sessionID: String,
@@ -73,69 +82,108 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
             enforceOnDevice: enforceOnDeviceRecognition
         )
 
-        return try await withCheckedThrowingContinuation { continuation in
-            let state = ContinuationGate()
-            let task = recognizer.recognitionTask(with: request) { result, error in
-                if let error {
-                    // An empty/silent audio file can report "No speech detected"; treat that as an empty transcript
-                    let nsError = error as NSError
-                    let lowerDesc = nsError.localizedDescription.lowercased()
-                    if lowerDesc.contains("no speech") || lowerDesc.contains("retry") && result != nil {
-                        let emptyTranscript = MeetingTranscript(
-                            sessionID: sessionID,
-                            localeIdentifier: resolvedLocaleID,
-                            generatedAt: Date(),
-                            fullText: "",
-                            segments: []
-                        )
-                        state.resumeOnce(with: .success(emptyTranscript), continuation: continuation)
-                    } else {
-                        state.resumeOnce(
-                            with: .failure(MeetingTranscriptionError.recognitionFailed(nsError.localizedDescription)),
-                            continuation: continuation
+        let audioDuration = (try? AVAudioFile(forReading: audioFileURL))
+            .map { Double($0.length) / max(1, $0.fileFormat.sampleRate) } ?? 0
+        let timeout = Self.recognitionTimeout(forAudioDuration: audioDuration)
+        let state = ContinuationGate()
+        // The task is cancelled if its recognizer is deallocated, so keep it alive until the result arrives
+        defer { withExtendedLifetime(recognizer) {} }
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                state.install(continuation)
+                let task = recognizer.recognitionTask(with: request) { result, error in
+                    if let error {
+                        // An empty/silent audio file can report "No speech detected"; treat that as an empty transcript
+                        let nsError = error as NSError
+                        let lowerDesc = nsError.localizedDescription.lowercased()
+                        if lowerDesc.contains("no speech") || lowerDesc.contains("retry") && result != nil {
+                            let emptyTranscript = MeetingTranscript(
+                                sessionID: sessionID,
+                                localeIdentifier: resolvedLocaleID,
+                                generatedAt: Date(),
+                                fullText: "",
+                                segments: []
+                            )
+                            state.finish(.success(emptyTranscript))
+                        } else {
+                            state.finish(.failure(MeetingTranscriptionError.recognitionFailed(nsError.localizedDescription)))
+                        }
+                        return
+                    }
+
+                    guard let result, result.isFinal else { return }
+
+                    let segments = result.bestTranscription.segments.map { seg in
+                        MeetingTranscriptSegment(
+                            text: seg.substring,
+                            startTime: seg.timestamp,
+                            endTime: seg.timestamp + seg.duration,
+                            confidence: seg.confidence
                         )
                     }
-                    return
-                }
 
-                guard let result, result.isFinal else { return }
-
-                let segments = result.bestTranscription.segments.map { seg in
-                    MeetingTranscriptSegment(
-                        text: seg.substring,
-                        startTime: seg.timestamp,
-                        endTime: seg.timestamp + seg.duration,
-                        confidence: seg.confidence
+                    let transcript = MeetingTranscript(
+                        sessionID: sessionID,
+                        localeIdentifier: resolvedLocaleID,
+                        generatedAt: Date(),
+                        fullText: result.bestTranscription.formattedString,
+                        segments: segments
                     )
+                    state.finish(.success(transcript))
                 }
-
-                let transcript = MeetingTranscript(
-                    sessionID: sessionID,
-                    localeIdentifier: resolvedLocaleID,
-                    generatedAt: Date(),
-                    fullText: result.bestTranscription.formattedString,
-                    segments: segments
-                )
-                state.resumeOnce(with: .success(transcript), continuation: continuation)
+                state.attach(task)
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
+                    state.finish(.failure(MeetingTranscriptionError.timedOut(timeout)))
+                }
             }
-            _ = task
+        } onCancel: {
+            state.finish(.failure(CancellationError()))
         }
     }
 }
 
-private final class ContinuationGate: @unchecked Sendable {
+/// Resumes the transcription continuation exactly once across the result callback, timeout, and cancellation.
+final class ContinuationGate: @unchecked Sendable {
     private let lock = NSLock()
-    private var hasResumed = false
+    private var continuation: CheckedContinuation<MeetingTranscript, Error>?
+    private var task: SFSpeechRecognitionTask?
+    private var outcome: Result<MeetingTranscript, Error>?
 
-    func resumeOnce(
-        with result: Result<MeetingTranscript, Error>,
-        continuation: CheckedContinuation<MeetingTranscript, Error>
-    ) {
+    /// Stores the continuation, or resumes it at once when cancellation already finished the gate.
+    func install(_ continuation: CheckedContinuation<MeetingTranscript, Error>) {
         lock.lock()
-        defer { lock.unlock() }
-        guard !hasResumed else { return }
-        hasResumed = true
-        continuation.resume(with: result)
+        if let outcome {
+            lock.unlock()
+            continuation.resume(with: outcome)
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func attach(_ task: SFSpeechRecognitionTask) {
+        lock.lock()
+        let isFinished = outcome != nil
+        if !isFinished { self.task = task }
+        lock.unlock()
+        if isFinished { task.cancel() }
+    }
+
+    func finish(_ result: Result<MeetingTranscript, Error>) {
+        lock.lock()
+        guard outcome == nil else {
+            lock.unlock()
+            return
+        }
+        outcome = result
+        let continuation = self.continuation
+        let task = self.task
+        self.continuation = nil
+        self.task = nil
+        lock.unlock()
+        if case .failure = result { task?.cancel() }
+        continuation?.resume(with: result)
     }
 }
 

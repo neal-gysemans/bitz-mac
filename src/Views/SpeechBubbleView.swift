@@ -261,14 +261,13 @@ public struct SpeechBubbleView: View {
     private func meetingCompletedBubbleView(for result: MeetingRecordingResult) -> some View {
         let accentColor = Color(red: 0.0, green: 1.0, blue: 0.53)
         let bgColor = Color(red: 0.05, green: 0.12, blue: 0.09).opacity(0.96)
-        let headline = result.transcriptTextURL != nil
-            ? "✨ Meeting saved & transcribed!"
-            : "✨ Meeting audio saved!"
         return VStack(spacing: 5) {
-            Text(headline)
+            Text(result.bubbleHeadline)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.white)
                 .multilineTextAlignment(.center)
+                .lineLimit(4)
+                .minimumScaleFactor(0.75)
 
             HStack(spacing: 6) {
                 Button(action: { meetingRecorder.revealInFinder(result.sessionDirectoryURL) }) {
@@ -299,9 +298,9 @@ public struct SpeechBubbleView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(maxWidth: Self.maxBubbleWidth)
-        .background(RoundedRectangle(cornerRadius: 8).fill(bgColor))
+        // Shadow on the filled shape before the stroke overlay (AGENTS.md §2.6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(bgColor).shadow(color: accentColor.opacity(0.6), radius: 6))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(accentColor, lineWidth: 1.5))
-        .shadow(color: accentColor.opacity(0.6), radius: 6)
     }
 }
 

@@ -286,6 +286,8 @@ private struct MascotHeadAssemblyView: View, Equatable {
     let visorColor: Color
     let palette: AvatarResolvedPalette
     let isRecordingMeeting: Bool
+    /// Only the live CoreAnimation path pulses; the static `ImageRenderer` path stays pure SwiftUI.
+    var pulsesRecordingLED: Bool = false
 
     var body: some View {
         let earTilt = (state == .overworked || state == .dopamineSad) ? 14.0 : 0.0
@@ -342,7 +344,7 @@ private struct MascotHeadAssemblyView: View, Equatable {
                     )
 
                 if isRecordingMeeting {
-                    CyberHeadphonesOverlay(visorColor: visorColor, palette: palette)
+                    CyberHeadphonesOverlay(visorColor: visorColor, palette: palette, pulsesLED: pulsesRecordingLED)
                 }
             }
             .zIndex(1)
@@ -420,6 +422,7 @@ private struct MascotHeadAssemblyView: View, Equatable {
 private struct CyberHeadphonesOverlay: View, Equatable {
     let visorColor: Color
     let palette: AvatarResolvedPalette
+    let pulsesLED: Bool
 
     private static let recRed = Color(red: 1.0, green: 0.16, blue: 0.22)
 
@@ -470,6 +473,9 @@ private struct CyberHeadphonesOverlay: View, Equatable {
                     .fill(Self.recRed)
                     .frame(width: 6, height: 6)
             }
+            // Out-of-process opacity pulse (#43): WindowServer interpolates, 0% app CPU (AGENTS.md §2.1)
+            .background(CALayerMotionBridge(kind: pulsesLED ? .opacityPulse(minOpacity: 0.25, halfPeriod: 0.7) : .none))
+            .compositingGroup()
             .offset(x: 36, y: 24)
         }
         .frame(width: 132, height: 92)
@@ -680,7 +686,8 @@ private struct LiveMotionStageView: View {
                 isPetReactionActive: isPetReactionActive,
                 visorColor: visorColor,
                 palette: palette,
-                isRecordingMeeting: isRecordingMeeting
+                isRecordingMeeting: isRecordingMeeting,
+                pulsesRecordingLED: true
             )
             .equatable()
             .frame(width: 132, height: 116)
@@ -718,6 +725,7 @@ struct CALayerMotionBridge: NSViewRepresentable {
         case verticalSway(amplitude: CGFloat, halfPeriod: Double)
         case tailWag(halfPeriod: Double, deltaRadians: CGFloat, center: CGPoint)
         case pawTap(amplitude: CGFloat, halfPeriod: Double)
+        case opacityPulse(minOpacity: Float, halfPeriod: Double)
     }
 
     let kind: Kind
@@ -807,6 +815,17 @@ struct CALayerMotionBridge: NSViewRepresentable {
                 tap.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 tap.isRemovedOnCompletion = false
                 layer.add(tap, forKey: "bitz.motion.primary")
+
+            case let .opacityPulse(minOpacity, halfPeriod):
+                let pulse = CABasicAnimation(keyPath: "opacity")
+                pulse.fromValue = 1.0
+                pulse.toValue = minOpacity
+                pulse.duration = halfPeriod
+                pulse.autoreverses = true
+                pulse.repeatCount = .infinity
+                pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                pulse.isRemovedOnCompletion = false
+                layer.add(pulse, forKey: "bitz.motion.primary")
             }
         }
     }

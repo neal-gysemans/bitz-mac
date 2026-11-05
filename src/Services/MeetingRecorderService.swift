@@ -18,6 +18,9 @@ public protocol MeetingPermissionChecking: Sendable {
 }
 
 public struct SystemMeetingPermissionChecker: MeetingPermissionChecking {
+    /// `CGPreflightScreenCaptureAccess` stays false until relaunch, so remember that access was already requested.
+    static let screenCaptureRequestedKey = "Bitz.MeetingRecorder.ScreenCaptureRequested"
+
     public init() {}
 
     public func currentPermissions() -> MeetingPermissionState {
@@ -33,7 +36,12 @@ public struct SystemMeetingPermissionChecker: MeetingPermissionChecking {
             micStatus = .notDetermined
         }
 
-        let screenStatus: MeetingPermissionState.Status = CGPreflightScreenCaptureAccess() ? .authorized : .notDetermined
+        let screenStatus: MeetingPermissionState.Status
+        if CGPreflightScreenCaptureAccess() {
+            screenStatus = .authorized
+        } else {
+            screenStatus = UserDefaults.standard.bool(forKey: Self.screenCaptureRequestedKey) ? .denied : .notDetermined
+        }
 
         let speechStatus: MeetingPermissionState.Status
         switch SFSpeechRecognizer.authorizationStatus() {
@@ -70,6 +78,7 @@ public struct SystemMeetingPermissionChecker: MeetingPermissionChecking {
             if CGPreflightScreenCaptureAccess() {
                 state.screenAudio = .authorized
             } else {
+                UserDefaults.standard.set(true, forKey: Self.screenCaptureRequestedKey)
                 let granted = CGRequestScreenCaptureAccess()
                 state.screenAudio = granted ? .authorized : .denied
             }
@@ -119,8 +128,11 @@ public final class MeetingAudioStreamMixer: @unchecked Sendable {
     private var secondaryLeftQueue: [Float] = []
     private var secondaryRightQueue: [Float] = []
     private let maxQueuedSamples = 48_000 * 2 // 2 seconds max ring buffer
+    private let onWriteError: (@Sendable (String) -> Void)?
+    private var hasReportedWriteError = false
 
-    public init(outputFileURL: URL) throws {
+    public init(outputFileURL: URL, onWriteError: (@Sendable (String) -> Void)? = nil) throws {
+        self.onWriteError = onWriteError
         if FileManager.default.fileExists(atPath: outputFileURL.path) {
             try FileManager.default.removeItem(at: outputFileURL)
         }
@@ -226,7 +238,7 @@ public final class MeetingAudioStreamMixer: @unchecked Sendable {
               let channels = canonical.floatChannelData else { return }
 
         if !mixWithMic {
-            try? audioFile?.write(from: canonical)
+            write(canonical)
             return
         }
 
@@ -237,10 +249,10 @@ public final class MeetingAudioStreamMixer: @unchecked Sendable {
         secondaryLeftQueue.append(contentsOf: left)
         secondaryRightQueue.append(contentsOf: right)
 
-        if secondaryLeftQueue.count > maxQueuedSamples {
-            let overflow = secondaryLeftQueue.count - maxQueuedSamples
-            secondaryLeftQueue.removeFirst(overflow)
-            secondaryRightQueue.removeFirst(overflow)
+        // Mic buffers stopped arriving (device change, engine stop): write the backlog unmixed instead of dropping it
+        if secondaryLeftQueue.count > maxQueuedSamples,
+           let overflow = dequeueSecondary(frameCount: secondaryLeftQueue.count - maxQueuedSamples) {
+            write(overflow)
         }
     }
 
@@ -248,35 +260,52 @@ public final class MeetingAudioStreamMixer: @unchecked Sendable {
     public func appendMicrophoneBuffer(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
         defer { lock.unlock() }
-        guard let audioFile, let canonical = convertToCanonical(buffer),
-              let pChannels = canonical.floatChannelData else { return }
+        guard audioFile != nil, let canonical = convertToCanonical(buffer) else { return }
 
         let frames = Int(canonical.frameLength)
         guard frames > 0 else { return }
 
-        if !secondaryLeftQueue.isEmpty {
-            let popCount = min(frames, secondaryLeftQueue.count)
-            guard let mixed = AVAudioPCMBuffer(pcmFormat: Self.canonicalPCMFormat, frameCapacity: canonical.frameLength),
-                  let mChannels = mixed.floatChannelData else { return }
-            mixed.frameLength = canonical.frameLength
-
-            for i in 0..<frames {
-                let sL: Float = i < popCount ? secondaryLeftQueue[i] : 0.0
-                let sR: Float = i < popCount ? secondaryRightQueue[i] : 0.0
-                mChannels[0][i] = max(-1.0, min(1.0, (pChannels[0][i] + sL) * 0.85))
-                mChannels[1][i] = max(-1.0, min(1.0, (pChannels[1][i] + sR) * 0.85))
-            }
-            secondaryLeftQueue.removeFirst(popCount)
-            secondaryRightQueue.removeFirst(popCount)
-            try? audioFile.write(from: mixed)
+        if let secondary = dequeueSecondary(frameCount: min(frames, secondaryLeftQueue.count)) {
+            guard let mixed = Self.mixBuffers(primary: canonical, secondary: secondary) else { return }
+            write(mixed)
         } else {
-            try? audioFile.write(from: canonical)
+            write(canonical)
+        }
+    }
+
+    /// Pops `frameCount` queued system-audio frames into a canonical buffer. Caller holds `lock`.
+    private func dequeueSecondary(frameCount: Int) -> AVAudioPCMBuffer? {
+        guard frameCount > 0,
+              let buffer = AVAudioPCMBuffer(pcmFormat: Self.canonicalPCMFormat, frameCapacity: AVAudioFrameCount(frameCount)),
+              let channels = buffer.floatChannelData else { return nil }
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        for i in 0..<frameCount {
+            channels[0][i] = secondaryLeftQueue[i]
+            channels[1][i] = secondaryRightQueue[i]
+        }
+        secondaryLeftQueue.removeFirst(frameCount)
+        secondaryRightQueue.removeFirst(frameCount)
+        return buffer
+    }
+
+    /// Writes to the file and reports the first failure once, so a full disk is not silent. Caller holds `lock`.
+    private func write(_ buffer: AVAudioPCMBuffer) {
+        do {
+            try audioFile?.write(from: buffer)
+        } catch {
+            guard !hasReportedWriteError else { return }
+            hasReportedWriteError = true
+            onWriteError?("Could not write meeting audio: \(error.localizedDescription)")
         }
     }
 
     public func close() {
         lock.lock()
         defer { lock.unlock() }
+        // Keep the system audio the mic had not consumed yet
+        if let tail = dequeueSecondary(frameCount: secondaryLeftQueue.count) {
+            write(tail)
+        }
         audioFile = nil
         converters.removeAll()
         secondaryLeftQueue.removeAll()
@@ -304,6 +333,8 @@ public enum MeetingRecorderError: Error, LocalizedError, Equatable, Sendable {
 }
 
 public protocol MeetingAudioCapturing: AnyObject, Sendable {
+    /// Called from any thread when live capture breaks mid-recording (device change, stream stop, write failure).
+    var onCaptureInterrupted: (@Sendable (String) -> Void)? { get set }
     func startCapture(
         outputFileURL: URL,
         captureMicrophone: Bool,
@@ -313,13 +344,20 @@ public protocol MeetingAudioCapturing: AnyObject, Sendable {
 }
 
 /// Captures live Microphone (`AVAudioEngine`) and System / Meeting Output (`ScreenCaptureKit` `SCStream`) into `audio.m4a` (#43).
-public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCapturing, SCStreamOutput, @unchecked Sendable {
+public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCapturing, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var audioEngine: AVAudioEngine?
     private var scStream: SCStream?
     private var mixer: MeetingAudioStreamMixer?
     private var isCapturingMic: Bool = false
+    private var configurationObserver: NSObjectProtocol?
+    private var interruptionHandler: (@Sendable (String) -> Void)?
     private let sampleQueue = DispatchQueue(label: "com.bitz.meetingrecorder.audio", qos: .userInitiated)
+
+    public var onCaptureInterrupted: (@Sendable (String) -> Void)? {
+        get { lock.withLock { interruptionHandler } }
+        set { lock.withLock { interruptionHandler = newValue } }
+    }
 
     public override init() {
         super.init()
@@ -334,7 +372,9 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
             throw MeetingRecorderError.noAudioSourcesEnabled
         }
 
-        let streamMixer = try MeetingAudioStreamMixer(outputFileURL: outputFileURL)
+        let streamMixer = try MeetingAudioStreamMixer(outputFileURL: outputFileURL) { [weak self] message in
+            self?.onCaptureInterrupted?(message)
+        }
         lock.withLock {
             self.mixer = streamMixer
             self.isCapturingMic = captureMicrophone
@@ -358,7 +398,7 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
                 config.height = 2
                 config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
 
-                let stream = SCStream(filter: filter, configuration: config, delegate: nil)
+                let stream = SCStream(filter: filter, configuration: config, delegate: self)
                 try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
                 try await stream.startCapture()
 
@@ -369,23 +409,20 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
 
             if captureMicrophone {
                 let engine = AVAudioEngine()
-                let inputNode = engine.inputNode
-                let inputFormat = inputNode.outputFormat(forBus: 0)
-                guard inputFormat.sampleRate > 0 && inputFormat.channelCount > 0 else {
-                    throw MeetingRecorderError.captureStartFailed("No valid microphone input format available.")
-                }
+                try startMicrophone(on: engine)
 
-                inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-                    guard let self else { return }
-                    let activeMixer = self.lock.withLock { self.mixer }
-                    activeMixer?.appendMicrophoneBuffer(buffer)
+                let observer = NotificationCenter.default.addObserver(
+                    forName: .AVAudioEngineConfigurationChange,
+                    object: engine,
+                    queue: nil
+                ) { [weak self] notification in
+                    guard let engine = notification.object as? AVAudioEngine else { return }
+                    self?.restartMicrophone(engine)
                 }
-
-                engine.prepare()
-                try engine.start()
 
                 lock.withLock {
                     self.audioEngine = engine
+                    self.configurationObserver = observer
                 }
             }
         } catch {
@@ -395,14 +432,19 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
     }
 
     public func stopCapture() async {
-        let (engine, stream, activeMixer) = lock.withLock { () -> (AVAudioEngine?, SCStream?, MeetingAudioStreamMixer?) in
-            let current = (self.audioEngine, self.scStream, self.mixer)
+        let (engine, stream, activeMixer, observer) = lock.withLock {
+            () -> (AVAudioEngine?, SCStream?, MeetingAudioStreamMixer?, NSObjectProtocol?) in
+            let current = (self.audioEngine, self.scStream, self.mixer, self.configurationObserver)
             self.audioEngine = nil
             self.scStream = nil
             self.mixer = nil
+            self.configurationObserver = nil
             return current
         }
 
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+        }
         if let engine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
@@ -411,6 +453,51 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
             try? await stream.stopCapture()
         }
         activeMixer?.close()
+    }
+
+    private func startMicrophone(on engine: AVAudioEngine) throws {
+        let inputNode = engine.inputNode
+        // Echo cancellation so speaker output is not re-recorded by the mic; also re-applied on device-change restarts
+        do {
+            try inputNode.setVoiceProcessingEnabled(true)
+            // Keep the user's meeting audio at full volume instead of ducking it while we record
+            inputNode.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+                enableAdvancedDucking: false,
+                duckingLevel: .min
+            )
+        } catch {
+            NSLog("Bitz meeting recorder: voice processing unavailable, recording without it: \(error.localizedDescription)")
+        }
+        // Read after enabling voice processing, which can change the input sample rate and channel count
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+        guard inputFormat.sampleRate > 0 && inputFormat.channelCount > 0 else {
+            throw MeetingRecorderError.captureStartFailed("No valid microphone input format available.")
+        }
+
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+            guard let self else { return }
+            let activeMixer = self.lock.withLock { self.mixer }
+            activeMixer?.appendMicrophoneBuffer(buffer)
+        }
+
+        engine.prepare()
+        try engine.start()
+    }
+
+    /// The input device changed (AirPods, unplugged mic): the engine has stopped, so rebuild the tap with the new format.
+    private func restartMicrophone(_ engine: AVAudioEngine) {
+        guard lock.withLock({ self.audioEngine === engine }) else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        do {
+            try startMicrophone(on: engine)
+        } catch {
+            onCaptureInterrupted?("Microphone stopped after an audio device change: \(error.localizedDescription)")
+        }
+    }
+
+    public func stream(_ stream: SCStream, didStopWithError error: Error) {
+        guard lock.withLock({ self.scStream === stream }) else { return }
+        onCaptureInterrupted?("System audio capture stopped: \(error.localizedDescription)")
     }
 
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
@@ -487,6 +574,12 @@ public final class MeetingRecorderService: ObservableObject {
     private var activeAudioFileURL: URL?
     private var activeStartedAt: Date?
     private var activeDetectedApps: [String] = []
+    private var activeCaptureWarning: String?
+    /// Synchronous guards set before the first `await`, so a double toggle can never start or stop twice.
+    private var isStarting = false
+    private var isStopping = false
+    private var failureDismissTask: Task<Void, Never>?
+    var failureBubbleDurationNanoseconds: UInt64 = 6_000_000_000
 
     private static let knownMeetingAppNames: Set<String> = [
         "zoom.us", "Zoom", "Microsoft Teams", "Slack", "FaceTime", "Discord",
@@ -511,10 +604,19 @@ public final class MeetingRecorderService: ObservableObject {
         self.permissionState = resolvedPermissionChecker.currentPermissions()
         self.nowProvider = nowProvider
         self.onRevealURL = onRevealURL
+        self.captureEngine.onCaptureInterrupted = { [weak self] message in
+            Task { @MainActor in self?.handleCaptureInterruption(message) }
+        }
     }
 
     deinit {
         elapsedTimerTask?.cancel()
+        failureDismissTask?.cancel()
+    }
+
+    /// True while capture is live or still being finalized, so quitting must wait for `finalizeForTermination()`.
+    public var hasUnfinalizedRecording: Bool {
+        isRecording || isStarting || isStopping
     }
 
     // MARK: - Derived UI State
@@ -536,9 +638,9 @@ public final class MeetingRecorderService: ObservableObject {
             return "🔴 Recording meeting (\(MeetingSettingsStore.formatDuration(timerStore.elapsedSeconds)))..."
         case .transcribing:
             return "✨ Meeting saved! Transcribing audio..."
-        case .completed:
+        case .completed(let result):
             guard isCompletionBubbleVisible else { return nil }
-            return "✨ Meeting saved & transcribed!"
+            return result.bubbleHeadline
         case .failed(let message):
             guard isCompletionBubbleVisible else { return nil }
             return "⚠️ \(message)"
@@ -571,15 +673,14 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     public func startRecording() async {
-        guard !isRecording && !isTranscribing else { return }
+        guard !isRecording && !isTranscribing && !isStarting && !isStopping else { return }
+        isStarting = true
+        defer { isStarting = false }
 
         let captureMic = settingsStore.captureMicrophone
         let captureSys = settingsStore.captureSystemAudio
         guard captureMic || captureSys else {
-            let msg = MeetingRecorderError.noAudioSourcesEnabled.localizedDescription
-            state = .failed(msg)
-            statusMessage = msg
-            isCompletionBubbleVisible = true
+            showFailure(MeetingRecorderError.noAudioSourcesEnabled.localizedDescription)
             return
         }
 
@@ -592,10 +693,11 @@ public final class MeetingRecorderService: ObservableObject {
             if captureSys && perms.screenAudio != .authorized {
                 missing.append("Screen & System Audio Recording")
             }
-            let msg = "Permission needed for \(missing.joined(separator: " & ")) in System Settings → Privacy & Security."
-            state = .failed(msg)
-            statusMessage = msg
-            isCompletionBubbleVisible = true
+            var msg = "Permission needed for \(missing.joined(separator: " & ")) in System Settings → Privacy & Security."
+            if captureSys && perms.screenAudio != .authorized {
+                msg += " Relaunch Bitz after granting Screen & System Audio Recording."
+            }
+            showFailure(msg)
             return
         }
 
@@ -603,6 +705,7 @@ public final class MeetingRecorderService: ObservableObject {
         let sessionID = MeetingSettingsStore.sessionFolderName(for: startDate)
         let sessionDir = settingsStore.meetingsRootDirectoryURL.appendingPathComponent(sessionID, isDirectory: true)
         let audioURL = sessionDir.appendingPathComponent("audio.m4a")
+        let sessionDirExisted = FileManager.default.fileExists(atPath: sessionDir.path)
 
         do {
             try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
@@ -617,6 +720,8 @@ public final class MeetingRecorderService: ObservableObject {
             activeAudioFileURL = audioURL
             activeStartedAt = startDate
             activeDetectedApps = Self.detectRunningMeetingApps()
+            activeCaptureWarning = nil
+            failureDismissTask?.cancel()
             timerStore.elapsedSeconds = 0
             isCompletionBubbleVisible = false
             isRecording = true
@@ -624,15 +729,16 @@ public final class MeetingRecorderService: ObservableObject {
             statusMessage = "Recording meeting into \(sessionDir.lastPathComponent)..."
             startElapsedTimer()
         } catch {
-            let msg = error.localizedDescription
-            state = .failed(msg)
-            statusMessage = msg
-            isCompletionBubbleVisible = true
+            if !sessionDirExisted {
+                try? FileManager.default.removeItem(at: sessionDir)
+            }
+            showFailure(error.localizedDescription)
         }
     }
 
-    public func stopRecording() async {
-        guard isRecording,
+    /// Stops and finalizes `audio.m4a` + `metadata.json`. `transcribe: false` is the fast quit path.
+    public func stopRecording(transcribe: Bool = true) async {
+        guard isRecording, !isStopping,
               let sessionID = activeSessionID,
               let sessionDir = activeSessionDirectoryURL,
               let audioURL = activeAudioFileURL,
@@ -640,6 +746,7 @@ public final class MeetingRecorderService: ObservableObject {
             return
         }
 
+        isStopping = true
         stopElapsedTimer()
         isRecording = false
         await captureEngine.stopCapture()
@@ -647,7 +754,8 @@ public final class MeetingRecorderService: ObservableObject {
         let endedAt = nowProvider()
         let duration = max(0, endedAt.timeIntervalSince(startedAt))
         let metadataURL = sessionDir.appendingPathComponent("metadata.json")
-        let shouldTranscribe = settingsStore.autoTranscribeOnStop && permissionState.canTranscribe
+        let shouldTranscribe = transcribe && settingsStore.autoTranscribeOnStop && permissionState.canTranscribe
+        var warnings = [activeCaptureWarning].compactMap { $0 }
 
         var metadata = MeetingRecordingMetadata(
             sessionID: sessionID,
@@ -661,6 +769,8 @@ public final class MeetingRecorderService: ObservableObject {
             transcriptStatus: shouldTranscribe ? "pending" : "skipped"
         )
         Self.writeMetadata(metadata, to: metadataURL)
+        // Audio and metadata are final; transcription below never blocks quit or a new start's guard
+        isStopping = false
 
         onPlaySound?(.charging)
 
@@ -691,6 +801,7 @@ public final class MeetingRecorderService: ObservableObject {
             } catch {
                 metadata.transcriptStatus = "failed"
                 Self.writeMetadata(metadata, to: metadataURL)
+                warnings.append("Transcript not saved: \(error.localizedDescription)")
             }
             isTranscribing = false
         }
@@ -702,7 +813,8 @@ public final class MeetingRecorderService: ObservableObject {
             metadataFileURL: metadataURL,
             transcriptTextURL: txtURL,
             transcriptJSONURL: jsonURL,
-            durationSeconds: duration
+            durationSeconds: duration,
+            warning: warnings.isEmpty ? nil : warnings.joined(separator: " ")
         )
         lastCompletedResult = result
         state = .completed(result)
@@ -710,6 +822,9 @@ public final class MeetingRecorderService: ObservableObject {
         statusMessage = txtURL != nil
             ? "Saved audio.m4a & on-device transcript to \(sessionDir.lastPathComponent)."
             : "Saved audio.m4a to \(sessionDir.lastPathComponent)."
+        if let warning = result.warning {
+            statusMessage += " ⚠️ \(warning)"
+        }
         onPlaySound?(.allAgentsDone)
 
         activeSessionID = nil
@@ -717,6 +832,15 @@ public final class MeetingRecorderService: ObservableObject {
         activeAudioFileURL = nil
         activeStartedAt = nil
         activeDetectedApps = []
+        activeCaptureWarning = nil
+    }
+
+    /// Quit path: waits for an in-flight start/stop, then finalizes audio + metadata without transcribing.
+    public func finalizeForTermination() async {
+        while isStarting || isStopping {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        await stopRecording(transcribe: false)
     }
 
     public func revealInFinder(_ targetURL: URL? = nil) {
@@ -739,6 +863,25 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     // MARK: - Internal Helpers
+
+    func handleCaptureInterruption(_ message: String) {
+        guard isRecording else { return }
+        activeCaptureWarning = message
+        statusMessage = "⚠️ \(message)"
+    }
+
+    /// Failure bubbles have no buttons, so they dismiss themselves (one-shot, nothing runs while idle).
+    private func showFailure(_ message: String) {
+        state = .failed(message)
+        statusMessage = message
+        isCompletionBubbleVisible = true
+        failureDismissTask?.cancel()
+        failureDismissTask = Task { @MainActor [weak self, failureBubbleDurationNanoseconds] in
+            try? await Task.sleep(nanoseconds: failureBubbleDurationNanoseconds)
+            guard !Task.isCancelled, let self, case .failed = self.state else { return }
+            self.dismissCompletionBubble()
+        }
+    }
 
     private func startElapsedTimer() {
         stopElapsedTimer()
