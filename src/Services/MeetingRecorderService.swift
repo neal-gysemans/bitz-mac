@@ -844,12 +844,13 @@ public final class MeetingRecorderService: ObservableObject {
                 let transcript = try await transcriptionService.transcribe(
                     audioFileURL: audioURL,
                     sessionID: sessionID,
-                    locale: .current
+                    locale: settingsStore.transcriptionLocaleIdentifier.map(Locale.init(identifier:))
                 )
                 let written = try MeetingTranscriptWriter.write(transcript, to: sessionDir)
                 txtURL = written.txtURL
                 jsonURL = written.jsonURL
                 metadata.transcriptStatus = "completed"
+                metadata.transcriptLocale = transcript.localeIdentifier
                 Self.writeMetadata(metadata, to: metadataURL)
 
                 if settingsStore.copyTranscriptPathToClipboard {

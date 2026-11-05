@@ -8,6 +8,8 @@ public struct AudioSettingsTabView: View {
     public var audioPlayer: (any CyberAudioPlaying)?
     @ObservedObject public var meetingSettings: MeetingSettingsStore
     @ObservedObject public var meetingRecorder: MeetingRecorderService
+    /// Built once in `.onAppear` (probing recognizers is not free), never in `body`.
+    @State private var transcriptionLocaleOptions: [(id: String, label: String)] = []
 
     public init(
         settingsStore: CyberAudioSettingsStore,
@@ -135,6 +137,22 @@ public struct AudioSettingsTabView: View {
                 .font(.subheadline)
                 .disabled(!meetingSettings.autoTranscribeOnStop)
 
+                Picker("Transcription Language", selection: Binding(
+                    get: { meetingSettings.transcriptionLocaleIdentifier },
+                    set: { meetingSettings.setTranscriptionLocaleIdentifier($0) }
+                )) {
+                    Text("Automatic").tag(String?.none)
+                    ForEach(transcriptionLocaleOptions, id: \.id) { option in
+                        Text(option.label).tag(Optional(option.id))
+                    }
+                }
+                .font(.subheadline)
+                .disabled(!meetingSettings.autoTranscribeOnStop)
+
+                Text("Transcription uses one language per recording, so pick the meeting's language.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Divider()
 
                 HStack(spacing: 12) {
@@ -156,6 +174,12 @@ public struct AudioSettingsTabView: View {
         }
         .onAppear {
             meetingRecorder.refreshPermissions()
+            // Probing ~60 recognizers takes ~0.2 s, so build the list off the main thread
+            Task {
+                transcriptionLocaleOptions = await Task.detached(priority: .utility) {
+                    SpeechFrameworkTranscriptionService.onDeviceLocaleOptions()
+                }.value
+            }
         }
     }
 

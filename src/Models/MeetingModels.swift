@@ -57,6 +57,8 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
     public let detectedAppNames: [String]
     public let audioFileName: String
     public var transcriptStatus: String
+    /// Locale the on-device recognizer actually used (nil until a transcript is written).
+    public var transcriptLocale: String?
 
     public init(
         sessionID: String,
@@ -67,7 +69,8 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
         captureSystemAudio: Bool,
         detectedAppNames: [String],
         audioFileName: String = "audio.m4a",
-        transcriptStatus: String = "pending"
+        transcriptStatus: String = "pending",
+        transcriptLocale: String? = nil
     ) {
         self.sessionID = sessionID
         self.startedAt = startedAt
@@ -78,6 +81,7 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
         self.detectedAppNames = detectedAppNames
         self.audioFileName = audioFileName
         self.transcriptStatus = transcriptStatus
+        self.transcriptLocale = transcriptLocale
     }
 }
 
@@ -242,12 +246,15 @@ public final class MeetingSettingsStore: ObservableObject {
     public static let autoTranscribeKey = "Bitz.MeetingRecorder.AutoTranscribe"
     public static let copyTranscriptPathKey = "Bitz.MeetingRecorder.CopyTranscriptPath"
     public static let meetingsDirectoryPathKey = "Bitz.MeetingRecorder.DirectoryPath"
+    public static let transcriptionLocaleKey = "Bitz.MeetingRecorder.TranscriptionLocale"
 
     @Published public private(set) var captureMicrophone: Bool
     @Published public private(set) var captureSystemAudio: Bool
     @Published public private(set) var autoTranscribeOnStop: Bool
     @Published public private(set) var copyTranscriptPathToClipboard: Bool
     @Published public private(set) var meetingsRootDirectoryURL: URL
+    /// nil = Automatic; otherwise a locale identifier such as `nl-BE`.
+    @Published public private(set) var transcriptionLocaleIdentifier: String?
 
     private let userDefaults: UserDefaults
 
@@ -293,6 +300,8 @@ public final class MeetingSettingsStore: ObservableObject {
         } else {
             self.meetingsRootDirectoryURL = Self.defaultMeetingsDirectoryURL
         }
+
+        self.transcriptionLocaleIdentifier = userDefaults.string(forKey: Self.transcriptionLocaleKey)
     }
 
     public func setCaptureMicrophone(_ enabled: Bool) {
@@ -318,6 +327,11 @@ public final class MeetingSettingsStore: ObservableObject {
     public func setMeetingsRootDirectoryURL(_ url: URL) {
         meetingsRootDirectoryURL = url
         userDefaults.set(url.path, forKey: Self.meetingsDirectoryPathKey)
+    }
+
+    public func setTranscriptionLocaleIdentifier(_ identifier: String?) {
+        transcriptionLocaleIdentifier = identifier
+        userDefaults.set(identifier, forKey: Self.transcriptionLocaleKey)
     }
 
     /// Formats elapsed seconds as `MM:SS` (or `HH:MM:SS` when >= 1 hour).

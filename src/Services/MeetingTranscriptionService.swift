@@ -27,10 +27,11 @@ public enum MeetingTranscriptionError: Error, LocalizedError, Equatable, Sendabl
 // MARK: - Meeting Transcription Protocol
 
 public protocol MeetingTranscriptionProviding: Sendable {
+    /// `locale == nil` is Automatic: current locale, then the user's preferred languages.
     func transcribe(
         audioFileURL: URL,
         sessionID: String,
-        locale: Locale
+        locale: Locale?
     ) async throws -> MeetingTranscript
 }
 
@@ -60,16 +61,59 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
         max(60, seconds * 2 + 60)
     }
 
+    /// First locale with an on-device model: the requested (or current) locale, its same-language variants
+    /// (en-US first for English), then for Automatic each preferred language and its variants.
+    /// e.g. `en_BE` has no model and region-less fallback picks `en-GB` (also none), so this lands on `en-US`.
+    static func resolveOnDeviceLocale(
+        requested: Locale?,
+        current: Locale = .current,
+        preferredLanguages: [String] = Locale.preferredLanguages,
+        supportedLocales: Set<Locale> = SFSpeechRecognizer.supportedLocales(),
+        supportsOnDevice: (Locale) -> Bool = { SFSpeechRecognizer(locale: $0)?.supportsOnDeviceRecognition ?? false }
+    ) throws -> Locale {
+        let base = requested ?? current
+        let supportedIDs = supportedLocales.map { $0.identifier(.bcp47) }.sorted()
+
+        func withVariants(_ locale: Locale) -> [String] {
+            guard let language = locale.language.languageCode?.identifier else { return [locale.identifier(.bcp47)] }
+            let variants = supportedIDs.filter { Locale(identifier: $0).language.languageCode?.identifier == language }
+            return [locale.identifier(.bcp47)] + (language == "en" ? ["en-US"] : []) + variants
+        }
+
+        var candidates = withVariants(base)
+        if requested == nil {
+            candidates += preferredLanguages.flatMap { withVariants(Locale(identifier: $0)) }
+        }
+
+        var seen = Set<String>()
+        for id in candidates where seen.insert(id).inserted {
+            let locale = Locale(identifier: id)
+            if supportsOnDevice(locale) { return locale }
+        }
+        throw MeetingTranscriptionError.onDeviceRecognitionUnsupported(base.identifier)
+    }
+
+    /// On-device transcription languages for the Settings picker, sorted by display name.
+    public static func onDeviceLocaleOptions() -> [(id: String, label: String)] {
+        SFSpeechRecognizer.supportedLocales()
+            .filter { SFSpeechRecognizer(locale: $0)?.supportsOnDeviceRecognition ?? false }
+            .map { (id: $0.identifier, label: Locale.current.localizedString(forIdentifier: $0.identifier) ?? $0.identifier) }
+            .sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
+    }
+
     public func transcribe(
         audioFileURL: URL,
         sessionID: String,
-        locale: Locale = .current
+        locale: Locale? = nil
     ) async throws -> MeetingTranscript {
-        let resolvedRecognizer = SFSpeechRecognizer(locale: locale)
+        let chosenLocale = enforceOnDeviceRecognition
+            ? try Self.resolveOnDeviceLocale(requested: locale)
+            : (locale ?? .current)
+        let resolvedRecognizer = SFSpeechRecognizer(locale: chosenLocale)
             ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
 
         guard let recognizer = resolvedRecognizer, recognizer.isAvailable else {
-            throw MeetingTranscriptionError.recognizerUnavailable(locale.identifier)
+            throw MeetingTranscriptionError.recognizerUnavailable(chosenLocale.identifier)
         }
 
         let resolvedLocaleID = recognizer.locale.identifier

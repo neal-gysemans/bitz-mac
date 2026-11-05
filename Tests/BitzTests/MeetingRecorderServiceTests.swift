@@ -85,7 +85,7 @@ struct MockMeetingTranscriptionService: MeetingTranscriptionProviding {
     func transcribe(
         audioFileURL: URL,
         sessionID: String,
-        locale: Locale
+        locale: Locale?
     ) async throws -> MeetingTranscript {
         if delayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: delayNanoseconds)
@@ -93,7 +93,7 @@ struct MockMeetingTranscriptionService: MeetingTranscriptionProviding {
         if let error { throw error }
         return MeetingTranscript(
             sessionID: sessionID,
-            localeIdentifier: locale.identifier,
+            localeIdentifier: locale?.identifier ?? "en-US",
             generatedAt: Date(timeIntervalSince1970: 1_762_340_000),
             fullText: fullText,
             segments: segments
@@ -278,6 +278,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let metaData = try Data(contentsOf: result.metadataFileURL)
         let decodedMeta = try decoder.decode(MeetingRecordingMetadata.self, from: metaData)
         XCTAssertEqual(decodedMeta.transcriptStatus, "completed")
+        XCTAssertEqual(decodedMeta.transcriptLocale, "en-US", "metadata.json records the locale actually used")
         XCTAssertEqual(decodedMeta.audioFileName, "audio.m4a")
 
         // One-click reveal in Finder dismisses completion bubble and opens session directory
@@ -568,5 +569,43 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let meta = try decoder.decode(MeetingRecordingMetadata.self, from: Data(contentsOf: metadataURL))
         XCTAssertEqual(meta.transcriptStatus, "interrupted")
         await stop.value
+    }
+
+    // MARK: - Transcription language (on-device locale resolution)
+
+    private func resolve(
+        _ requested: String?,
+        current: String = "en_BE",
+        preferred: [String] = ["en-BE", "nl-BE"],
+        onDevice: Set<String>
+    ) throws -> String {
+        let supported: Set<Locale> = Set(["en-US", "en-GB", "en-AU", "nl-NL", "nl-BE"].map(Locale.init(identifier:)))
+        return try SpeechFrameworkTranscriptionService.resolveOnDeviceLocale(
+            requested: requested.map(Locale.init(identifier:)),
+            current: Locale(identifier: current),
+            preferredLanguages: preferred,
+            supportedLocales: supported,
+            supportsOnDevice: { onDevice.contains($0.identifier(.bcp47)) }
+        ).identifier(.bcp47)
+    }
+
+    func testTranscriptionLocaleFallsBackToOnDeviceVariant() throws {
+        XCTAssertEqual(try resolve("en-GB", onDevice: ["en-US", "nl-BE"]), "en-US")
+        XCTAssertEqual(try resolve("nl-BE", onDevice: ["en-US", "nl-BE"]), "nl-BE")
+        XCTAssertEqual(try resolve(nil, onDevice: ["en-AU", "nl-BE"]), "en-AU", "Automatic keeps the user's language (English)")
+        XCTAssertEqual(try resolve(nil, onDevice: ["en-AU", "en-US", "nl-BE"]), "en-US", "en-US is tried first among English variants")
+        XCTAssertEqual(try resolve(nil, current: "fr_BE", onDevice: ["nl-BE"]), "nl-BE", "Automatic then tries preferred languages")
+        XCTAssertThrowsError(try resolve("en-GB", onDevice: []))
+    }
+
+    func testTranscriptionLocaleSettingPersists() {
+        let store = MeetingSettingsStore(userDefaults: defaults)
+        XCTAssertNil(store.transcriptionLocaleIdentifier, "Default is Automatic")
+
+        store.setTranscriptionLocaleIdentifier("nl-BE")
+        XCTAssertEqual(MeetingSettingsStore(userDefaults: defaults).transcriptionLocaleIdentifier, "nl-BE")
+
+        store.setTranscriptionLocaleIdentifier(nil)
+        XCTAssertNil(MeetingSettingsStore(userDefaults: defaults).transcriptionLocaleIdentifier)
     }
 }
