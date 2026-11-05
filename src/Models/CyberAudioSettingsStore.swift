@@ -17,7 +17,8 @@ public final class CyberAudioSettingsStore: ObservableObject {
     public static let isChargingEnabledKey = "\(keyPrefix)isChargingEnabled"
     public static let isAgentChimeEnabledKey = "\(keyPrefix)isAgentChimeEnabled"
     public static let isAllDoneFanfareEnabledKey = "\(keyPrefix)isAllDoneFanfareEnabled"
-    public static let isMeetingStartChimeEnabledKey = "\(keyPrefix)isMeetingStartChimeEnabled"
+    // New key so a start chime switched off under the earlier master-gated toggle comes back on (#43 A2)
+    public static let isMeetingStartChimeEnabledKey = "\(keyPrefix)isMeetingStartChimeAlwaysOn"
     public static let isMeetingSavedChimeEnabledKey = "\(keyPrefix)isMeetingSavedChimeEnabled"
     public static let isFocusDNDSuppressionEnabledKey = "\(keyPrefix)isFocusDNDSuppressionEnabled"
     // New key so the default-on value every earlier install persisted no longer applies (#95)
@@ -179,7 +180,7 @@ public final class CyberAudioSettingsStore: ObservableObject {
     }
 
     public func isEventEnabled(_ event: CyberSoundEvent) -> Bool {
-        guard isEnabled else { return false }
+        guard isEnabled || event.ignoresMasterAndFocus else { return false }
         switch event {
         case .purr:
             return isPurrEnabled

@@ -75,6 +75,11 @@ public enum CyberSoundEvent: String, CaseIterable, Identifiable, Codable, Sendab
     public var ignoresCallSuppression: Bool {
         self == .meetingRecordingStarted || self == .meetingRecordingSaved
     }
+
+    /// The start chime tells the user Bitz is listening, so only its own toggle and a muted Mac silence it (#43 D5, A2).
+    public var ignoresMasterAndFocus: Bool {
+        self == .meetingRecordingStarted
+    }
 }
 
 /// Reason why an audio playback attempt was skipped or suppressed.

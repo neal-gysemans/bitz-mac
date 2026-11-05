@@ -184,6 +184,14 @@ public struct AudioSettingsTabView: View {
                 }
                 .font(.subheadline)
 
+                Toggle("Start chime", isOn: Binding(
+                    get: { settingsStore.isMeetingStartChimeEnabled },
+                    set: { settingsStore.setMeetingStartChimeEnabled($0) }
+                ))
+                .font(.subheadline)
+
+                caption(eventDescription(for: .meetingRecordingStarted), enabled: true)
+
                 Divider()
 
                 HStack(spacing: 12) {
@@ -421,7 +429,7 @@ public struct AudioSettingsTabView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                ForEach(CyberSoundEvent.allCases) { event in
+                ForEach(Self.soundEffectEvents) { event in
                     HStack(alignment: .center, spacing: 12) {
                         Toggle(isOn: Binding(
                             get: { settingsStore.isEventEnabled(event) },
@@ -450,7 +458,7 @@ public struct AudioSettingsTabView: View {
                         .disabled(!settingsStore.isEnabled || !settingsStore.isEventEnabled(event))
                     }
 
-                    if event != CyberSoundEvent.allCases.last {
+                    if event != Self.soundEffectEvents.last {
                         Divider()
                     }
                 }
@@ -520,6 +528,9 @@ public struct AudioSettingsTabView: View {
         )
     }
 
+    /// The start chime has its own row in the Meeting Recorder card, outside the master switch.
+    static let soundEffectEvents = CyberSoundEvent.allCases.filter { !$0.ignoresMasterAndFocus }
+
     private func eventDescription(for event: CyberSoundEvent) -> String {
         switch event {
         case .purr:
@@ -535,7 +546,7 @@ public struct AudioSettingsTabView: View {
         case .charging:
             return "Calm ascending blip when entering offline/break charging"
         case .meetingRecordingStarted:
-            return "Blip when a meeting recording starts — plays while the mic is in use; system mute, Focus suppression and Enable Cyber Audio still silence it"
+            return "Plays when a recording starts so you know Bitz is listening. Silent only when your Mac is muted."
         case .meetingRecordingSaved:
             return "Fanfare when a meeting recording is saved — plays while the mic is in use; system mute, Focus suppression and Enable Cyber Audio still silence it"
         }

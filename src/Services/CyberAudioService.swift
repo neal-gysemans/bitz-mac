@@ -207,7 +207,7 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
         now: Date? = nil,
         bypassCooldown: Bool = false
     ) -> (allowed: Bool, reason: AudioSuppressionReason?) {
-        guard settingsStore.isEnabled else {
+        guard settingsStore.isEnabled || event.ignoresMasterAndFocus else {
             return (false, .masterDisabled)
         }
 
@@ -224,7 +224,7 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             return (false, .callOrScreenSharingActive)
         }
 
-        if settingsStore.isFocusDNDSuppressionEnabled && environmentDetector.isFocusOrDNDActive() {
+        if !event.ignoresMasterAndFocus && settingsStore.isFocusDNDSuppressionEnabled && environmentDetector.isFocusOrDNDActive() {
             return (false, .focusActive)
         }
 
