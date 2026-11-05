@@ -212,7 +212,7 @@ A warning stays until **GOT IT**, menu bar **Dismiss Agent Warning**, or the sam
 - **Xcode 15.4+** / Xcode Command Line Tools (`/usr/bin/swift`)
 
 ### 1. Build, Package & Launch `Bitz.app`
-Run the included packaging script to compile the executable, bundle `build/Bitz.app` with its `LSUIElement` `Info.plist`, ad-hoc sign it with hardened runtime and `Scripts/Bitz.entitlements`, and launch it (with automatic CommandLineTools SDK fallback):
+Run the included packaging script to compile the executable, bundle `build/Bitz.app` with its `LSUIElement` `Info.plist`, ad-hoc sign it with hardened runtime and `Scripts/Bitz.entitlements`, and launch it (with automatic CommandLineTools SDK fallback). Local builds use the bundle ID `com.bitz.cybercat.dev` (override with `BITZ_BUNDLE_ID`), so their permissions and settings stay separate from an installed release:
 
 ```bash
 ./Scripts/package_and_run.sh release

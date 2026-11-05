@@ -70,7 +70,7 @@ Ship the meeting recorder in a state where a recording can never be silently los
 - Settings → Audio: split into a **Meeting Recorder** card (sources, recordings folder, permissions, shortcut, chimes, retention) and a **Transcription** card (transcribe after recording, language, copy path, export folder), placed **after** the existing Cyber Audio cards; plain labels ("Microphone", "Meeting / system audio", "Transcribe after recording") — no framework names; status badge without shortcut text; export folder uses a `Toggle` + Choose…; privacy caption disabled with its row.
 - Language picker: "Automatic", then the user's preferred languages, then one entry per remaining language (region shown only where it disambiguates, e.g. English (US)/(UK)); no invalid selection while the list loads.
 - **First-recording notice (consent):** before the first recording ever, a one-time sheet/alert explains what is captured (microphone + all system audio, via the Screen & System Audio Recording permission), where files go, that transcription is on-device, and "Let other participants know before you record." Recording starts only after "Continue"; stored as `bitz.meeting.consentAcknowledged`. This is also where the Screen Recording scope is explained before `CGRequestScreenCaptureAccess` (Security #6).
-- **Retention:** setting "Delete recordings after" Off (default) / 30 / 90 days; runs at launch and after each recording; deletes only session folders under the recordings root that Bitz created (have a valid `metadata.json`) and are older than the limit.
+- **Retention:** setting "Delete older recordings" Off (default) / 30 / 90 days, with a caption that states the newest-recording anchor; runs at launch and after each recording; deletes only session folders under the recordings root that Bitz created (have a valid `metadata.json`) and are older than the limit.
   - Safeguards: the folder's modification date must also be past the limit; each run first sweeps `.deleting-<session>` folders a cut-short delete left (a session is renamed to that before removal); the cutoff is measured from `min(now, newest session start)`, so a clock jumped forward never expires sessions within the limit of the newest one (and the newest session is never expired).
 
 ### D8. Export and metadata hygiene (Security #9, #10; Architecture #12)
@@ -80,10 +80,10 @@ Ship the meeting recorder in a state where a recording can never be silently los
 - Add `NSDocumentsFolderUsageDescription` (users may still choose a Documents folder).
 
 ### D9. Structure and cleanup (Architecture #4, #5, #8, #9, #14, NITs; follow-ups)
-- New folder `src/Services/MeetingRecorder/`: `MeetingPermissionChecker.swift`, `MeetingTrackWriter.swift` (D1), `MeetingAudioCaptureEngine.swift` (protocol, error, production engine), `MeetingRecorderService.swift` (service + timer store), `MeetingTranscriptionService.swift`. `MeetingSettingsStore` moves to `src/Models/MeetingSettingsStore.swift`; `formatDuration` / `sessionFolderName` move off the store.
+- New folder `src/Services/MeetingRecorder/`: `MeetingPermissionChecker.swift`, `MeetingTrackWriter.swift` (D1), `MeetingAudioCaptureEngine.swift` (protocol, error, production engine), `MeetingRecorderService.swift` (service + first-recording notice; no timer store, see follow-ups), `MeetingTranscriptionService.swift`. `MeetingSettingsStore` moves to `src/Models/MeetingSettingsStore.swift`; `formatDuration` / `sessionFolderName` move off the store.
 - Tests split: `MeetingRecorderServiceTests`, `MeetingTrackWriterTests`, `MeetingTranscriptionTests`; hotkey tests in `KeyboardShortcutsTests.swift`; MARK names by topic, not "Fix cycle".
 - Recorder state: `isRecording`/`isTranscribing` derived from `state`; drop unused enum payloads; rename `isCompletionBubbleVisible`.
-- Dead API removed: `MeetingRecorderError.permissionDenied` (or used), `toggleMeetingRecordingAction` wired into the main `NSMenu` like its siblings and used by the menu bar + Settings button.
+- Dead API removed: `MeetingRecorderError.permissionDenied` (or used), `toggleMeetingRecordingAction` wired into the main `NSMenu` like its siblings and used by the hotkey; the menu bar and Settings buttons call `toggleRecording()` directly, with the same behaviour.
 - Comments that contradict code fixed (start sound, UTC, "synchronized"/"ring buffer").
 - `isLoaf(state:isRecording:)` single static helper; `MascotOverlayView` receives `isRecordingMeeting: Bool` instead of observing the whole recorder.
 - NITs: Advanced shortcut row style; shared `JSONEncoder` factory; `finalizeForTermination` awaits stored tasks instead of polling; `CyberHeadphonesOverlay` `Equatable` used or dropped.
@@ -94,7 +94,7 @@ Ship the meeting recorder in a state where a recording can never be silently los
 - **Docs:** AGENTS.md codebase map + bubble priority line; ARCHITECTURE.md module table + §4 privacy (C-003) updated for mic/system capture, running-app enumeration, storage, retention.
 
 ## 4. Invariants that must hold (AGENTS.md)
-- Idle CPU < 2 %, RAM < 70 MB; no timers or animations when not recording; only leaf views observe the 1 Hz timer; CoreAnimation for motion; shadow before stroke; mascot window `ignoresMouseEvents = true` / `canBecomeKey = false` except the bubble panel's documented interactive state.
+- Idle CPU < 2 %, RAM < 70 MB; no timers or animations when not recording; CoreAnimation for motion; shadow before stroke; mascot window `ignoresMouseEvents = true` / `canBecomeKey = false` except the bubble panel's documented interactive state.
 - No network use anywhere in the recorder or transcription path.
 - §2.8 idle CPU check run on the final build.
 
