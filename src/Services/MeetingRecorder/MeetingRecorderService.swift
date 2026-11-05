@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 
 // MARK: - Meeting Recorder Coordinator Service
@@ -516,9 +517,43 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     /// At launch: recovery first, so a session it rebuilds metadata for is judged by retention with that metadata.
+    /// Then the newest untranscribed session becomes the last recording, so Transcribe Again reaches a session a crash or
+    /// quit left without a transcript (D6). No bubble.
     public func runLaunchMaintenance() async {
         await recoverUnmixedSessions()
         await applyRetention()
+        let root = settingsStore.meetingsRootDirectoryURL
+        let found = await Task.detached(priority: .utility) { Self.newestUntranscribedSession(in: root) }.value
+        if lastCompletedResult == nil, let found {
+            lastCompletedResult = found
+        }
+    }
+
+    /// The newest session Bitz made (decodable `metadata.json`) with playable audio and no `transcript.txt`.
+    nonisolated static func newestUntranscribedSession(in root: URL) -> MeetingRecordingResult? {
+        let folders = (try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: .skipsHiddenFiles
+        )) ?? []
+        let candidates = folders.compactMap { sessionDir -> (url: URL, metadata: MeetingRecordingMetadata)? in
+            guard isSessionFolder(sessionDir),
+                  !FileManager.default.fileExists(atPath: sessionDir.appendingPathComponent("transcript.txt").path),
+                  let metadata = decodedMetadata(at: sessionDir.appendingPathComponent("metadata.json")) else { return nil }
+            return (sessionDir, metadata)
+        }
+        for (sessionDir, metadata) in candidates.sorted(by: { $0.metadata.startedAt > $1.metadata.startedAt }) {
+            let audioURL = transcriptionAudioURL(in: sessionDir)
+            guard (try? AVAudioFile(forReading: audioURL)) != nil else { continue }
+            return MeetingRecordingResult(
+                sessionID: sessionDir.lastPathComponent,
+                sessionDirectoryURL: sessionDir,
+                audioFileURL: audioURL,
+                metadataFileURL: sessionDir.appendingPathComponent("metadata.json"),
+                durationSeconds: metadata.durationSeconds
+            )
+        }
+        return nil
     }
 
     /// Launch recovery (D1): mixes sessions a crash or quit left as tracks, one at a time at utility priority,
@@ -527,13 +562,14 @@ public final class MeetingRecorderService: ObservableObject {
         isRecovering = true
         defer { isRecovering = false }
         let root = settingsStore.meetingsRootDirectoryURL
+        let now = nowProvider()
         let sessions = await Task.detached(priority: .utility) {
             let folders = (try? FileManager.default.contentsOfDirectory(
                 at: root,
                 includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
                 options: .skipsHiddenFiles
             )) ?? []
-            return folders.filter(Self.needsRecovery).sorted { $0.path < $1.path }
+            return folders.filter { Self.needsRecovery($0, now: now) }.sorted { $0.path < $1.path }
         }.value
         for sessionDir in sessions {
             guard !hasUnfinalizedRecording else { return }
@@ -612,8 +648,20 @@ public final class MeetingRecorderService: ObservableObject {
             && name.dropFirst(prefix.count).wholeMatch(of: #/[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}(-[0-9]+)?/#) != nil
     }
 
-    nonisolated static func needsRecovery(_ sessionDir: URL) -> Bool {
+    /// A session touched this recently may be another Bitz instance's live recording (dev and release builds share the
+    /// folder); a live writer touches its track about every 85 ms, so recovery leaves it alone.
+    nonisolated static let liveSessionWindow: TimeInterval = 120
+
+    /// `modificationDate` reads the file's date; tests inject one.
+    nonisolated static func needsRecovery(
+        _ sessionDir: URL,
+        now: Date,
+        modificationDate: (URL) -> Date? = MeetingRecorderService.modificationDate(of:)
+    ) -> Bool {
         guard isSessionFolder(sessionDir) else { return false }
+        // A date ahead of `now` (clock set back) also counts as live: never mix a folder that might still be written
+        let touched = ([sessionDir] + MeetingTrackMixer.trackURLs(in: sessionDir)).compactMap(modificationDate)
+        guard touched.allSatisfy({ $0 < now.addingTimeInterval(-liveSessionWindow) }) else { return false }
         if MeetingTrackMixer.needsMix(sessionDir) { return true }
         // A verified mix whose track cleanup or final metadata write was cut short (kill right after the rename)
         guard MeetingTrackMixer.mixedLength(in: sessionDir) != nil,
@@ -621,6 +669,10 @@ public final class MeetingRecorderService: ObservableObject {
         return !MeetingTrackMixer.tracksCoveredByMix(in: sessionDir, mixedTracks: metadata.mixedTracks).isEmpty
             || metadata.audioStatus != .mixed
             || metadata.audioFileNames != MeetingTrackMixer.audioFileNames(in: sessionDir)
+    }
+
+    nonisolated static func modificationDate(of url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
 
     nonisolated static func recoverSession(_ sessionDir: URL) {

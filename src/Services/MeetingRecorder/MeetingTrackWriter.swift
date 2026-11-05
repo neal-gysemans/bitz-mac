@@ -220,6 +220,7 @@ enum MeetingTrackMixError: Error, LocalizedError, Equatable {
     case lengthMismatch(expected: AVAudioFramePosition, actual: AVAudioFramePosition)
     case outputOccupied
     case cancelled
+    case tracksChanged
 
     var errorDescription: String? {
         switch self {
@@ -231,6 +232,8 @@ enum MeetingTrackMixError: Error, LocalizedError, Equatable {
             return "audio.m4a already exists and is not a damaged earlier mix."
         case .cancelled:
             return "Mixing stopped because a recording started."
+        case .tracksChanged:
+            return "A track was still being recorded, so this mix was discarded."
         }
     }
 }
@@ -351,6 +354,15 @@ public enum MeetingTrackMixer {
         }
     }
 
+    /// Each track's size and modification date; a change means a writer is still appending to it.
+    static func trackStamps(in sessionDirectory: URL) -> [String] {
+        trackURLs(in: sessionDirectory).map { url in
+            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+            let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate
+            return "\(attributes?[.size] ?? "none") \(modified ?? 0)"
+        }
+    }
+
     /// Mixes the session's tracks into `audio.m4a`, verifies it, then deletes the tracks that went in.
     /// `recordMixedTracks` gets their names just before `audio.m4a` appears, so the caller can store them in metadata
     /// and a cleanup cut short later deletes only those. On failure the tracks stay and `mixed` is false;
@@ -360,13 +372,20 @@ public enum MeetingTrackMixer {
         recordMixedTracks: ([String]) -> Void = { _ in }
     ) -> (mixed: Bool, mixedTracks: [String], warnings: [String]) {
         var warnings: [String] = []
+        let outputURL = sessionDirectory.appendingPathComponent(audioFileName)
+        let stampsBefore = trackStamps(in: sessionDirectory)
         do {
             let mixedTracks = try mixTracks(
                 trackURLs(in: sessionDirectory),
-                into: sessionDirectory.appendingPathComponent(audioFileName),
+                into: outputURL,
                 warnings: &warnings,
                 beforeCommit: { recordMixedTracks($0.map(\.lastPathComponent)) }
             )
+            // Another Bitz instance may still be recording here (#43): a track that changed during the mix is never deleted
+            guard trackStamps(in: sessionDirectory) == stampsBefore else {
+                try? FileManager.default.removeItem(at: outputURL)
+                throw MeetingTrackMixError.tracksChanged
+            }
             mixedTracks.forEach { try? FileManager.default.removeItem(at: $0) }
             return (true, mixedTracks.map(\.lastPathComponent), warnings)
         } catch {
