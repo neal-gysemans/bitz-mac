@@ -183,6 +183,45 @@ final class MascotOverlayLayoutTests: XCTestCase {
         try assertBubbleFitsItsWindow(recordingBubble)
     }
 
+    /// D6: a failed transcript adds the TRANSCRIBE AGAIN row; the bubble must still fit its window.
+    func testFailedTranscriptBubbleWithTranscribeAgainFitsItsWindow() async throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bitz-layout-meeting-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let meetingSettings = MeetingSettingsStore(userDefaults: defaults)
+        meetingSettings.setMeetingsRootDirectoryURL(tempDir)
+        var failing = MockMeetingTranscriptionService()
+        failing.error = NSError(domain: "test", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "A fairly long recognizer failure message that wraps across several lines in the bubble"
+        ])
+        let recorder = MeetingRecorderService(
+            settingsStore: meetingSettings,
+            captureEngine: MockMeetingAudioCaptureEngine(),
+            transcriptionService: failing,
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .authorized)
+            )
+        )
+        await recorder.startRecording()
+        await recorder.stopRecording()
+        XCTAssertNil(recorder.lastCompletedResult?.transcriptTextURL, "the TRANSCRIBE AGAIN row is shown")
+        XCTAssertTrue(recorder.isInteractiveBubbleActive)
+
+        let bubble = SpeechBubbleView(
+            engine: fixture.engine,
+            scaleStore: fixture.scaleStore,
+            agentMonitor: fixture.agentMonitor,
+            updateStore: fixture.updateStore,
+            telemetryDashboard: fixture.telemetryDashboard,
+            telemetrySettings: fixture.telemetrySettings,
+            meetingRecorder: recorder
+        )
+        try assertBubbleFitsItsWindow(bubble)
+    }
+
     /// The bubble window takes the hosting view's fitting size, so drawing must stay within it.
     private func assertBubbleFitsItsWindow(
         _ view: SpeechBubbleView,

@@ -209,7 +209,9 @@ final class UtteranceAccumulator: @unchecked Sendable {
 
     /// Keyed by the first segment's start time (absolute within the file). A result replaces every utterance that starts
     /// within its span, so a re-delivered utterance (even with a shifted start) or a cumulative result never duplicates text.
+    /// A file ending in silence gets an empty final result (one `""` segment at 0.0); its span would erase the first utterance.
     func add(segments: [MeetingTranscriptSegment], formattedString: String) {
+        let segments = segments.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         guard let start = segments.first?.startTime else { return }
         let span = start...max(start, segments.map(\.endTime).max() ?? start)
         lock.withLock {

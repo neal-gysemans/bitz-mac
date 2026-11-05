@@ -100,7 +100,7 @@ final class MeetingTranscriptionTests: XCTestCase {
     }
 
     func testUtteranceAccumulatorDropsOverlappedUtterances() {
-        // Re-delivered utterance whose start shifted a little later
+        // Re-delivered utterance whose start shifted a little earlier
         let shifted = UtteranceAccumulator()
         shifted.add(segments: segments("Hello team", from: 2.0), formattedString: "Hello team")
         shifted.add(segments: segments("Hello team today", from: 1.9), formattedString: "Hello team today")
@@ -116,6 +116,26 @@ final class MeetingTranscriptionTests: XCTestCase {
         let transcript = cumulative.transcript(sessionID: "s", localeIdentifier: "en-US")
         XCTAssertEqual(transcript.fullText, "One two three four Later")
         XCTAssertEqual(transcript.segments.count, 5)
+    }
+
+    func testEmptyFinalResultKeepsTheFirstUtterance() {
+        // Probed shape (macOS 26): a file ending in silence gets a final result with one empty segment at 0.0
+        let seg = { (text: String, start: Double, end: Double) in
+            MeetingTranscriptSegment(text: text, startTime: start, endTime: end, confidence: 0.9)
+        }
+        let results: [(segments: [MeetingTranscriptSegment], text: String, isFinal: Bool)] = [
+            ([seg("Good", 0.0, 0.5), seg("numbers", 3.0, 3.57)], "Good morning numbers", false),
+            ([seg("The", 6.0, 6.5), seg("year", 8.5, 9.0)], "The second year", false),
+            ([seg("", 0.0, 0.0)], "", true),
+        ]
+        let utterances = UtteranceAccumulator()
+        let steps = results.map {
+            SpeechFrameworkTranscriptionService.recognitionStep(result: $0, error: nil, utterances: utterances)
+        }
+        XCTAssertEqual(steps, [.accumulate, .accumulate, .finishSuccess], "the empty final result still finishes")
+        let transcript = utterances.transcript(sessionID: "s", localeIdentifier: "en-US")
+        XCTAssertEqual(transcript.fullText, "Good morning numbers The second year")
+        XCTAssertEqual(transcript.segments.map(\.text), ["Good", "numbers", "The", "year"])
     }
 
     // MARK: - Recognition callback handling

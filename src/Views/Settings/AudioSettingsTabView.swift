@@ -241,7 +241,7 @@ public struct AudioSettingsTabView: View {
 
                     Button("Check / Request Permissions") {
                         Task {
-                            await meetingRecorder.requestPermissions()
+                            await meetingRecorder.requestPermissions(includeSpeech: true)
                         }
                     }
                     .buttonStyle(.bordered)

@@ -127,12 +127,13 @@ public final class MeetingRecorderService: ObservableObject {
         permissionState = permissionChecker.currentPermissions()
     }
 
+    /// `includeSpeech`: also ask for Speech Recognition when auto-transcribe is off (Settings button; Transcribe Again needs it).
     @discardableResult
-    public func requestPermissions() async -> MeetingPermissionState {
+    public func requestPermissions(includeSpeech: Bool = false) async -> MeetingPermissionState {
         let updated = await permissionChecker.requestPermissions(
             captureMicrophone: settingsStore.captureMicrophone,
             captureSystemAudio: settingsStore.captureSystemAudio,
-            transcribe: settingsStore.autoTranscribeOnStop
+            transcribe: includeSpeech || settingsStore.autoTranscribeOnStop
         )
         permissionState = updated
         return updated
@@ -337,6 +338,14 @@ public final class MeetingRecorderService: ObservableObject {
         let metadataURL = last.metadataFileURL
         let audioURL = Self.transcriptionAudioURL(in: sessionDir)
         refreshPermissions()
+        if permissionState.speechRecognition == .notDetermined {
+            // Speech only: with auto-transcribe off nothing has asked yet, and the capture permissions are not needed here
+            permissionState = await permissionChecker.requestPermissions(
+                captureMicrophone: false,
+                captureSystemAudio: false,
+                transcribe: true
+            )
+        }
         var warnings: [String] = []
         var transcriptURLs: (txtURL: URL, jsonURL: URL)?
         if !permissionState.canTranscribe {
@@ -390,6 +399,10 @@ public final class MeetingRecorderService: ObservableObject {
             transcribingMetadata = nil
             isTranscribing = false
         }
+        // Only a Transcribe Again finds transcript files here; a fresh session folder has none
+        let previousTxtURL = sessionDir.appendingPathComponent("transcript.txt")
+        let previousJSONURL = sessionDir.appendingPathComponent("transcript.json")
+        let hasPreviousTranscript = FileManager.default.fileExists(atPath: previousTxtURL.path)
         do {
             let transcript = try await transcriptionService.transcribe(
                 audioFileURL: audioURL,
@@ -405,7 +418,12 @@ public final class MeetingRecorderService: ObservableObject {
             }
             if let exportDirectory = settingsStore.transcriptExportDirectoryURL {
                 do {
-                    let exported = try Self.exportTranscript(written.txtURL, sessionID: sessionID, to: exportDirectory)
+                    let exported = try Self.exportTranscript(
+                        written.txtURL,
+                        sessionID: sessionID,
+                        to: exportDirectory,
+                        replacing: metadata.transcriptExportPath.map(URL.init(fileURLWithPath:))
+                    )
                     metadata.transcriptExportPath = exported.path
                 } catch {
                     warnings.append("Transcript saved, but copy to export folder failed: \(error.localizedDescription)")
@@ -419,6 +437,11 @@ public final class MeetingRecorderService: ObservableObject {
             }
             return written
         } catch {
+            if hasPreviousTranscript {
+                // Metadata (status, locale, export path) still describes the kept transcript, so it is not rewritten
+                warnings.append("Transcribe Again failed — previous transcript kept: \(error.localizedDescription)")
+                return (previousTxtURL, previousJSONURL)
+            }
             metadata.transcriptStatus = "failed"
             Self.writeMetadata(metadata, to: metadataURL)
             warnings.append("Transcript not saved: \(error.localizedDescription)")
@@ -631,8 +654,16 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     /// Copies `transcript.txt` into the export folder as `<sessionID> transcript.txt`, adding ` (2)`, ` (3)`… instead of overwriting.
-    static func exportTranscript(_ txtURL: URL, sessionID: String, to directory: URL) throws -> URL {
+    /// `previous` (this session's earlier export) is the one file replaced in place, when it still exists in this folder.
+    static func exportTranscript(_ txtURL: URL, sessionID: String, to directory: URL, replacing previous: URL? = nil) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if let previous,
+           previous.deletingLastPathComponent().standardizedFileURL.path == directory.standardizedFileURL.path,
+           FileManager.default.fileExists(atPath: previous.path) {
+            try Data(contentsOf: txtURL).write(to: previous, options: .atomic)
+            restrictToOwner(previous)
+            return previous
+        }
         var destination = directory.appendingPathComponent("\(sessionID) transcript.txt")
         var suffix = 2
         while FileManager.default.fileExists(atPath: destination.path) {

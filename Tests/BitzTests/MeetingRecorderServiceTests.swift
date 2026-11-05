@@ -92,6 +92,8 @@ struct MockMeetingTranscriptionService: MeetingTranscriptionProviding {
     var error: Error?
     var delayNanoseconds: UInt64 = 0
     var onTranscribe: (@Sendable (URL) -> Void)?
+    /// Checked on each call, so one service can succeed first and fail later; nil means `error` always applies.
+    var failsNow: (@Sendable () -> Bool)?
 
     func transcribe(
         audioFileURL: URL,
@@ -102,7 +104,7 @@ struct MockMeetingTranscriptionService: MeetingTranscriptionProviding {
         if delayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: delayNanoseconds)
         }
-        if let error { throw error }
+        if let error, failsNow?() ?? true { throw error }
         return MeetingTranscript(
             sessionID: sessionID,
             localeIdentifier: locale?.identifier ?? "en-US",
@@ -115,6 +117,10 @@ struct MockMeetingTranscriptionService: MeetingTranscriptionProviding {
 
 struct MockMeetingPermissionChecker: MeetingPermissionChecking {
     var state: MeetingPermissionState
+    /// What a request returns (the user answered the prompts); `state` when nil.
+    var stateAfterRequest: MeetingPermissionState?
+    /// Called with (captureMicrophone, captureSystemAudio, transcribe) on each request.
+    var onRequest: (@Sendable (Bool, Bool, Bool) -> Void)?
 
     func currentPermissions() -> MeetingPermissionState {
         state
@@ -125,7 +131,8 @@ struct MockMeetingPermissionChecker: MeetingPermissionChecking {
         captureSystemAudio: Bool,
         transcribe: Bool
     ) async -> MeetingPermissionState {
-        state
+        onRequest?(captureMicrophone, captureSystemAudio, transcribe)
+        return stateAfterRequest ?? state
     }
 }
 
@@ -309,7 +316,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
         microphone: MeetingPermissionState.Status = .authorized,
         speechRecognition: MeetingPermissionState.Status = .authorized,
         nowProvider: @escaping () -> Date = { Date() },
-        freeBytes: Int64? = .max
+        freeBytes: Int64? = .max,
+        permissionChecker: MockMeetingPermissionChecker? = nil
     ) -> MeetingRecorderService {
         let settings = MeetingSettingsStore(userDefaults: defaults)
         settings.setMeetingsRootDirectoryURL(tempDir)
@@ -317,7 +325,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
             settingsStore: settings,
             captureEngine: captureEngine,
             transcriptionService: transcription,
-            permissionChecker: MockMeetingPermissionChecker(
+            permissionChecker: permissionChecker ?? MockMeetingPermissionChecker(
                 state: MeetingPermissionState(microphone: microphone, screenAudio: .authorized, speechRecognition: speechRecognition)
             ),
             nowProvider: nowProvider,
@@ -566,6 +574,92 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertTrue(service.isRecording)
         guard case .recording = service.state else { return XCTFail("still recording") }
         await service.stopRecording()
+    }
+
+    func testTranscribeAgainAsksOnlyForSpeechWhenNotYetAsked() async throws {
+        final class RequestLog: @unchecked Sendable { var requests: [[Bool]] = [] }
+        let log = RequestLog()
+        var checker = MockMeetingPermissionChecker(
+            state: MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .notDetermined)
+        )
+        checker.stateAfterRequest = MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .authorized)
+        checker.onRequest = { log.requests.append([$0, $1, $2]) }
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), permissionChecker: checker)
+        service.settingsStore.setAutoTranscribeOnStop(false)
+        await service.startRecording()
+        await service.stopRecording()
+        XCTAssertEqual(log.requests, [[true, true, false]], "auto-transcribe off: the start does not ask for Speech")
+
+        await service.transcribeAgain()
+        XCTAssertEqual(log.requests.last, [false, false, true], "Transcribe Again asks for Speech only")
+        let again = try XCTUnwrap(service.lastCompletedResult)
+        XCTAssertNotNil(again.transcriptTextURL)
+        XCTAssertNil(again.transcriptSkipReason)
+
+        // Settings' "Check / Request Permissions" includes Speech even with auto-transcribe off
+        await service.requestPermissions(includeSpeech: true)
+        XCTAssertEqual(log.requests.last, [true, true, true])
+    }
+
+    func testFailedTranscribeAgainKeepsThePreviousTranscript() async throws {
+        final class Flag: @unchecked Sendable { var on = false }
+        let fail = Flag()
+        var transcription = MockMeetingTranscriptionService()
+        transcription.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "Recognizer crashed"])
+        transcription.failsNow = { fail.on }
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), transcription: transcription)
+        service.settingsStore.setMeetingsRootDirectoryURL(tempDir.appendingPathComponent("Meetings", isDirectory: true))
+        service.settingsStore.setTranscriptExportDirectoryURL(tempDir.appendingPathComponent("Export", isDirectory: true))
+        await service.startRecording()
+        await service.stopRecording()
+        let first = try XCTUnwrap(service.lastCompletedResult)
+        let txtURL = try XCTUnwrap(first.transcriptTextURL)
+        let transcriptBefore = try Data(contentsOf: txtURL)
+        let metadataBefore = try Data(contentsOf: first.metadataFileURL)
+        XCTAssertNotNil(try decodeMetadata(first.metadataFileURL).transcriptExportPath)
+
+        fail.on = true
+        await service.transcribeAgain()
+
+        let again = try XCTUnwrap(service.lastCompletedResult)
+        XCTAssertEqual(again.warning, "Transcribe Again failed — previous transcript kept: Recognizer crashed")
+        XCTAssertEqual(again.transcriptTextURL, txtURL)
+        XCTAssertEqual(try Data(contentsOf: txtURL), transcriptBefore)
+        XCTAssertEqual(try Data(contentsOf: first.metadataFileURL), metadataBefore, "status, locale and export path stay")
+        XCTAssertFalse(service.isTranscribing)
+    }
+
+    func testReexportReplacesItsOwnCopyButNeverAnotherFile() async throws {
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        service.settingsStore.setMeetingsRootDirectoryURL(tempDir.appendingPathComponent("Meetings", isDirectory: true))
+        let exportDir = tempDir.appendingPathComponent("Export", isDirectory: true)
+        service.settingsStore.setTranscriptExportDirectoryURL(exportDir)
+        await service.startRecording()
+        await service.stopRecording()
+        let first = try XCTUnwrap(service.lastCompletedResult)
+        let txtURL = try XCTUnwrap(first.transcriptTextURL)
+        let exported = URL(fileURLWithPath: try XCTUnwrap(decodeMetadata(first.metadataFileURL).transcriptExportPath))
+        let name = exported.lastPathComponent
+
+        // Same folder, previous export still there: overwritten in place, no "(2)" copy
+        try "old run".write(to: exported, atomically: true, encoding: .utf8)
+        await service.transcribeAgain()
+        XCTAssertNil(service.lastCompletedResult?.warning)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: exportDir.path), [name])
+        XCTAssertEqual(try Data(contentsOf: exported), try Data(contentsOf: txtURL))
+        XCTAssertEqual(try decodeMetadata(first.metadataFileURL).transcriptExportPath, exported.path)
+
+        // Export folder changed and holds an unrelated file of the same name: suffix, nothing overwritten
+        let newDir = tempDir.appendingPathComponent("Other Export", isDirectory: true)
+        try FileManager.default.createDirectory(at: newDir, withIntermediateDirectories: true)
+        try "keep me".write(to: newDir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        service.settingsStore.setTranscriptExportDirectoryURL(newDir)
+        await service.transcribeAgain()
+        XCTAssertEqual(try String(contentsOf: newDir.appendingPathComponent(name), encoding: .utf8), "keep me")
+        let copy = try XCTUnwrap(decodeMetadata(first.metadataFileURL).transcriptExportPath)
+        XCTAssertEqual(URL(fileURLWithPath: copy).deletingLastPathComponent().standardizedFileURL.path, newDir.standardizedFileURL.path)
+        XCTAssertTrue(copy.hasSuffix("transcript (2).txt"))
+        XCTAssertEqual(try Data(contentsOf: exported), try Data(contentsOf: txtURL), "the old folder's copy is left alone")
     }
 
     // MARK: - Transcription language setting
