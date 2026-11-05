@@ -512,8 +512,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(SpeechFrameworkTranscriptionService.recognitionTimeout(forAudioDuration: 600), 1_260)
     }
 
-    func testVoiceProcessingFourChannelInputConvertsToAudibleStereo() throws {
-        // Voice-processed input reports 4 discrete channels; the default converter map would emit silence
+    func testFourChannelInputConvertsToAudibleStereo() throws {
+        // Multi-channel mics report e.g. 4 discrete channels; the default converter map would emit silence
         var layout = AudioChannelLayout()
         layout.mChannelLayoutTag = kAudioChannelLayoutTag_DiscreteInOrder | 4
         let source = AVAudioFormat(standardFormatWithSampleRate: 48_000, channelLayout: AVAudioChannelLayout(layout: &layout))

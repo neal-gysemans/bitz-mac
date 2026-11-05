@@ -205,7 +205,7 @@ public final class MeetingAudioStreamMixer: @unchecked Sendable {
         if let cached = converters[key] {
             converter = cached
         } else if let created = AVAudioConverter(from: buffer.format, to: targetFormat) {
-            // Voice-processed mic input is 4 discrete channels; the default map is [-1, -1] (silence). Ch 0 is the processed voice.
+            // Multi-channel inputs (USB/aggregate mics) default to [-1, -1] (silence); take channel 0
             if buffer.format.channelCount > 2 {
                 created.channelMap = [0, 0]
             }
@@ -366,8 +366,6 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
     private var mixer: MeetingAudioStreamMixer?
     private var isCapturingMic: Bool = false
     private var configurationObserver: NSObjectProtocol?
-    /// Set once voice processing fails in this session, so device-change restarts never loop enable → fail → disable.
-    private var voiceProcessingFailed = false
     private var interruptionHandler: (@Sendable (String) -> Void)?
     private let sampleQueue = DispatchQueue(label: "com.bitz.meetingrecorder.audio", qos: .userInitiated)
     /// Serializes device-change restarts with teardown, so a restart can never revive a stopped engine.
@@ -397,7 +395,6 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
         lock.withLock {
             self.mixer = streamMixer
             self.isCapturingMic = captureMicrophone
-            self.voiceProcessingFailed = false
         }
 
         do {
@@ -484,39 +481,9 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
         activeMixer?.close()
     }
 
+    /// Plain tap at the input's native format. No voice processing: its other-audio ducking cut captured system audio by ~40 dB.
     private func startMicrophone(on engine: AVAudioEngine) throws {
         let inputNode = engine.inputNode
-        // Echo cancellation so speaker output is not re-recorded by the mic; also re-applied on device-change restarts
-        if !lock.withLock({ voiceProcessingFailed }) {
-            do {
-                try inputNode.setVoiceProcessingEnabled(true)
-                // `.min` is the lowest ducking level, not none: other audio is still lowered slightly while recording
-                inputNode.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
-                    enableAdvancedDucking: false,
-                    duckingLevel: .min
-                )
-            } catch {
-                lock.withLock { voiceProcessingFailed = true }
-                NSLog("Bitz meeting recorder: voice processing unavailable, recording without it: \(error.localizedDescription)")
-            }
-        }
-
-        do {
-            try installTapAndStart(engine)
-        } catch where inputNode.isVoiceProcessingEnabled {
-            // Voice processing enabled but the engine would not start with it: retry once without it
-            NSLog("Bitz meeting recorder: start failed with voice processing, retrying without it: \(error.localizedDescription)")
-            lock.withLock { voiceProcessingFailed = true }
-            inputNode.removeTap(onBus: 0)
-            engine.stop()
-            try inputNode.setVoiceProcessingEnabled(false)
-            try installTapAndStart(engine)
-        }
-    }
-
-    private func installTapAndStart(_ engine: AVAudioEngine) throws {
-        let inputNode = engine.inputNode
-        // Read after toggling voice processing, which changes the input sample rate and channel count
         let inputFormat = inputNode.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0 && inputFormat.channelCount > 0 else {
             throw MeetingRecorderError.captureStartFailed("No valid microphone input format available.")
