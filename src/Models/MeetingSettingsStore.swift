@@ -16,7 +16,7 @@ public final class MeetingSettingsStore: ObservableObject {
     public static let recordingHotkeyKey = keyPrefix + "recordingHotkey"
     public static let consentAcknowledgedKey = keyPrefix + "consentAcknowledged"
     public static let retentionDaysKey = keyPrefix + "retentionDays"
-    /// "Delete recordings after" choices in days; nil (Off) is the default.
+    /// "Delete older recordings" choices in days; nil (Off) is the default.
     public static let retentionDayOptions = [30, 90]
 
     /// Keys written by earlier builds of this branch, mapped to their `bitz.meeting.` replacements.

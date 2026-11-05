@@ -546,7 +546,7 @@ public final class MeetingRecorderService: ObservableObject {
         recoveryMixTask = nil
     }
 
-    /// Retention (D7): deletes finished sessions older than the "Delete recordings after" setting. Skipped while recording,
+    /// Retention (D7): deletes finished sessions older than the "Delete older recordings" setting. Skipped while recording,
     /// transcribing or recovering; it runs again after the next recording and at launch. Each run first finishes deletes
     /// an earlier run left behind (`.deleting-*`), even with the setting Off, since those sessions were already removed.
     public func applyRetention() async {

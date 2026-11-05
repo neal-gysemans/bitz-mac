@@ -202,9 +202,9 @@ public struct SpeechBubbleView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(maxWidth: Self.maxBubbleWidth)
-        .background(RoundedRectangle(cornerRadius: 8).fill(colors.fill))
+        // Shadow on the filled shape before the stroke overlay (AGENTS.md §2.6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(colors.fill).shadow(color: colors.stroke.opacity(0.6), radius: 6))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(colors.stroke, lineWidth: 1.5))
-        .shadow(color: colors.stroke.opacity(0.6), radius: 6)
     }
 
     private func updateBubbleView(for release: GitHubReleaseInfo) -> some View {
@@ -245,9 +245,9 @@ public struct SpeechBubbleView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(maxWidth: Self.maxBubbleWidth)
-        .background(RoundedRectangle(cornerRadius: 8).fill(bgColor))
+        // Shadow on the filled shape before the stroke overlay (AGENTS.md §2.6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(bgColor).shadow(color: accentColor.opacity(0.6), radius: 6))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(accentColor, lineWidth: 1.5))
-        .shadow(color: accentColor.opacity(0.6), radius: 6)
     }
 
     /// (stroke, fill) per meeting bubble kind.

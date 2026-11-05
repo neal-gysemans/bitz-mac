@@ -173,9 +173,16 @@ final class QuickActionHUDTests: XCTestCase {
             .write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
 
-        let result = await SystemDiffViewer(gitPath: script.path).getDiff(workingDirectory: dir.path)
-
-        XCTAssertEqual(try result.get().count, 300_000)
+        // A regression deadlocks forever: fail on timeout instead of hanging the suite (the stuck task leaks)
+        let viewer = SystemDiffViewer(gitPath: script.path)
+        let path = dir.path
+        let finished = expectation(description: "getDiff returns")
+        Task.detached {
+            let result = await viewer.getDiff(workingDirectory: path)
+            XCTAssertEqual(try? result.get().count, 300_000)
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 10)
     }
 
     // MARK: - SpeechBubblePanel Interactivity & Focus Invariants (FR-008, NFR-003)
