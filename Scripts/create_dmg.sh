@@ -73,7 +73,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
 </dict>
 </plist>
 EOF
-codesign --force --deep --sign - "$APP_BUNDLE"
+# Hardened runtime (no --deep: the bundle has no nested code); entitlements grant mic and Apple Events access
+codesign --force --options runtime --entitlements "$ROOT_DIR/Scripts/Bitz.entitlements" --sign - "$APP_BUNDLE"
+codesign --verify --strict "$APP_BUNDLE"
 
 echo "==> Staging disk image layout..."
 rm -rf "$DMG_STAGING" "$DMG_PATH"

@@ -40,7 +40,7 @@ This file is the **single source of truth** for all AI coding agents (Antigravit
 ### Key Docs & Packaging Scripts
 - `docs/ARCHITECTURE.md` (system design & NFR budgets), `docs/STATE_MACHINE.md` (PTS math & edge cases), `docs/ACCEPTANCE_CRITERIA.md` (FR/NFR specs).
 - `docs/DISTRIBUTION.md` — Private repo distribution architecture (`AkramKs/bitz-mac` private source, `AkramKs/bitz-releases` public release sink, `AkramKs/homebrew-tap` Cask sync).
-- `Scripts/package_and_run.sh [debug|release]` (builds, signs ad-hoc `build/Bitz.app`, kills old instance, launches with SDK fallback), `Scripts/create_dmg.sh` (release DMG builder).
+- `Scripts/package_and_run.sh [debug|release]` (builds, signs ad-hoc `build/Bitz.app` with hardened runtime + `Scripts/Bitz.entitlements` and verifies the signature, kills old instance, launches with SDK fallback), `Scripts/create_dmg.sh` (release DMG builder, same signing).
 
 ---
 

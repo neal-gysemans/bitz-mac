@@ -124,7 +124,7 @@ bitz-mac/
 ├── Resources/
 │   └── AppIcon.icns                           # High-resolution macOS application icon bundle
 ├── Scripts/
-│   └── package_and_run.sh                     # Builds, bundles, ad-hoc signs, and launches build/Bitz.app
+│   └── package_and_run.sh                     # Builds, bundles, ad-hoc signs (hardened runtime), and launches build/Bitz.app
 ├── src/
 │   ├── App/
 │   │   ├── BitzApp.swift                      # NSApplicationDelegate, MenuBarExtra UI, stores & position sync
@@ -212,7 +212,7 @@ A warning stays until **GOT IT**, menu bar **Dismiss Agent Warning**, or the sam
 - **Xcode 15.4+** / Xcode Command Line Tools (`/usr/bin/swift`)
 
 ### 1. Build, Package & Launch `Bitz.app`
-Run the included packaging script to compile the executable, bundle `build/Bitz.app` with its `LSUIElement` `Info.plist`, ad-hoc sign it, and launch it (with automatic CommandLineTools SDK fallback):
+Run the included packaging script to compile the executable, bundle `build/Bitz.app` with its `LSUIElement` `Info.plist`, ad-hoc sign it with hardened runtime and `Scripts/Bitz.entitlements`, and launch it (with automatic CommandLineTools SDK fallback):
 
 ```bash
 ./Scripts/package_and_run.sh release
