@@ -831,31 +831,48 @@ public struct SpeechBubbleHostView: View {
     }
 }
 
+/// Leaf subview isolating the 1–10s polling `TelemetryDashboardService` observer from the root menu bar view (#94 D1 / AGENTS.md §2.5).
+@MainActor
+struct MenuBarTelemetrySectionView: View {
+    @ObservedObject var telemetryDashboard: TelemetryDashboardService
+    @ObservedObject var telemetrySettings: TelemetrySettingsStore
+
+    var body: some View {
+        if telemetrySettings.displayInMenuBarMenu {
+            let stats = telemetryDashboard.snapshot.menuBarItems(enabledMetrics: telemetrySettings.enabledMetrics)
+            if !stats.isEmpty {
+                Text(stats.joined(separator: " | "))
+            }
+        }
+
+        if telemetryDashboard.snapshot.hasActiveWarning, let warning = telemetryDashboard.snapshot.activeWarningSummary {
+            Divider()
+            Text(warning)
+        }
+    }
+}
+
 /// Observable Menu Bar content view displaying live hardware sensor telemetry,
-/// wellness score, manual avatar resizing & opacity controls, and interactive state controls.
+/// wellness score, quick actions, and links to Settings for detailed controls.
 @MainActor
 struct BitzMenuBarContentView: View {
     @ObservedObject var engine: WellnessPointEngine
     @ObservedObject var activityMonitor: ActivityMonitorService
-    @ObservedObject var scaleStore: AvatarScaleStore
-    @ObservedObject var opacityStore: AvatarOpacityStore
     @ObservedObject var positionStore: AvatarPositionStore
     @ObservedObject var agentMonitor: AgentMonitorService
     @ObservedObject var updateStore: AppUpdateStore
-    @ObservedObject var telemetryDashboard: TelemetryDashboardService
-    @ObservedObject var telemetrySettings: TelemetrySettingsStore
+    let telemetryDashboard: TelemetryDashboardService
+    let telemetrySettings: TelemetrySettingsStore
     @ObservedObject var audioSettings: CyberAudioSettingsStore
     @ObservedObject var paletteStore: AvatarPaletteStore
     var audioService: CyberAudioService? = nil
     @ObservedObject var flowShieldSettings: FlowShieldSettingsStore
-    @ObservedObject var flowShieldService: FlowShieldService
+    let flowShieldService: FlowShieldService
     var onOpenSettings: () -> Void
 
     public init(
         engine: WellnessPointEngine,
         activityMonitor: ActivityMonitorService,
-        scaleStore: AvatarScaleStore,
-        opacityStore: AvatarOpacityStore,
         positionStore: AvatarPositionStore,
         agentMonitor: AgentMonitorService,
         updateStore: AppUpdateStore,
@@ -872,8 +889,6 @@ struct BitzMenuBarContentView: View {
         self.onOpenSettings = onOpenSettings
         self.engine = engine
         self.activityMonitor = activityMonitor
-        self.scaleStore = scaleStore
-        self.opacityStore = opacityStore
         self.positionStore = positionStore
         self.agentMonitor = agentMonitor
         self.updateStore = updateStore
@@ -888,23 +903,22 @@ struct BitzMenuBarContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // MARK: - 1. Status Header & Quick Actions
-            headerSection
+            // MARK: - 1. Status Header & Telemetry / Warnings
+            Text(String(
+                format: "Bitz — %@ · %.0f PTS · %.0f min streak",
+                engine.currentState.displayName,
+                engine.currentPoints,
+                engine.continuousWorkMinutes
+            ))
 
-            // Active Warnings Summary
-            if telemetryDashboard.snapshot.hasActiveWarning, let warning = telemetryDashboard.snapshot.activeWarningSummary {
-                Divider()
-                Text(warning)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
+            MenuBarTelemetrySectionView(
+                telemetryDashboard: telemetryDashboard,
+                telemetrySettings: telemetrySettings
+            )
 
             if let agentWarning = agentMonitor.activeWarning {
                 Divider()
                 Text(agentWarning.text)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .lineLimit(3)
                 Button("Dismiss Agent Warning") {
                     agentMonitor.acknowledgeWarning()
                 }
@@ -914,38 +928,32 @@ struct BitzMenuBarContentView: View {
             if let agentPopup = agentMonitor.activePopup, agentPopup.kind != .warning {
                 Divider()
                 Text(agentPopup.text)
-                    .font(.caption)
-                    .foregroundStyle(.blue)
+            }
+
+            if activityMonitor.isManualOverrideActive {
+                Divider()
+                Button("Resume Live Sensors") {
+                    activityMonitor.clearManualOverride()
+                }
             }
 
             Divider()
 
-            // MARK: - 1b. Theme Preset Submenu
-            Menu {
-                ForEach(AvatarThemePreset.allCases) { preset in
-                    Toggle(preset.title, isOn: Binding(
-                        get: { paletteStore.selectedPreset == preset },
-                        set: { if $0 { paletteStore.selectPreset(preset) } }
-                    ))
-                }
-            } label: {
-                Label("Theme Preset", systemImage: "paintpalette.fill")
+            // MARK: - 2. Primary Quick Actions
+            Button("Pet Bitz") {
+                engine.triggerPetInteraction()
             }
+            .keyboardShortcut("p", modifiers: [.command])
 
-            // MARK: - 2. Flow Shield Quick Controls
-            if flowShieldService.isFlowShieldActive {
-                Button("🛡 Break Shield (Disable Focus)") {
-                    flowShieldService.activateBreakShieldOverride()
+            Toggle("Show Mascot", isOn: $positionStore.isMascotVisible)
+
+            if positionStore.isPositionUnlocked {
+                Button("Lock Position") {
+                    positionStore.lockPosition()
                 }
             }
 
-            Menu {
-                Text("Status: \(flowShieldService.currentStatus.displayTitle)")
-                Toggle("Enable Auto Flow Shield", isOn: Binding(
-                    get: { flowShieldSettings.isEnabled },
-                    set: { flowShieldSettings.setEnabled($0) }
-                ))
-                Divider()
+            if flowShieldSettings.isEnabled {
                 Button(
                     flowShieldSettings.isBreakShieldOverrideActive
                         ? "Resume Auto Flow Shield"
@@ -953,114 +961,28 @@ struct BitzMenuBarContentView: View {
                 ) {
                     flowShieldService.toggleBreakShieldOverride()
                 }
-                .disabled(!flowShieldSettings.isEnabled)
-                Divider()
-                Text("Streak Threshold: \(flowShieldSettings.formattedStreakSummary)")
-                Button("Streak: 15 min") { flowShieldSettings.setStreakMinutesThreshold(15.0) }
-                    .disabled(!flowShieldSettings.isEnabled)
-                Button("Streak: 20 min") { flowShieldSettings.setStreakMinutesThreshold(20.0) }
-                    .disabled(!flowShieldSettings.isEnabled)
-                Button("Streak: 30 min") { flowShieldSettings.setStreakMinutesThreshold(30.0) }
-                    .disabled(!flowShieldSettings.isEnabled)
-                Button("Streak: 45 min") { flowShieldSettings.setStreakMinutesThreshold(45.0) }
-                    .disabled(!flowShieldSettings.isEnabled)
-            } label: {
-                Label("Flow Shield", systemImage: flowShieldService.currentStatus.systemImage)
             }
-            Menu {
-                Toggle("Enable Cyber Audio", isOn: Binding(
-                    get: { audioSettings.isEnabled },
-                    set: { audioSettings.setEnabled($0) }
-                ))
-                if let audioService {
-                    AudioSuppressionNotice(audioService: audioService)
+
+            Toggle("Sound", isOn: Binding(
+                get: { audioSettings.isEnabled },
+                set: { audioSettings.setEnabled($0) }
+            ))
+            if let audioService {
+                AudioSuppressionNotice(audioService: audioService)
+            }
+
+            Menu("Theme") {
+                ForEach(AvatarThemePreset.allCases) { preset in
+                    Toggle(preset.title, isOn: Binding(
+                        get: { paletteStore.selectedPreset == preset },
+                        set: { if $0 { paletteStore.selectPreset(preset) } }
+                    ))
                 }
-                Divider()
-                Toggle("Soothing Purr (Petting & High Wellness)", isOn: Binding(
-                    get: { audioSettings.isPurrEnabled },
-                    set: { audioSettings.setPurrEnabled($0) }
-                ))
-                .disabled(!audioSettings.isEnabled)
-                Toggle("Burnout Power-Down", isOn: Binding(
-                    get: { audioSettings.isBurnoutEnabled },
-                    set: { audioSettings.setBurnoutEnabled($0) }
-                ))
-                .disabled(!audioSettings.isEnabled)
-                Toggle("Overheating Thermal Alarm", isOn: Binding(
-                    get: { audioSettings.isOverheatEnabled },
-                    set: { audioSettings.setOverheatEnabled($0) }
-                ))
-                .disabled(!audioSettings.isEnabled)
-                Toggle("Agent Needs Approval Chime", isOn: Binding(
-                    get: { audioSettings.isAgentChimeEnabled },
-                    set: { audioSettings.setAgentChimeEnabled($0) }
-                ))
-                .disabled(!audioSettings.isEnabled)
-                Toggle("All Agents Done Fanfare", isOn: Binding(
-                    get: { audioSettings.isAllDoneFanfareEnabled },
-                    set: { audioSettings.setAllDoneFanfareEnabled($0) }
-                ))
-                .disabled(!audioSettings.isEnabled)
-                Toggle("Charging Blip", isOn: Binding(
-                    get: { audioSettings.isChargingEnabled },
-                    set: { audioSettings.setChargingEnabled($0) }
-                ))
-                .disabled(!audioSettings.isEnabled)
-                Divider()
-                Text("Volume: \(audioSettings.formattedVolumeSummary)")
-                Button("Volume: 25%") { audioSettings.setVolume(0.25) }
-                    .disabled(!audioSettings.isEnabled)
-                Button("Volume: 50%") { audioSettings.setVolume(0.50) }
-                    .disabled(!audioSettings.isEnabled)
-                Button("Volume: 75%") { audioSettings.setVolume(0.75) }
-                    .disabled(!audioSettings.isEnabled)
-                Button("Volume: 100%") { audioSettings.setVolume(1.00) }
-                    .disabled(!audioSettings.isEnabled)
-                Divider()
-                Button("Test Chime") {
-                    audioService?.play(.agentNeedsApproval, bypassCooldown: true)
-                }
-                .disabled(!audioSettings.isEnabled)
-            } label: {
-                Label("Sound", systemImage: audioSettings.isEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
             }
 
             Divider()
 
-            // MARK: - 3. Appearance Quick Adjustments
-            Menu {
-                Button("Scale Mascot Larger (⌘=)") {
-                    scaleStore.stepUp()
-                }
-                .keyboardShortcut("=", modifiers: [.command])
-                .disabled(!scaleStore.canStepUp)
-
-                Button("Scale Mascot Smaller (⌘-)") {
-                    scaleStore.stepDown()
-                }
-                .keyboardShortcut("-", modifiers: [.command])
-                .disabled(!scaleStore.canStepDown)
-
-                Divider()
-
-                Button("Increase Opacity (⌘])") {
-                    opacityStore.stepUp()
-                }
-                .keyboardShortcut("]", modifiers: [.command])
-                .disabled(!opacityStore.canStepUp)
-
-                Button("Decrease Opacity (⌘[)") {
-                    opacityStore.stepDown()
-                }
-                .keyboardShortcut("[", modifiers: [.command])
-                .disabled(!opacityStore.canStepDown)
-            } label: {
-                Label("Size & Opacity", systemImage: "arrow.up.left.and.arrow.down.right")
-            }
-
-            Divider()
-
-            // MARK: - 4. Dedicated Settings Entrance
+            // MARK: - 3. Settings, Updates & Quit
             Button("Settings...") {
                 onOpenSettings()
             }
@@ -1077,6 +999,13 @@ struct BitzMenuBarContentView: View {
             }
             Text(updateStore.statusMessage)
 
+            if updateStore.isUpdateAvailable, let release = updateStore.latestRelease {
+                Button("Download v\(release.semanticVersion.description)...") {
+                    updateStore.openDownloadPage()
+                }
+                .keyboardShortcut("u", modifiers: [.command])
+            }
+
             Divider()
 
             Button("Quit Bitz") {
@@ -1084,67 +1013,7 @@ struct BitzMenuBarContentView: View {
             }
             .keyboardShortcut("q", modifiers: [.command])
         }
-        .padding(8)
     }
-
-    // MARK: - Header & Primary Actions
-
-    @ViewBuilder
-    private var headerSection: some View {
-        Text("Bitz the Cyber Cat")
-            .font(.headline)
-        Text("State: \(engine.currentState.displayName) (\(String(format: "%.0f", engine.currentPoints)) PTS)")
-        Text(String(format: "Streak: %.0f min • Focus: %.1f / 100", engine.continuousWorkMinutes, engine.currentPoints))
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        if telemetrySettings.displayInMenuBarMenu {
-            let stats = telemetryDashboard.snapshot.menuBarItems(enabledMetrics: telemetrySettings.enabledMetrics)
-            if !stats.isEmpty {
-                Text(stats.joined(separator: " | "))
-            }
-        }
-
-        if activityMonitor.isManualOverrideActive {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .font(.caption)
-                Text("Simulation Override Active")
-                    .font(.caption.bold())
-                    .foregroundStyle(.orange)
-                Spacer()
-                Button("Resume") {
-                    activityMonitor.clearManualOverride()
-                }
-                .controlSize(.small)
-            }
-        }
-
-        Button("Pet Bitz (<3)") {
-            engine.triggerPetInteraction()
-        }
-        .accessibilityLabel("Pet Bitz")
-        .keyboardShortcut("p", modifiers: [.command])
-
-        Toggle(positionStore.isMascotVisible ? "Mascot Visible on Screen" : "Mascot Hidden (Click to Show)", isOn: $positionStore.isMascotVisible)
-
-        if positionStore.isPositionUnlocked {
-            Button("✓ Lock Position [⎋ Esc / Right-Click]") {
-                positionStore.lockPosition()
-            }
-            .accessibilityLabel("Lock Position")
-            .keyboardShortcut(.escape, modifiers: [])
-        }
-
-        if updateStore.isUpdateAvailable, let release = updateStore.latestRelease {
-            Button("🚀 Download v\(release.semanticVersion.description)...") {
-                updateStore.openDownloadPage()
-            }
-            .accessibilityLabel("Download Update")
-            .keyboardShortcut("u", modifiers: [.command])
-        }
-    }
-
 }
 
 /// SwiftUI `App` definition providing a lightweight Menu Bar status item for inspecting
@@ -1160,8 +1029,6 @@ public struct BitzApp: App {
             BitzMenuBarContentView(
                 engine: appDelegate.engine,
                 activityMonitor: appDelegate.activityMonitor,
-                scaleStore: appDelegate.scaleStore,
-                opacityStore: appDelegate.opacityStore,
                 positionStore: appDelegate.positionStore,
                 agentMonitor: appDelegate.agentMonitor,
                 updateStore: appDelegate.updateStore,

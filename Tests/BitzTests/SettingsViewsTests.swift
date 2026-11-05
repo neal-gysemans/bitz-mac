@@ -200,8 +200,6 @@ final class SettingsViewsTests: XCTestCase {
         XCTAssertTrue(activityMonitor.isManualOverrideActive)
         _ = behaviorTab.body
 
-        let scaleStore = AvatarScaleStore(userDefaults: defaults)
-        let opacityStore = AvatarOpacityStore(userDefaults: defaults)
         let positionStore = AvatarPositionStore(userDefaults: defaults)
         let displayStore = DisplayPreferenceStore(userDefaults: defaults)
         let agentMonitor = AgentMonitorService(adapters: [], userDefaults: defaults)
@@ -212,8 +210,6 @@ final class SettingsViewsTests: XCTestCase {
         let menuView = BitzMenuBarContentView(
             engine: engine,
             activityMonitor: activityMonitor,
-            scaleStore: scaleStore,
-            opacityStore: opacityStore,
             positionStore: positionStore,
             agentMonitor: agentMonitor,
             updateStore: updateStore,

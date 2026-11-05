@@ -90,8 +90,6 @@ final class FlowShieldViewsTests: XCTestCase {
         let menuBarView = BitzMenuBarContentView(
             engine: delegate.engine,
             activityMonitor: delegate.activityMonitor,
-            scaleStore: delegate.scaleStore,
-            opacityStore: delegate.opacityStore,
             positionStore: delegate.positionStore,
             agentMonitor: delegate.agentMonitor,
             updateStore: delegate.updateStore,

@@ -106,8 +106,6 @@ final class AudioSettingsViewsTests: XCTestCase {
         let engine = WellnessPointEngine(riveController: riveController, userDefaults: defaults)
         let telemetry = MockTelemetryProvider()
         let activityMonitor = ActivityMonitorService(engine: engine, telemetry: telemetry)
-        let scaleStore = AvatarScaleStore(userDefaults: defaults)
-        let opacityStore = AvatarOpacityStore(userDefaults: defaults)
         let positionStore = AvatarPositionStore(userDefaults: defaults)
         let displayStore = DisplayPreferenceStore(userDefaults: defaults)
         let agentMonitor = AgentMonitorService(adapters: [])
@@ -119,8 +117,6 @@ final class AudioSettingsViewsTests: XCTestCase {
         let menuView = BitzMenuBarContentView(
             engine: engine,
             activityMonitor: activityMonitor,
-            scaleStore: scaleStore,
-            opacityStore: opacityStore,
             positionStore: positionStore,
             agentMonitor: agentMonitor,
             updateStore: updateStore,

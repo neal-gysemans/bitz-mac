@@ -13,8 +13,6 @@ final class MenuBarContentViewTests: XCTestCase {
         let engine = WellnessPointEngine(riveController: riveController, userDefaults: defaults)
         let telemetry = MockTelemetryProvider()
         let activityMonitor = ActivityMonitorService(engine: engine, telemetry: telemetry)
-        let scaleStore = AvatarScaleStore(userDefaults: defaults)
-        let opacityStore = AvatarOpacityStore(userDefaults: defaults)
         let positionStore = AvatarPositionStore(userDefaults: defaults)
         let displayStore = DisplayPreferenceStore(userDefaults: defaults)
         let agentMonitor = AgentMonitorService(adapters: [])
@@ -25,8 +23,6 @@ final class MenuBarContentViewTests: XCTestCase {
         let menuView = BitzMenuBarContentView(
             engine: engine,
             activityMonitor: activityMonitor,
-            scaleStore: scaleStore,
-            opacityStore: opacityStore,
             positionStore: positionStore,
             agentMonitor: agentMonitor,
             updateStore: updateStore,
@@ -36,8 +32,6 @@ final class MenuBarContentViewTests: XCTestCase {
 
         // Verify view body can be evaluated without crashing
         _ = menuView.body
-        XCTAssertEqual(scaleStore.scaleFactor, 1.0)
-        XCTAssertEqual(opacityStore.opacityFactor, 0.85, accuracy: 0.001)
         XCTAssertFalse(positionStore.isPositionUnlocked)
     }
 
@@ -50,8 +44,6 @@ final class MenuBarContentViewTests: XCTestCase {
         let engine = WellnessPointEngine(riveController: riveController, userDefaults: defaults)
         let telemetry = MockTelemetryProvider()
         let activityMonitor = ActivityMonitorService(engine: engine, telemetry: telemetry)
-        let scaleStore = AvatarScaleStore(userDefaults: defaults)
-        let opacityStore = AvatarOpacityStore(userDefaults: defaults)
         let positionStore = AvatarPositionStore(userDefaults: defaults)
         let displayStore = DisplayPreferenceStore(userDefaults: defaults)
         let agentMonitor = AgentMonitorService(adapters: [])
@@ -65,8 +57,6 @@ final class MenuBarContentViewTests: XCTestCase {
         let menuView = BitzMenuBarContentView(
             engine: engine,
             activityMonitor: activityMonitor,
-            scaleStore: scaleStore,
-            opacityStore: opacityStore,
             positionStore: positionStore,
             agentMonitor: agentMonitor,
             updateStore: updateStore,
@@ -100,8 +90,6 @@ final class MenuBarContentViewTests: XCTestCase {
         let menuView = BitzMenuBarContentView(
             engine: engine,
             activityMonitor: activityMonitor,
-            scaleStore: scaleStore,
-            opacityStore: opacityStore,
             positionStore: positionStore,
             agentMonitor: agentMonitor,
             updateStore: updateStore,
@@ -143,8 +131,6 @@ final class MenuBarContentViewTests: XCTestCase {
         let menuView = BitzMenuBarContentView(
             engine: engine,
             activityMonitor: ActivityMonitorService(engine: engine, telemetry: MockTelemetryProvider()),
-            scaleStore: AvatarScaleStore(userDefaults: defaults),
-            opacityStore: AvatarOpacityStore(userDefaults: defaults),
             positionStore: AvatarPositionStore(userDefaults: defaults),
             agentMonitor: agentMonitor,
             updateStore: AppUpdateStore(userDefaults: defaults),
@@ -179,8 +165,6 @@ final class MenuBarContentViewTests: XCTestCase {
                 engine: WellnessPointEngine(riveController: ProductionRiveController(), userDefaults: defaults),
                 telemetry: MockTelemetryProvider()
             ),
-            scaleStore: AvatarScaleStore(userDefaults: defaults),
-            opacityStore: AvatarOpacityStore(userDefaults: defaults),
             positionStore: AvatarPositionStore(userDefaults: defaults),
             agentMonitor: AgentMonitorService(adapters: []),
             updateStore: AppUpdateStore(userDefaults: defaults),
@@ -209,8 +193,6 @@ final class MenuBarContentViewTests: XCTestCase {
         let menuView = BitzMenuBarContentView(
             engine: engine,
             activityMonitor: ActivityMonitorService(engine: engine, telemetry: MockTelemetryProvider()),
-            scaleStore: AvatarScaleStore(userDefaults: defaults),
-            opacityStore: AvatarOpacityStore(userDefaults: defaults),
             positionStore: AvatarPositionStore(userDefaults: defaults),
             agentMonitor: AgentMonitorService(adapters: [], userDefaults: defaults),
             updateStore: updateStore,
@@ -220,10 +202,103 @@ final class MenuBarContentViewTests: XCTestCase {
         let stats = telemetryDashboard.snapshot.menuBarItems(enabledMetrics: [.ram]).joined(separator: " | ")
         XCTAssertFalse(stats.isEmpty)
 
+        let telemetrySection = MenuBarTelemetrySectionView(
+            telemetryDashboard: telemetryDashboard,
+            telemetrySettings: telemetrySettings
+        )
         XCTAssertTrue(String(describing: menuView.body).contains(updateStore.statusMessage))
-        XCTAssertTrue(String(describing: menuView.body).contains(stats))
+        XCTAssertTrue(String(describing: telemetrySection.body).contains(stats))
         telemetrySettings.displayInMenuBarMenu = false
-        XCTAssertFalse(String(describing: menuView.body).contains(stats))
+        XCTAssertFalse(String(describing: telemetrySection.body).contains(stats))
+    }
+
+    /// #94 D1 / AGENTS.md §2.5: root BitzMenuBarContentView must not observe polling TelemetryDashboardService directly.
+    func testMenuBarRootViewIsolatesTelemetryDashboardObserverToLeafSubview() {
+        let suiteName = "MenuBarLeafObserverTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let engine = WellnessPointEngine(riveController: ProductionRiveController(), userDefaults: defaults)
+        let telemetrySettings = TelemetrySettingsStore(userDefaults: defaults)
+        let telemetryDashboard = TelemetryDashboardService(settingsStore: telemetrySettings)
+        let menuView = BitzMenuBarContentView(
+            engine: engine,
+            activityMonitor: ActivityMonitorService(engine: engine, telemetry: MockTelemetryProvider()),
+            positionStore: AvatarPositionStore(userDefaults: defaults),
+            agentMonitor: AgentMonitorService(adapters: [], userDefaults: defaults),
+            updateStore: AppUpdateStore(userDefaults: defaults),
+            telemetryDashboard: telemetryDashboard,
+            telemetrySettings: telemetrySettings
+        )
+
+        let rootObservedTypes = Mirror(reflecting: menuView).children.map { String(describing: type(of: $0.value)) }
+        XCTAssertFalse(
+            rootObservedTypes.contains { $0.contains("ObservedObject<TelemetryDashboardService>") },
+            "Root BitzMenuBarContentView must not hold @ObservedObject on polling TelemetryDashboardService"
+        )
+    }
+
+    /// #94 WP2 (B1–B8): lean menu bar layout with single header line, fixed Show Mascot label,
+    /// plain Resume Live Sensors button, single Break Shield action, and no duplicated shortcut strings.
+    func testMenuBarWP2LeanLayoutAndCleanLabels() {
+        let suiteName = "MenuBarWP2Tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let engine = WellnessPointEngine(riveController: ProductionRiveController(), userDefaults: defaults)
+        engine.setPoints(72.0, continuousWorkMinutes: 25.0)
+        let activityMonitor = ActivityMonitorService(engine: engine, telemetry: MockTelemetryProvider())
+        let positionStore = AvatarPositionStore(userDefaults: defaults)
+        positionStore.unlockPosition()
+        let flowSettings = FlowShieldSettingsStore(userDefaults: defaults)
+        flowSettings.setEnabled(true)
+        let flowService = FlowShieldService(settingsStore: flowSettings, shortcutsRunner: SpyShortcutsRunner())
+        let audioSettings = CyberAudioSettingsStore(userDefaults: defaults)
+        let telemetrySettings = TelemetrySettingsStore(userDefaults: defaults)
+        let telemetryDashboard = TelemetryDashboardService(settingsStore: telemetrySettings)
+
+        let menuView = BitzMenuBarContentView(
+            engine: engine,
+            activityMonitor: activityMonitor,
+            positionStore: positionStore,
+            agentMonitor: AgentMonitorService(adapters: [], userDefaults: defaults),
+            updateStore: AppUpdateStore(userDefaults: defaults),
+            telemetryDashboard: telemetryDashboard,
+            telemetrySettings: telemetrySettings,
+            audioSettings: audioSettings,
+            flowShieldSettings: flowSettings,
+            flowShieldService: flowService
+        )
+
+        activityMonitor.startSimulation(points: 72.0, continuousWorkMinutes: 25.0)
+        let rendered = String(describing: menuView.body)
+
+        // B6: single header line with state, PTS, and streak (no duplicate "Focus: X / 100" line)
+        XCTAssertTrue(rendered.contains("Bitz — Balanced · 72 PTS · 25 min streak"))
+        XCTAssertFalse(rendered.contains("Focus:"))
+
+        // B1 & B2: no embedded shortcut text in titles
+        XCTAssertFalse(rendered.contains("(⌘=)"))
+        XCTAssertFalse(rendered.contains("(⌘[)"))
+        XCTAssertFalse(rendered.contains("[⎋ Esc"))
+        XCTAssertTrue(rendered.contains("Lock Position"))
+
+        // B3: fixed "Show Mascot" toggle label
+        XCTAssertTrue(rendered.contains("Show Mascot"))
+        XCTAssertFalse(rendered.contains("Mascot Visible on Screen"))
+        XCTAssertFalse(rendered.contains("Mascot Hidden"))
+
+        // B7: plain "Resume Live Sensors" button when override is active
+        XCTAssertTrue(rendered.contains("Resume Live Sensors"))
+
+        // B5 & B8: single Break Shield action when enabled, master Sound toggle, Theme submenu,
+        // and no duplicated per-sound / volume / size-opacity submenus in the dropdown
+        XCTAssertTrue(rendered.contains("Break Shield (Disable Focus)"))
+        XCTAssertTrue(rendered.contains("Sound"))
+        XCTAssertTrue(rendered.contains("Theme"))
+        XCTAssertFalse(rendered.contains("Size & Opacity"))
+        XCTAssertFalse(rendered.contains("Soothing Purr"))
+        XCTAssertFalse(rendered.contains("Volume: 25%"))
     }
 
     /// #94 A4: the status item label observes the delegate, so a title change must publish.
