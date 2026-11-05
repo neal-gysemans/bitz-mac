@@ -310,7 +310,7 @@ private struct MeetingRecordingTimerBubbleObserver<Content: View>: View {
     @ViewBuilder let content: (String) -> Content
 
     var body: some View {
-        let formatted = MeetingSettingsStore.formatDuration(timerStore.elapsedSeconds)
+        let formatted = MeetingFormatting.formatDuration(timerStore.elapsedSeconds)
         content("🔴 Recording meeting (\(formatted))...")
     }
 }
