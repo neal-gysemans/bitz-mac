@@ -1,21 +1,32 @@
 import SwiftUI
 
 /// Settings tab for configuring Cyber Audio features: master toggle, output volume,
-/// individual sound event toggles with preview triggers, and environment suppression rules.
+/// individual sound event toggles with preview triggers, environment suppression rules,
+/// and the Local Meeting Audio Recorder & On-Device Transcription pipeline (#43).
 public struct AudioSettingsTabView: View {
     @ObservedObject public var settingsStore: CyberAudioSettingsStore
     public var audioPlayer: (any CyberAudioPlaying)?
+    @ObservedObject public var meetingSettings: MeetingSettingsStore
+    @ObservedObject public var meetingRecorder: MeetingRecorderService
 
     public init(
         settingsStore: CyberAudioSettingsStore,
-        audioPlayer: (any CyberAudioPlaying)? = nil
+        audioPlayer: (any CyberAudioPlaying)? = nil,
+        meetingSettings: MeetingSettingsStore? = nil,
+        meetingRecorder: MeetingRecorderService? = nil
     ) {
         self.settingsStore = settingsStore
         self.audioPlayer = audioPlayer
+        let resolvedMeetingSettings = meetingSettings ?? meetingRecorder?.settingsStore ?? MeetingSettingsStore()
+        self.meetingSettings = resolvedMeetingSettings
+        self.meetingRecorder = meetingRecorder ?? MeetingRecorderService(settingsStore: resolvedMeetingSettings)
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            // Local Meeting Audio Recorder & On-Device Transcription (#43)
+            meetingAssistantCard
+
             // Master Toggle & Volume Card
             masterAudioCard
 
@@ -24,6 +35,158 @@ public struct AudioSettingsTabView: View {
 
             // Environmental Suppression Card
             suppressionCard
+        }
+    }
+
+    // MARK: - Local Meeting Audio Recorder & On-Device Transcription Card (#43)
+
+    private var meetingAssistantCard: some View {
+        settingsCard(title: "Meeting Audio Recorder & On-Device Transcription", systemImage: "waveform.badge.mic") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .center, spacing: 10) {
+                    Text("Capture microphone and system meeting audio (Zoom, Meet, Teams, Slack) into `~/Documents/Bitz/Meetings/<timestamp>/` and generate 100% offline transcripts with Apple `SFSpeechRecognizer`.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Text(meetingStatusBadgeText)
+                        .font(.caption.bold())
+                        .foregroundStyle(meetingStatusBadgeColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule()
+                                .fill(meetingStatusBadgeColor.opacity(0.15))
+                        )
+                }
+
+                HStack(spacing: 10) {
+                    Button {
+                        Task {
+                            await meetingRecorder.toggleRecording()
+                        }
+                    } label: {
+                        Label(
+                            meetingRecorder.isRecording ? "Stop Meeting Recording" : "Start Meeting Recording",
+                            systemImage: meetingRecorder.isRecording ? "stop.circle.fill" : "record.circle"
+                        )
+                        .font(.subheadline.bold())
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(meetingRecorder.isRecording ? .red : .accentColor)
+                    .disabled(meetingRecorder.isTranscribing)
+
+                    if let lastResult = meetingRecorder.lastCompletedResult {
+                        Button {
+                            meetingRecorder.revealInFinder(lastResult.sessionDirectoryURL)
+                        } label: {
+                            Label("Reveal Last Recording in Finder", systemImage: "folder.fill")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+
+                    Button {
+                        meetingRecorder.revealInFinder(meetingSettings.meetingsRootDirectoryURL)
+                    } label: {
+                        Label("Open Meetings Folder", systemImage: "folder")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
+                Text(meetingRecorder.statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                Toggle("Record Microphone Input (AVAudioEngine)", isOn: Binding(
+                    get: { meetingSettings.captureMicrophone },
+                    set: { meetingSettings.setCaptureMicrophone($0) }
+                ))
+                .font(.subheadline)
+                .disabled(meetingRecorder.isRecording)
+
+                Toggle("Record System / Meeting Output Audio (ScreenCaptureKit)", isOn: Binding(
+                    get: { meetingSettings.captureSystemAudio },
+                    set: { meetingSettings.setCaptureSystemAudio($0) }
+                ))
+                .font(.subheadline)
+                .disabled(meetingRecorder.isRecording)
+
+                Toggle("Generate On-Device Transcript (`transcript.txt` & `transcript.json`)", isOn: Binding(
+                    get: { meetingSettings.autoTranscribeOnStop },
+                    set: { meetingSettings.setAutoTranscribeOnStop($0) }
+                ))
+                .font(.subheadline)
+
+                Toggle("Copy Transcript File Path to Clipboard on Completion", isOn: Binding(
+                    get: { meetingSettings.copyTranscriptPathToClipboard },
+                    set: { meetingSettings.setCopyTranscriptPathToClipboard($0) }
+                ))
+                .font(.subheadline)
+                .disabled(!meetingSettings.autoTranscribeOnStop)
+
+                Divider()
+
+                HStack(spacing: 12) {
+                    permissionPill(label: "Mic", status: meetingRecorder.permissionState.microphone)
+                    permissionPill(label: "System Audio", status: meetingRecorder.permissionState.screenAudio)
+                    permissionPill(label: "On-Device Speech", status: meetingRecorder.permissionState.speechRecognition)
+
+                    Spacer()
+
+                    Button("Check / Request Permissions") {
+                        Task {
+                            await meetingRecorder.requestPermissions()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private var meetingStatusBadgeText: String {
+        if meetingRecorder.isRecording {
+            return "Recording"
+        }
+        if meetingRecorder.isTranscribing {
+            return "Transcribing"
+        }
+        return "Ready (⌥⇧R)"
+    }
+
+    private var meetingStatusBadgeColor: Color {
+        if meetingRecorder.isRecording {
+            return .red
+        }
+        if meetingRecorder.isTranscribing {
+            return .orange
+        }
+        return .green
+    }
+
+    private func permissionPill(label: String, status: MeetingPermissionState.Status) -> some View {
+        let color: Color = {
+            switch status {
+            case .authorized: return .green
+            case .denied: return .red
+            case .notDetermined: return .secondary
+            }
+        }()
+        return HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text("\(label): \(status.displayLabel)")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
         }
     }
 

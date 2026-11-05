@@ -51,6 +51,8 @@ public struct SettingsRootView: View {
     @ObservedObject public var paletteStore: AvatarPaletteStore
     @ObservedObject public var personalitySettings: PersonalitySettingsStore
     @ObservedObject public var licensingService: LicensingService
+    @ObservedObject public var meetingSettings: MeetingSettingsStore
+    @ObservedObject public var meetingRecorder: MeetingRecorderService
 
     @State private var selectedTab: SettingsTab = .general
 
@@ -73,13 +75,18 @@ public struct SettingsRootView: View {
         inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         personalitySettings: PersonalitySettingsStore? = nil,
-        licensingService: LicensingService? = nil
+        licensingService: LicensingService? = nil,
+        meetingSettings: MeetingSettingsStore? = nil,
+        meetingRecorder: MeetingRecorderService? = nil
     ) {
         self.interactionSettings = interactionSettings
         self.inboxDirectoryURL = inboxDirectoryURL
         self.paletteStore = paletteStore
         self.personalitySettings = personalitySettings ?? PersonalitySettingsStore()
         self.licensingService = licensingService ?? LicensingService()
+        let resolvedMeetingSettings = meetingSettings ?? meetingRecorder?.settingsStore ?? MeetingSettingsStore()
+        self.meetingSettings = resolvedMeetingSettings
+        self.meetingRecorder = meetingRecorder ?? MeetingRecorderService(settingsStore: resolvedMeetingSettings)
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.scaleStore = scaleStore
@@ -219,7 +226,9 @@ public struct SettingsRootView: View {
         case .audio:
             AudioSettingsTabView(
                 settingsStore: audioSettings,
-                audioPlayer: audioPlayer
+                audioPlayer: audioPlayer,
+                meetingSettings: meetingSettings,
+                meetingRecorder: meetingRecorder
             )
         case .telemetry:
             TelemetrySettingsTabView(

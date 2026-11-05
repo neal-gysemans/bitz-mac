@@ -1,0 +1,332 @@
+import Foundation
+
+// MARK: - Meeting Permission State
+
+/// Permission status for the three native macOS capabilities used by the Meeting Recorder (#43).
+public struct MeetingPermissionState: Equatable, Sendable {
+    public enum Status: String, Codable, Sendable, Equatable {
+        case notDetermined
+        case denied
+        case authorized
+
+        public var displayLabel: String {
+            switch self {
+            case .authorized: return "Granted"
+            case .denied: return "Denied"
+            case .notDetermined: return "Not Requested"
+            }
+        }
+    }
+
+    public var microphone: Status
+    public var screenAudio: Status
+    public var speechRecognition: Status
+
+    public init(
+        microphone: Status = .notDetermined,
+        screenAudio: Status = .notDetermined,
+        speechRecognition: Status = .notDetermined
+    ) {
+        self.microphone = microphone
+        self.screenAudio = screenAudio
+        self.speechRecognition = speechRecognition
+    }
+
+    public func canRecord(captureMicrophone: Bool, captureSystemAudio: Bool) -> Bool {
+        guard captureMicrophone || captureSystemAudio else { return false }
+        let micOK = !captureMicrophone || microphone == .authorized
+        let systemOK = !captureSystemAudio || screenAudio == .authorized
+        return micOK && systemOK
+    }
+
+    public var canTranscribe: Bool {
+        speechRecognition == .authorized
+    }
+}
+
+// MARK: - Meeting Recording Metadata & Transcript Models
+
+/// Metadata written to `metadata.json` inside each meeting recording directory (#43).
+public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
+    public let sessionID: String
+    public let startedAt: Date
+    public let endedAt: Date
+    public let durationSeconds: TimeInterval
+    public let captureMicrophone: Bool
+    public let captureSystemAudio: Bool
+    public let detectedAppNames: [String]
+    public let audioFileName: String
+    public var transcriptStatus: String
+
+    public init(
+        sessionID: String,
+        startedAt: Date,
+        endedAt: Date,
+        durationSeconds: TimeInterval,
+        captureMicrophone: Bool,
+        captureSystemAudio: Bool,
+        detectedAppNames: [String],
+        audioFileName: String = "audio.m4a",
+        transcriptStatus: String = "pending"
+    ) {
+        self.sessionID = sessionID
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.durationSeconds = durationSeconds
+        self.captureMicrophone = captureMicrophone
+        self.captureSystemAudio = captureSystemAudio
+        self.detectedAppNames = detectedAppNames
+        self.audioFileName = audioFileName
+        self.transcriptStatus = transcriptStatus
+    }
+}
+
+/// A single timestamped segment from on-device speech recognition (#43).
+public struct MeetingTranscriptSegment: Codable, Equatable, Sendable {
+    public let text: String
+    public let startTime: TimeInterval
+    public let endTime: TimeInterval
+    public let confidence: Float
+
+    enum CodingKeys: String, CodingKey {
+        case text
+        case startTime = "start_time"
+        case endTime = "end_time"
+        case confidence
+    }
+
+    public init(
+        text: String,
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        confidence: Float
+    ) {
+        self.text = text
+        self.startTime = startTime
+        self.endTime = endTime
+        self.confidence = confidence
+    }
+}
+
+/// Structured on-device transcript exported to `transcript.json` and formatted into `transcript.txt` (#43).
+public struct MeetingTranscript: Codable, Equatable, Sendable {
+    public let sessionID: String
+    public let localeIdentifier: String
+    public let generatedAt: Date
+    public let fullText: String
+    public let segments: [MeetingTranscriptSegment]
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case localeIdentifier = "locale"
+        case generatedAt = "generated_at"
+        case fullText = "full_text"
+        case segments
+    }
+
+    public init(
+        sessionID: String,
+        localeIdentifier: String,
+        generatedAt: Date = Date(),
+        fullText: String,
+        segments: [MeetingTranscriptSegment]
+    ) {
+        self.sessionID = sessionID
+        self.localeIdentifier = localeIdentifier
+        self.generatedAt = generatedAt
+        self.fullText = fullText
+        self.segments = segments
+    }
+
+    /// Formats a human-readable plain-text transcript with timestamped lines for `transcript.txt`.
+    public func formattedPlainText() -> String {
+        var lines: [String] = [
+            "# Bitz Meeting Transcript (\(sessionID))",
+            "Locale: \(localeIdentifier)",
+            ""
+        ]
+
+        let trimmedFull = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedFull.isEmpty && segments.isEmpty {
+            lines.append("(No speech detected in recording.)")
+            return lines.joined(separator: "\n") + "\n"
+        }
+
+        if !segments.isEmpty {
+            // Group word-level segments into readable ~10-second or sentence-ending phrases
+            var currentPhraseWords: [String] = []
+            var currentStart: TimeInterval = segments[0].startTime
+            for segment in segments {
+                let word = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !word.isEmpty else { continue }
+                if currentPhraseWords.isEmpty {
+                    currentStart = segment.startTime
+                }
+                currentPhraseWords.append(word)
+                let elapsedInPhrase = segment.endTime - currentStart
+                let endsSentence = word.hasSuffix(".") || word.hasSuffix("?") || word.hasSuffix("!")
+                if endsSentence || elapsedInPhrase >= 10.0 || currentPhraseWords.count >= 18 {
+                    let stamp = MeetingSettingsStore.formatDuration(Int(currentStart.rounded(.down)))
+                    lines.append("[\(stamp)] \(currentPhraseWords.joined(separator: " "))")
+                    currentPhraseWords.removeAll(keepingCapacity: true)
+                }
+            }
+            if !currentPhraseWords.isEmpty {
+                let stamp = MeetingSettingsStore.formatDuration(Int(currentStart.rounded(.down)))
+                lines.append("[\(stamp)] \(currentPhraseWords.joined(separator: " "))")
+            }
+        } else {
+            lines.append(trimmedFull)
+        }
+
+        return lines.joined(separator: "\n") + "\n"
+    }
+}
+
+/// Summary of a completed meeting recording & transcription session (#43).
+public struct MeetingRecordingResult: Equatable, Sendable {
+    public let sessionID: String
+    public let sessionDirectoryURL: URL
+    public let audioFileURL: URL
+    public let metadataFileURL: URL
+    public let transcriptTextURL: URL?
+    public let transcriptJSONURL: URL?
+    public let durationSeconds: TimeInterval
+
+    public init(
+        sessionID: String,
+        sessionDirectoryURL: URL,
+        audioFileURL: URL,
+        metadataFileURL: URL,
+        transcriptTextURL: URL? = nil,
+        transcriptJSONURL: URL? = nil,
+        durationSeconds: TimeInterval
+    ) {
+        self.sessionID = sessionID
+        self.sessionDirectoryURL = sessionDirectoryURL
+        self.audioFileURL = audioFileURL
+        self.metadataFileURL = metadataFileURL
+        self.transcriptTextURL = transcriptTextURL
+        self.transcriptJSONURL = transcriptJSONURL
+        self.durationSeconds = durationSeconds
+    }
+}
+
+/// Lifecycle state of the Meeting Audio Recorder & Transcription pipeline (#43).
+public enum MeetingRecorderState: Equatable, Sendable {
+    case idle
+    case recording(sessionID: String, startedAt: Date, elapsedSeconds: Int)
+    case transcribing(sessionID: String, sessionDirectoryURL: URL)
+    case completed(MeetingRecordingResult)
+    case failed(String)
+}
+
+// MARK: - Meeting Settings Store
+
+/// Persists user preferences for the Local Meeting Recorder & On-Device Transcription (#43).
+@MainActor
+public final class MeetingSettingsStore: ObservableObject {
+    public static let captureMicrophoneKey = "Bitz.MeetingRecorder.CaptureMicrophone"
+    public static let captureSystemAudioKey = "Bitz.MeetingRecorder.CaptureSystemAudio"
+    public static let autoTranscribeKey = "Bitz.MeetingRecorder.AutoTranscribe"
+    public static let copyTranscriptPathKey = "Bitz.MeetingRecorder.CopyTranscriptPath"
+    public static let meetingsDirectoryPathKey = "Bitz.MeetingRecorder.DirectoryPath"
+
+    @Published public private(set) var captureMicrophone: Bool
+    @Published public private(set) var captureSystemAudio: Bool
+    @Published public private(set) var autoTranscribeOnStop: Bool
+    @Published public private(set) var copyTranscriptPathToClipboard: Bool
+    @Published public private(set) var meetingsRootDirectoryURL: URL
+
+    private let userDefaults: UserDefaults
+
+    nonisolated public static var defaultMeetingsDirectoryURL: URL {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home
+            .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent("Bitz", isDirectory: true)
+            .appendingPathComponent("Meetings", isDirectory: true)
+    }
+
+    public init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+
+        if userDefaults.object(forKey: Self.captureMicrophoneKey) != nil {
+            self.captureMicrophone = userDefaults.bool(forKey: Self.captureMicrophoneKey)
+        } else {
+            self.captureMicrophone = true
+        }
+
+        if userDefaults.object(forKey: Self.captureSystemAudioKey) != nil {
+            self.captureSystemAudio = userDefaults.bool(forKey: Self.captureSystemAudioKey)
+        } else {
+            self.captureSystemAudio = true
+        }
+
+        if userDefaults.object(forKey: Self.autoTranscribeKey) != nil {
+            self.autoTranscribeOnStop = userDefaults.bool(forKey: Self.autoTranscribeKey)
+        } else {
+            self.autoTranscribeOnStop = true
+        }
+
+        if userDefaults.object(forKey: Self.copyTranscriptPathKey) != nil {
+            self.copyTranscriptPathToClipboard = userDefaults.bool(forKey: Self.copyTranscriptPathKey)
+        } else {
+            self.copyTranscriptPathToClipboard = false
+        }
+
+        if let savedPath = userDefaults.string(forKey: Self.meetingsDirectoryPathKey),
+           !savedPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let expanded = (savedPath as NSString).expandingTildeInPath
+            self.meetingsRootDirectoryURL = URL(fileURLWithPath: expanded, isDirectory: true)
+        } else {
+            self.meetingsRootDirectoryURL = Self.defaultMeetingsDirectoryURL
+        }
+    }
+
+    public func setCaptureMicrophone(_ enabled: Bool) {
+        captureMicrophone = enabled
+        userDefaults.set(enabled, forKey: Self.captureMicrophoneKey)
+    }
+
+    public func setCaptureSystemAudio(_ enabled: Bool) {
+        captureSystemAudio = enabled
+        userDefaults.set(enabled, forKey: Self.captureSystemAudioKey)
+    }
+
+    public func setAutoTranscribeOnStop(_ enabled: Bool) {
+        autoTranscribeOnStop = enabled
+        userDefaults.set(enabled, forKey: Self.autoTranscribeKey)
+    }
+
+    public func setCopyTranscriptPathToClipboard(_ enabled: Bool) {
+        copyTranscriptPathToClipboard = enabled
+        userDefaults.set(enabled, forKey: Self.copyTranscriptPathKey)
+    }
+
+    public func setMeetingsRootDirectoryURL(_ url: URL) {
+        meetingsRootDirectoryURL = url
+        userDefaults.set(url.path, forKey: Self.meetingsDirectoryPathKey)
+    }
+
+    /// Formats elapsed seconds as `MM:SS` (or `HH:MM:SS` when >= 1 hour).
+    nonisolated public static func formatDuration(_ totalSeconds: Int) -> String {
+        let clamped = max(0, totalSeconds)
+        let hours = clamped / 3600
+        let minutes = (clamped % 3600) / 60
+        let seconds = clamped % 60
+        if hours > 0 {
+            return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    /// Generates a deterministic session folder name `YYYY-MM-DD_HH-mm-ss` in UTC/local calendar.
+    nonisolated public static func sessionFolderName(for date: Date, timeZone: TimeZone = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        return formatter.string(from: date)
+    }
+}

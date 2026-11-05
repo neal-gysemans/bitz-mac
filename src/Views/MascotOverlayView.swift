@@ -19,6 +19,7 @@ public struct MascotOverlayView: View {
     @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
     @ObservedObject public var paletteStore: AvatarPaletteStore
     @ObservedObject public var agentMonitor: AgentMonitorService
+    @ObservedObject public var meetingRecorder: MeetingRecorderService
 
     private let explicitAttentionCue: Bool?
 
@@ -51,6 +52,7 @@ public struct MascotOverlayView: View {
         interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         agentMonitor: AgentMonitorService = AgentMonitorService(),
+        meetingRecorder: MeetingRecorderService = MeetingRecorderService(),
         isAttentionCueActive: Bool? = nil,
         onFilesDropped: (([URL]) -> Void)? = nil,
         onDragChanged: ((NSPoint, NSScreen?) -> Void)? = nil,
@@ -69,6 +71,7 @@ public struct MascotOverlayView: View {
         self.interactionSettings = interactionSettings
         self.paletteStore = paletteStore
         self.agentMonitor = agentMonitor
+        self.meetingRecorder = meetingRecorder
         self.explicitAttentionCue = isAttentionCueActive
         self.onFilesDropped = onFilesDropped
         self.onDragChanged = onDragChanged
@@ -153,7 +156,7 @@ public struct MascotOverlayView: View {
     }
 
     private var isLoafPosture: Bool {
-        displayedState == .burnout || displayedState == .charging
+        !meetingRecorder.isRecording && (displayedState == .burnout || displayedState == .charging)
     }
 
     // Holding ⌥ alone only shows the border, so typing ⌥ shortcuts in other apps doesn't flash the HUD
@@ -180,7 +183,8 @@ public struct MascotOverlayView: View {
                 customVisorColor: visorColor,
                 isPaused: isAnimationPaused,
                 palette: paletteStore.resolvedPalette,
-                isAttentionCueActive: isAttentionCueActive
+                isAttentionCueActive: isAttentionCueActive,
+                isRecordingMeeting: meetingRecorder.isRecording
             )
             .frame(width: 180, height: 140)
             .opacity(opacityStore.opacityFactor)

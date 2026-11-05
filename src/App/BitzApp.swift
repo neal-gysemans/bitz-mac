@@ -34,6 +34,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     public let appActivator: any AppActivating
     public let diffViewer: any DiffViewing
     public let licensingService: LicensingService
+    public let meetingSettings: MeetingSettingsStore
+    public let meetingRecorder: MeetingRecorderService
     @Published public private(set) var menuBarTitle: String = "Bitz"
     public private(set) var overlayPanels: [MascotOverlayPanel] = []
     public var overlayPanel: MascotOverlayPanel? { overlayPanels.first }
@@ -88,10 +90,15 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         appActivator: (any AppActivating)? = nil,
         diffViewer: (any DiffViewing)? = nil,
         licensingService: LicensingService? = nil,
+        meetingSettings: MeetingSettingsStore? = nil,
+        meetingRecorder: MeetingRecorderService? = nil,
         userDefaults: UserDefaults = .standard
     ) {
         self.userDefaults = userDefaults
         self.licensingService = licensingService ?? LicensingService()
+        let resolvedMeetingSettings = meetingSettings ?? meetingRecorder?.settingsStore ?? MeetingSettingsStore(userDefaults: userDefaults)
+        self.meetingSettings = resolvedMeetingSettings
+        self.meetingRecorder = meetingRecorder ?? MeetingRecorderService(settingsStore: resolvedMeetingSettings)
         let resolvedApprovalStore = approvalStore ?? AgentApprovalStore()
         self.approvalStore = resolvedApprovalStore
         self.appActivator = appActivator ?? WorkspaceAppActivator()
@@ -183,15 +190,20 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             self?.agentMonitor.hookActionMessage = nil
             self?.agentMonitor.isHookActionError = false
         }
-        // An agent popup or pending approval can cover the update alert's buttons, so re-check on all changes
-        self.bubbleInteractivityCancellable = Publishers.Merge3(
+        // An agent popup, pending approval, or completed meeting notice can show buttons on the speech bubble
+        self.bubbleInteractivityCancellable = Publishers.Merge4(
             self.updateStore.$isSpeechBubbleAlertActive.map { _ in () },
             self.agentMonitor.$activePopup.map { _ in () },
-            self.approvalStore.$activeRequest.map { _ in () }
+            self.approvalStore.$activeRequest.map { _ in () },
+            self.meetingRecorder.$isCompletionBubbleVisible.map { _ in () }
         )
         .receive(on: DispatchQueue.main)
         .sink { [weak self] in
             self?.updatePanelsInteractivity()
+        }
+
+        self.meetingRecorder.onPlaySound = { [weak self] event in
+            self?.audioService.play(event, bypassCooldown: true)
         }
         // The engine only gets a flag, so agent policy stays in AgentMonitorService (R10)
         self.warningVisorCancellable = self.agentMonitor.$activeWarning
@@ -327,7 +339,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
-            telemetrySettings: telemetrySettings
+            telemetrySettings: telemetrySettings,
+            meetingRecorder: meetingRecorder
         )
         let bubbleIsInteractive = (currentContent?.isInteractive ?? false) || approvalStore.activeRequest != nil
         overlayPanels.forEach { panel in
@@ -529,7 +542,9 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
                 inboxDirectoryURL: fileDropService.inboxDirectoryURL,
                 paletteStore: paletteStore,
                 personalitySettings: personalitySettings,
-                licensingService: licensingService
+                licensingService: licensingService,
+                meetingSettings: meetingSettings,
+                meetingRecorder: meetingRecorder
             )
         )
     }
@@ -566,8 +581,14 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         positionStore.lockPosition()
     }
 
+    @objc public func toggleMeetingRecordingAction() {
+        Task { @MainActor [weak self] in
+            await self?.meetingRecorder.toggleRecording()
+        }
+    }
+
     /// Handles keyboard shortcuts locally or globally without stealing key focus.
-    /// `isGlobal` marks keystrokes typed in other apps: only ⌥⌘B and the Esc/Return lock apply there.
+    /// `isGlobal` marks keystrokes typed in other apps: only ⌥⌘B, ⌥⇧R, and the Esc/Return lock apply there.
     @MainActor
     @discardableResult
     public func handleKeyEvent(_ event: NSEvent, isGlobal: Bool = false) -> Bool {
@@ -575,12 +596,19 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         let cmd = flags.contains(.command)
         let opt = flags.contains(.option)
         let ctrl = flags.contains(.control)
+        let shift = flags.contains(.shift)
         let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
         let keyCode = event.keyCode
 
         // 1. Toggle / Open Settings Window: ⌥⌘B (works from any app)
         if cmd && opt && !ctrl && (keyCode == 11 || chars == "b") {
             toggleSettingsWindow()
+            return true
+        }
+
+        // 1b. Start / Stop Meeting Recording: ⌥⇧R (works from any app, #43)
+        if opt && shift && !cmd && !ctrl && (keyCode == 15 || chars == "r") {
+            toggleMeetingRecordingAction()
             return true
         }
 
@@ -736,7 +764,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
                     updateStore: updateStore,
                     telemetryDashboard: telemetryDashboard,
                     telemetrySettings: telemetrySettings,
-                    paletteStore: paletteStore
+                    paletteStore: paletteStore,
+                    meetingRecorder: meetingRecorder
                 ),
                 approvalStore: approvalStore,
                 agentMonitor: agentMonitor,
@@ -758,6 +787,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             telemetrySettings: telemetrySettings,
             interactionSettings: interactionSettings,
             paletteStore: paletteStore,
+            agentMonitor: agentMonitor,
+            meetingRecorder: meetingRecorder,
             onFilesDropped: { [weak self] urls in
                 guard let self else { return }
                 do {
@@ -885,6 +916,7 @@ struct BitzMenuBarContentView: View {
     var audioService: CyberAudioService? = nil
     @ObservedObject var flowShieldSettings: FlowShieldSettingsStore
     let flowShieldService: FlowShieldService
+    @ObservedObject var meetingRecorder: MeetingRecorderService
     var onOpenSettings: () -> Void
 
     public init(
@@ -900,9 +932,11 @@ struct BitzMenuBarContentView: View {
         flowShieldSettings: FlowShieldSettingsStore? = nil,
         flowShieldService: FlowShieldService? = nil,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
+        meetingRecorder: MeetingRecorderService? = nil,
         onOpenSettings: @escaping () -> Void = {}
     ) {
         self.paletteStore = paletteStore
+        self.meetingRecorder = meetingRecorder ?? MeetingRecorderService()
         self.onOpenSettings = onOpenSettings
         self.engine = engine
         self.activityMonitor = activityMonitor
@@ -961,6 +995,20 @@ struct BitzMenuBarContentView: View {
                 engine.triggerPetInteraction()
             }
             .keyboardShortcut("p", modifiers: [.command])
+
+            Button(meetingRecorder.isRecording ? "Stop Meeting Recording" : "Start Meeting Recording") {
+                Task {
+                    await meetingRecorder.toggleRecording()
+                }
+            }
+            .keyboardShortcut("r", modifiers: [.option, .shift])
+            .disabled(meetingRecorder.isTranscribing)
+
+            if let lastRecording = meetingRecorder.lastCompletedResult {
+                Button("Reveal Last Recording in Finder") {
+                    meetingRecorder.revealInFinder(lastRecording.sessionDirectoryURL)
+                }
+            }
 
             Toggle("Show Mascot", isOn: $positionStore.isMascotVisible)
 
@@ -1056,6 +1104,7 @@ public struct BitzApp: App {
                 flowShieldSettings: appDelegate.flowShieldSettings,
                 flowShieldService: appDelegate.flowShieldService,
                 paletteStore: appDelegate.paletteStore,
+                meetingRecorder: appDelegate.meetingRecorder,
                 onOpenSettings: appDelegate.showSettingsWindow
             )
         } label: {

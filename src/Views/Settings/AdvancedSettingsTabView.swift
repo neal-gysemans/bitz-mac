@@ -163,6 +163,8 @@ public struct AdvancedSettingsTabView: View {
                         .foregroundStyle(.secondary)
                     shortcutRow(action: "Toggle / Open Settings", keys: ["⌥⌘B"])
                     Divider()
+                    shortcutRow(action: "Start / stop meeting recording", keys: ["⌥ ⇧ R"])
+                    Divider()
                     shortcutRow(action: "Move mascot anywhere (drag)", keys: ["⌥ Option", "Drag"])
                     Divider()
                     shortcutRow(action: "Lock position when dragging", keys: ["⎋ Esc", "⏎ Return"])

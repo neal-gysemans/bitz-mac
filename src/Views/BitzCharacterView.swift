@@ -110,6 +110,7 @@ public struct BitzCharacterView: View {
     public let showParticles: Bool
     public let customVisorColor: Color?
     public let palette: AvatarResolvedPalette
+    public let isRecordingMeeting: Bool
 
     public init(
         state: BitzState = .balanced,
@@ -119,16 +120,18 @@ public struct BitzCharacterView: View {
         isLoafPosture: Bool? = nil,
         showParticles: Bool = true,
         customVisorColor: Color? = nil,
-        palette: AvatarResolvedPalette = .cyberpunkClassic
+        palette: AvatarResolvedPalette = .cyberpunkClassic,
+        isRecordingMeeting: Bool = false
     ) {
         self.palette = palette
         self.state = state
         self.time = time
         self.isBlinking = isBlinking
         self.isPetReactionActive = isPetReactionActive
-        self.isLoafPosture = isLoafPosture ?? (state == .burnout || state == .charging)
+        self.isLoafPosture = isLoafPosture ?? (!isRecordingMeeting && (state == .burnout || state == .charging))
         self.showParticles = showParticles
         self.customVisorColor = customVisorColor
+        self.isRecordingMeeting = isRecordingMeeting
     }
 
     public static func visorRGB(for state: BitzState) -> (red: Double, green: Double, blue: Double) {
@@ -233,7 +236,8 @@ public struct BitzCharacterView: View {
                 isBlinking: isBlinking,
                 isPetReactionActive: isPetReactionActive,
                 visorColor: visorColor,
-                palette: palette
+                palette: palette,
+                isRecordingMeeting: isRecordingMeeting
             )
             .equatable()
             .frame(width: 132, height: 116)
@@ -281,6 +285,7 @@ private struct MascotHeadAssemblyView: View, Equatable {
     let isPetReactionActive: Bool
     let visorColor: Color
     let palette: AvatarResolvedPalette
+    let isRecordingMeeting: Bool
 
     var body: some View {
         let earTilt = (state == .overworked || state == .dopamineSad) ? 14.0 : 0.0
@@ -335,6 +340,10 @@ private struct MascotHeadAssemblyView: View, Equatable {
                     .overlay(
                         visorContent
                     )
+
+                if isRecordingMeeting {
+                    CyberHeadphonesOverlay(visorColor: visorColor, palette: palette)
+                }
             }
             .zIndex(1)
         }
@@ -406,6 +415,68 @@ private struct MascotHeadAssemblyView: View, Equatable {
     }
 }
 
+/// Holographic cyber-headphones with a red recording indicator LED worn by Bitz during active meeting capture (#43).
+/// Entirely contained within the 132×92 pt head chassis so `earOverflow` and window bounds are never exceeded.
+private struct CyberHeadphonesOverlay: View, Equatable {
+    let visorColor: Color
+    let palette: AvatarResolvedPalette
+
+    private static let recRed = Color(red: 1.0, green: 0.16, blue: 0.22)
+
+    var body: some View {
+        ZStack {
+            // Top headband arc resting along the upper crown of the head
+            Capsule()
+                .fill(palette.chassisDeepColor)
+                .frame(width: 96, height: 6)
+                .overlay(
+                    Capsule()
+                        .stroke(visorColor.opacity(0.85), lineWidth: 1.5)
+                )
+                .offset(y: -40)
+
+            // Left & right cyber earcups flanking the visor
+            HStack(spacing: 104) {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(palette.chassisDeepColor)
+                    .frame(width: 10, height: 32)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(visorColor.opacity(0.9), lineWidth: 1.5)
+                    )
+
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(palette.chassisDeepColor)
+                    .frame(width: 10, height: 32)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(visorColor.opacity(0.9), lineWidth: 1.5)
+                    )
+            }
+            .offset(y: 2)
+
+            // Boom mic arm + glowing red recording LED dot on the right cheek
+            Capsule()
+                .fill(visorColor.opacity(0.75))
+                .frame(width: 20, height: 2.5)
+                .rotationEffect(.degrees(-18))
+                .offset(x: 47, y: 20)
+
+            ZStack {
+                Circle()
+                    .fill(Self.recRed.opacity(0.35))
+                    .frame(width: 11, height: 11)
+                Circle()
+                    .fill(Self.recRed)
+                    .frame(width: 6, height: 6)
+            }
+            .offset(x: 36, y: 24)
+        }
+        .frame(width: 132, height: 92)
+        .allowsHitTesting(false)
+    }
+}
+
 /// CoreAnimation-offloaded live mascot character view (#70).
 /// Delegates continuous breathing, tail wag, paw sway, overheating glitch, and ambient particle drift
 /// to out-of-process CoreAnimation layer animations (`0` per-frame CPU wakeups), waking the main thread
@@ -419,6 +490,7 @@ public struct LiveBitzCharacterView: View {
     public let isPaused: Bool
     public let palette: AvatarResolvedPalette
     public let isAttentionCueActive: Bool
+    public let isRecordingMeeting: Bool
 
     @State private var isBlinking: Bool = false
 
@@ -427,6 +499,7 @@ public struct LiveBitzCharacterView: View {
         let isLoafPosture: Bool
         let showParticles: Bool
         let isAttentionCueActive: Bool
+        let isRecordingMeeting: Bool
     }
 
     public init(
@@ -437,16 +510,18 @@ public struct LiveBitzCharacterView: View {
         customVisorColor: Color? = nil,
         isPaused: Bool = false,
         palette: AvatarResolvedPalette = .cyberpunkClassic,
-        isAttentionCueActive: Bool = false
+        isAttentionCueActive: Bool = false,
+        isRecordingMeeting: Bool = false
     ) {
         self.palette = palette
         self.state = state
         self.isPetReactionActive = isPetReactionActive
-        self.isLoafPosture = isLoafPosture ?? (state == .burnout || state == .charging)
+        self.isLoafPosture = isLoafPosture ?? (!isRecordingMeeting && (state == .burnout || state == .charging))
         self.showParticles = showParticles
         self.customVisorColor = customVisorColor
         self.isPaused = isPaused
         self.isAttentionCueActive = isAttentionCueActive
+        self.isRecordingMeeting = isRecordingMeeting
     }
 
     private var visorColor: Color {
@@ -458,7 +533,7 @@ public struct LiveBitzCharacterView: View {
     }
 
     public var body: some View {
-        let shouldPause = isPaused || (state == .burnout && !showParticles)
+        let shouldPause = isPaused || (state == .burnout && !showParticles && !isRecordingMeeting)
         let canBlink = !shouldPause && !isLoafPosture && state != .overheating && !isPetReactionActive
 
         Group {
@@ -471,7 +546,8 @@ public struct LiveBitzCharacterView: View {
                     isLoafPosture: isLoafPosture,
                     showParticles: false,
                     customVisorColor: customVisorColor,
-                    palette: palette
+                    palette: palette,
+                    isRecordingMeeting: isRecordingMeeting
                 )
             } else {
                 LiveMotionStageView(
@@ -482,9 +558,16 @@ public struct LiveBitzCharacterView: View {
                     showParticles: showParticles,
                     visorColor: visorColor,
                     palette: palette,
-                    isAttentionCueActive: isAttentionCueActive
+                    isAttentionCueActive: isAttentionCueActive,
+                    isRecordingMeeting: isRecordingMeeting
                 )
-                .id(MotionStageKey(state: state, isLoafPosture: isLoafPosture, showParticles: showParticles, isAttentionCueActive: isAttentionCueActive))
+                .id(MotionStageKey(
+                    state: state,
+                    isLoafPosture: isLoafPosture,
+                    showParticles: showParticles,
+                    isAttentionCueActive: isAttentionCueActive,
+                    isRecordingMeeting: isRecordingMeeting
+                ))
             }
         }
         .frame(width: 180, height: 140)
@@ -512,6 +595,7 @@ private struct LiveMotionStageView: View {
     let visorColor: Color
     let palette: AvatarResolvedPalette
     let isAttentionCueActive: Bool
+    let isRecordingMeeting: Bool
 
     private var speedMultiplier: Double {
         switch state {
@@ -595,7 +679,8 @@ private struct LiveMotionStageView: View {
                 isBlinking: isBlinking,
                 isPetReactionActive: isPetReactionActive,
                 visorColor: visorColor,
-                palette: palette
+                palette: palette,
+                isRecordingMeeting: isRecordingMeeting
             )
             .equatable()
             .frame(width: 132, height: 116)

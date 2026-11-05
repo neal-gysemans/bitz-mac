@@ -72,6 +72,12 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Bitz records your microphone audio locally when you start a Meeting Audio Recording session.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Bitz uses native on-device speech recognition to generate private local meeting transcripts.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Bitz captures system meeting audio locally when you start a Meeting Audio Recording session.</string>
 </dict>
 </plist>
 EOF

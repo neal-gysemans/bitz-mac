@@ -127,6 +127,62 @@ final class MascotOverlayLayoutTests: XCTestCase {
         XCTAssertGreaterThan(differingPixels(normal, unlocked, in: hudBand), 100, "Unlocking must swap the HUD for the drag pill")
     }
 
+    /// #43: Cyber-headphones + recording LED and meeting bubbles must stay strictly within their windows.
+    func testMeetingRecordingHeadphonesAndBubblesFitInsideWindows() async throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bitz-layout-meeting-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let meetingSettings = MeetingSettingsStore(userDefaults: defaults)
+        meetingSettings.setMeetingsRootDirectoryURL(tempDir)
+        let recorder = MeetingRecorderService(
+            settingsStore: meetingSettings,
+            captureEngine: MockMeetingAudioCaptureEngine(),
+            transcriptionService: MockMeetingTranscriptionService(),
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(
+                    microphone: .authorized,
+                    screenAudio: .authorized,
+                    speechRecognition: .authorized
+                )
+            )
+        )
+
+        await recorder.startRecording()
+        XCTAssertTrue(recorder.isRecording)
+
+        // Character with cyber-headphones must preserve earOverflow
+        let character = BitzCharacterView(state: .balanced, time: 0, showParticles: false, isRecordingMeeting: true)
+        let renderer = ImageRenderer(content: character.padding(margin))
+        renderer.scale = renderScale
+        let image = try XCTUnwrap(renderer.cgImage)
+        let topRow = try XCTUnwrap(topmostVisibleRow(in: image))
+        let earTipAboveFrame = margin - CGFloat(topRow) / renderScale
+        XCTAssertEqual(
+            earTipAboveFrame,
+            BitzCharacterView.earOverflow(isLoafPosture: false),
+            accuracy: 1.5,
+            "Cyber-headphones must not rise above ear tips"
+        )
+
+        let recordingBubble = SpeechBubbleView(
+            engine: fixture.engine,
+            scaleStore: fixture.scaleStore,
+            agentMonitor: fixture.agentMonitor,
+            updateStore: fixture.updateStore,
+            telemetryDashboard: fixture.telemetryDashboard,
+            telemetrySettings: fixture.telemetrySettings,
+            meetingRecorder: recorder
+        )
+        try assertBubbleFitsItsWindow(recordingBubble)
+
+        await recorder.stopRecording()
+        XCTAssertTrue(recorder.isInteractiveBubbleActive)
+        try assertBubbleFitsItsWindow(recordingBubble)
+    }
+
     /// The bubble window takes the hosting view's fitting size, so drawing must stay within it.
     private func assertBubbleFitsItsWindow(
         _ view: SpeechBubbleView,

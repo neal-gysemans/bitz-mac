@@ -1,20 +1,23 @@
 import SwiftUI
 
 /// What Bitz's speech bubble shows, in priority order: Agent Monitor popup, update alert,
-/// wellness text (e.g. the `"SYSTEM HOT! > <"` thermal warning, `FR-004`), then telemetry carousel (T016).
+/// active meeting recorder status, wellness text (e.g. the `"SYSTEM HOT! > <"` thermal warning, `FR-004`), then telemetry carousel (T016).
 public enum SpeechBubbleContent {
     case agentPopup(AgentPopupState)
     case update(GitHubReleaseInfo)
+    case meetingRecorder(text: String, isInteractive: Bool)
     case wellness(String)
     case carousel(String)
 
-    /// Update alert and agent warning bubbles have buttons, so they are the only bubbles that take clicks.
+    /// Update alert, agent warning, and completed meeting recording bubbles have buttons, so they are the only bubbles that take clicks.
     public var isInteractive: Bool {
         switch self {
         case .update:
             return true
         case .agentPopup(let popup):
             return popup.kind == .warning
+        case .meetingRecorder(_, let interactive):
+            return interactive
         case .wellness, .carousel:
             return false
         }
@@ -26,13 +29,17 @@ public enum SpeechBubbleContent {
         agentMonitor: AgentMonitorService,
         updateStore: AppUpdateStore,
         telemetryDashboard: TelemetryDashboardService,
-        telemetrySettings: TelemetrySettingsStore
+        telemetrySettings: TelemetrySettingsStore,
+        meetingRecorder: MeetingRecorderService? = nil
     ) -> SpeechBubbleContent? {
         if let popup = agentMonitor.activePopup {
             return .agentPopup(popup)
         }
         if updateStore.isSpeechBubbleAlertActive, let release = updateStore.latestRelease {
             return .update(release)
+        }
+        if let meetingRecorder, let text = meetingRecorder.activeSpeechBubbleText {
+            return .meetingRecorder(text: text, isInteractive: meetingRecorder.isInteractiveBubbleActive)
         }
         if let text = engine.displayedSpeechBubbleText {
             return .wellness(text)
@@ -59,6 +66,7 @@ public struct SpeechBubbleView: View {
     public let telemetryDashboard: TelemetryDashboardService
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
     @ObservedObject public var paletteStore: AvatarPaletteStore
+    @ObservedObject public var meetingRecorder: MeetingRecorderService
 
     public init(
         engine: WellnessPointEngine,
@@ -67,9 +75,11 @@ public struct SpeechBubbleView: View {
         updateStore: AppUpdateStore,
         telemetryDashboard: TelemetryDashboardService,
         telemetrySettings: TelemetrySettingsStore,
-        paletteStore: AvatarPaletteStore = AvatarPaletteStore()
+        paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
+        meetingRecorder: MeetingRecorderService = MeetingRecorderService()
     ) {
         self.paletteStore = paletteStore
+        self.meetingRecorder = meetingRecorder
         self.engine = engine
         self.scaleStore = scaleStore
         self.agentMonitor = agentMonitor
@@ -100,6 +110,28 @@ public struct SpeechBubbleView: View {
             }
         } else if updateStore.isSpeechBubbleAlertActive, let release = updateStore.latestRelease {
             updateBubbleView(for: release)
+        } else if meetingRecorder.isRecording {
+            MeetingRecordingTimerBubbleObserver(timerStore: meetingRecorder.timerStore) { text in
+                textBubble(
+                    text,
+                    fill: Color(red: 0.35, green: 0.05, blue: 0.09).opacity(0.95),
+                    stroke: Color(red: 1.0, green: 0.20, blue: 0.26)
+                )
+            }
+        } else if meetingRecorder.isTranscribing {
+            textBubble(
+                "✨ Meeting saved! Transcribing audio...",
+                fill: Color(red: 0.08, green: 0.09, blue: 0.13).opacity(0.95),
+                stroke: visorColor
+            )
+        } else if case .completed(let result) = meetingRecorder.state, meetingRecorder.isCompletionBubbleVisible {
+            meetingCompletedBubbleView(for: result)
+        } else if case .failed(let message) = meetingRecorder.state, meetingRecorder.isCompletionBubbleVisible {
+            textBubble(
+                "⚠️ \(message)",
+                fill: Color(red: 0.55, green: 0.08, blue: 0.12).opacity(0.95),
+                stroke: Color.red
+            )
         } else if let text = engine.displayedSpeechBubbleText {
             textBubble(
                 text,
@@ -224,6 +256,63 @@ public struct SpeechBubbleView: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(bgColor))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(accentColor, lineWidth: 1.5))
         .shadow(color: accentColor.opacity(0.6), radius: 6)
+    }
+
+    private func meetingCompletedBubbleView(for result: MeetingRecordingResult) -> some View {
+        let accentColor = Color(red: 0.0, green: 1.0, blue: 0.53)
+        let bgColor = Color(red: 0.05, green: 0.12, blue: 0.09).opacity(0.96)
+        let headline = result.transcriptTextURL != nil
+            ? "✨ Meeting saved & transcribed!"
+            : "✨ Meeting audio saved!"
+        return VStack(spacing: 5) {
+            Text(headline)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.white)
+                .multilineTextAlignment(.center)
+
+            HStack(spacing: 6) {
+                Button(action: { meetingRecorder.revealInFinder(result.sessionDirectoryURL) }) {
+                    Text("OPEN IN FINDER")
+                        .font(.system(size: 8, weight: .heavy, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(accentColor))
+                        .foregroundStyle(Color.black)
+                }
+                .buttonStyle(.plain)
+                .help("Reveal the meeting audio and transcript in Finder")
+                .accessibilityLabel("Open Meeting in Finder")
+
+                Button(action: { meetingRecorder.dismissCompletionBubble() }) {
+                    Text("DISMISS")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Capsule().stroke(Color.gray.opacity(0.6), lineWidth: 1))
+                        .foregroundStyle(Color.white.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss the meeting completion notice")
+                .accessibilityLabel("Dismiss Meeting Notice")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: Self.maxBubbleWidth)
+        .background(RoundedRectangle(cornerRadius: 8).fill(bgColor))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(accentColor, lineWidth: 1.5))
+        .shadow(color: accentColor.opacity(0.6), radius: 6)
+    }
+}
+
+/// Leaf observer for the 1s recording timer so only the timer text re-renders while recording (#43, #70).
+private struct MeetingRecordingTimerBubbleObserver<Content: View>: View {
+    @ObservedObject var timerStore: MeetingRecordingTimerStore
+    @ViewBuilder let content: (String) -> Content
+
+    var body: some View {
+        let formatted = MeetingSettingsStore.formatDuration(timerStore.elapsedSeconds)
+        content("🔴 Recording meeting (\(formatted))...")
     }
 }
 
