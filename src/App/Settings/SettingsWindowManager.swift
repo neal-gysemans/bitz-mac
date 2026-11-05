@@ -12,7 +12,7 @@ import SwiftUI
 public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     public static let shared = SettingsWindowManager()
     /// Content (not frame) minimum, shared with `SettingsRootView`; `sizingOptions = []` means AppKit can't read it from SwiftUI.
-    public static let minimumContentSize = NSSize(width: 660, height: 560)
+    public static let minimumContentSize = NSSize(width: 820, height: 560)
 
     private var windowController: NSWindowController?
     @Published public private(set) var isWindowOpen: Bool = false
@@ -50,7 +50,7 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
             return
         }
 
-        let initialSize = NSSize(width: 680, height: 580)
+        let initialSize = NSSize(width: 860, height: 580)
         let hostingController = makeHostingController(rootView: rootView, size: initialSize)
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: initialSize),

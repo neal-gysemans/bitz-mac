@@ -17,7 +17,7 @@ This file is the **single source of truth** for all AI coding agents (Antigravit
 - `src/App/Window/MascotOverlayPanel.swift` — Borderless floating `NSPanel` (`250×250` base scaled by `AvatarScaleStore` `0.50...1.75`), `AvatarScaleStore`, `AvatarOpacityStore`, `AvatarPositionStore` (freeform drag, `⌥ Option` hover, `⎋ Esc` lock, magnetic ~20pt edge snap, multi-display clamping). Owns child `SpeechBubblePanel`.
 - `src/App/Window/SpeechBubblePanel.swift` — Child floating `NSPanel` anchored just above Bitz's ear tips (`earOverflow`), dynamically sized to wrapped bubble text (#61).
 - `src/App/Window/DisplayPreferenceStore.swift` — Multi-monitor selection & fallback resolution when displays disconnect.
-- `src/App/Settings/SettingsWindowManager.swift` — Native `NSWindow` (`660×560`) hosting `SettingsRootView`. Detaches `contentViewController = nil` on close (`tearDownHostedContent`) so hidden SwiftUI trees consume **0% CPU & 0 MB** while closed (#70).
+- `src/App/Settings/SettingsWindowManager.swift` — Native `NSWindow` (`820×560`) hosting `SettingsRootView`. Detaches `contentViewController = nil` on close (`tearDownHostedContent`) so hidden SwiftUI trees consume **0% CPU & 0 MB** while closed (#70).
 
 ### `src/Views/` — Mascot Canvas, Speech Bubbles & Settings Tabs
 - `src/Views/MascotOverlayView.swift` — Fixed `250×250` mascot overlay canvas: hosts `LiveBitzCharacterView`, `MascotCyberHUDContainerView` (`MascotCyberHUDPillView`), and drag-unlock border/pill.
@@ -58,7 +58,7 @@ Bitz sits on the user's desktop all day alongside heavy IDEs and LLM agents. Reg
    - AppKit windows with `isReleasedWhenClosed = false` keep their `NSHostingController` / `NSHostingView` active in the background when closed!
    - `SettingsWindowManager` detaches `window.contentViewController = nil` on close (`tearDownHostedContent`) and exposes `isWindowVisible`. Any new secondary window MUST do the same.
 4. **`NSHostingView.sizingOptions` Rule**:
-   - Fixed-size windows (`MascotOverlayPanel` `250×250` and `SettingsWindowManager` `660×560`) MUST set `sizingOptions = []` so AppKit never runs per-frame intrinsic content size measurement passes.
+   - Fixed-size windows (`MascotOverlayPanel` `250×250` and `SettingsWindowManager` `820×560`) MUST set `sizingOptions = []` so AppKit never runs per-frame intrinsic content size measurement passes.
    - **Exception**: `SpeechBubblePanel`'s `NSHostingView` MUST retain default `sizingOptions` so the bubble window resizes dynamically to fit multi-line text (#61).
 5. **Isolate Polling `@ObservedObject`s to Leaf Subviews**:
    - Never attach `@ObservedObject var telemetryDashboard` (or any 1–5s polling service) directly to `MascotOverlayView` or `SpeechBubbleView` root properties. Subscribe inside small leaf views (`MascotCyberHUDContainerView` + `.equatable()`, `CarouselSpeechBubbleObserver`) so unchanged ticks never invalidate the mascot or speech bubble layout.
