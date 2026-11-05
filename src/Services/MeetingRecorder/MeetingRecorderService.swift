@@ -172,19 +172,18 @@ public final class MeetingRecorderService: ObservableObject {
         }
 
         let startDate = nowProvider()
-        let sessionID = MeetingFormatting.sessionFolderName(for: startDate)
-        let sessionDir = settingsStore.meetingsRootDirectoryURL.appendingPathComponent(sessionID, isDirectory: true)
-        let audioURL = sessionDir.appendingPathComponent("audio.m4a")
-        let sessionDirExisted = FileManager.default.fileExists(atPath: sessionDir.path)
+        var createdSessionDir: URL?
 
         do {
-            try FileManager.default.createDirectory(
-                at: sessionDir,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
+            let sessionDir = try Self.createSessionDirectory(
+                in: settingsStore.meetingsRootDirectoryURL,
+                baseName: MeetingFormatting.sessionFolderName(for: startDate)
             )
+            createdSessionDir = sessionDir
+            let sessionID = sessionDir.lastPathComponent
+            let audioURL = sessionDir.appendingPathComponent("audio.m4a")
             try await captureEngine.startCapture(
-                outputFileURL: audioURL,
+                sessionDirectoryURL: sessionDir,
                 captureMicrophone: captureMic,
                 captureSystemAudio: captureSys
             )
@@ -193,7 +192,10 @@ public final class MeetingRecorderService: ObservableObject {
             activeSessionDirectoryURL = sessionDir
             activeAudioFileURL = audioURL
             activeStartedAt = startDate
-            Self.restrictToOwner(audioURL)
+            Self.restrictToOwner(
+                sessionDir.appendingPathComponent(MeetingTrackWriter.micFileName),
+                sessionDir.appendingPathComponent(MeetingTrackWriter.systemFileName)
+            )
             activeDetectedApps = Self.detectRunningMeetingApps()
             activeCaptureWarning = nil
             failureDismissTask?.cancel()
@@ -204,8 +206,9 @@ public final class MeetingRecorderService: ObservableObject {
             statusMessage = "Recording meeting into \(sessionDir.lastPathComponent)..."
             startElapsedTimer()
         } catch {
-            if !sessionDirExisted {
-                try? FileManager.default.removeItem(at: sessionDir)
+            // Only the folder this attempt just created; an earlier recording's folder is never reused or removed
+            if let createdSessionDir {
+                try? FileManager.default.removeItem(at: createdSessionDir)
             }
             showFailure(error.localizedDescription)
         }
@@ -225,7 +228,6 @@ public final class MeetingRecorderService: ObservableObject {
         stopElapsedTimer()
         isRecording = false
         await captureEngine.stopCapture()
-        Self.restrictToOwner(audioURL)
 
         let endedAt = nowProvider()
         let duration = max(0, endedAt.timeIntervalSince(startedAt))
@@ -245,6 +247,18 @@ public final class MeetingRecorderService: ObservableObject {
             transcriptStatus: shouldTranscribe ? "pending" : "skipped"
         )
         Self.writeMetadata(metadata, to: metadataURL)
+
+        // Off the main actor; if quit's safety net cuts it short, mic.caf / system.caf stay intact
+        let trackURLs = [MeetingTrackWriter.micFileName, MeetingTrackWriter.systemFileName]
+            .map { sessionDir.appendingPathComponent($0) }
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try MeetingTrackMixer.mixTracks(trackURLs, into: audioURL)
+            }.value
+            Self.restrictToOwner(audioURL)
+        } catch {
+            warnings.append("Audio tracks were kept, but mixing them into audio.m4a failed: \(error.localizedDescription)")
+        }
         // Audio and metadata are final; transcription below never blocks quit or a new start's guard
         isStopping = false
 
@@ -401,6 +415,23 @@ public final class MeetingRecorderService: ObservableObject {
     private func stopElapsedTimer() {
         elapsedTimerTask?.cancel()
         elapsedTimerTask = nil
+    }
+
+    /// Claims a new session folder. A name already taken by an earlier recording gets `-2`, `-3`… instead.
+    static func createSessionDirectory(in root: URL, baseName: String) throws -> URL {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        var suffix = 1
+        while true {
+            let name = suffix == 1 ? baseName : "\(baseName)-\(suffix)"
+            let url = root.appendingPathComponent(name, isDirectory: true)
+            do {
+                // Without intermediates, creation fails if the folder exists, so claiming is atomic
+                try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+                return url
+            } catch CocoaError.fileWriteFileExists {
+                suffix += 1
+            }
+        }
     }
 
     /// Copies `transcript.txt` into the export folder as `<sessionID> transcript.txt`, adding ` (2)`, ` (3)`… instead of overwriting.

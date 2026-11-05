@@ -10,7 +10,7 @@ import XCTest
 final class MockMeetingAudioCaptureEngine: MeetingAudioCapturing, @unchecked Sendable {
     var startCallCount = 0
     var stopCallCount = 0
-    var lastOutputURL: URL?
+    var lastSessionDirectoryURL: URL?
     var lastCaptureMic = false
     var lastCaptureSystem = false
     var shouldThrowOnStart: Error?
@@ -19,7 +19,7 @@ final class MockMeetingAudioCaptureEngine: MeetingAudioCapturing, @unchecked Sen
     var onCaptureInterrupted: (@Sendable (String) -> Void)?
 
     func startCapture(
-        outputFileURL: URL,
+        sessionDirectoryURL: URL,
         captureMicrophone: Bool,
         captureSystemAudio: Bool
     ) async throws {
@@ -30,16 +30,19 @@ final class MockMeetingAudioCaptureEngine: MeetingAudioCapturing, @unchecked Sen
             throw error
         }
         startCallCount += 1
-        lastOutputURL = outputFileURL
+        lastSessionDirectoryURL = sessionDirectoryURL
         lastCaptureMic = captureMicrophone
         lastCaptureSystem = captureSystemAudio
 
-        // Write a valid 48kHz stereo AAC .m4a file so downstream readers see a real audio container
-        let mixer = try MeetingAudioStreamMixer(outputFileURL: outputFileURL)
+        // Write a real mic track, so the stop-time mix produces a valid audio.m4a
+        let writer = try MeetingTrackWriter(
+            fileURL: sessionDirectoryURL.appendingPathComponent(MeetingTrackWriter.micFileName),
+            sessionStartHostSeconds: 0
+        )
         if let buffer = Self.makeSineWaveBuffer(frequency: 440.0, frameCount: 4_800) {
-            mixer.appendMicrophoneBuffer(buffer)
+            writer.append(buffer, hostSeconds: nil)
         }
-        mixer.close()
+        writer.close()
     }
 
     func stopCapture() async {
@@ -55,7 +58,7 @@ final class MockMeetingAudioCaptureEngine: MeetingAudioCapturing, @unchecked Sen
         sampleRate: Double = 48_000,
         amplitude: Float = 0.6
     ) -> AVAudioPCMBuffer? {
-        let format = MeetingAudioStreamMixer.canonicalPCMFormat
+        let format = MeetingTrackWriter.canonicalPCMFormat
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount),
               let channels = buffer.floatChannelData else {
             return nil
@@ -391,6 +394,31 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertTrue(contents.isEmpty, "Failed start must not leave an empty session folder: \(contents)")
     }
 
+    func testSessionFolderCollisionGetsSuffixAndKeepsFirstRecording() async throws {
+        let clock = Date(timeIntervalSince1970: 1_762_340_000)
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        let service = makeService(captureEngine: captureEngine, nowProvider: { clock })
+
+        await service.startRecording()
+        await service.stopRecording(transcribe: false)
+        let first = try XCTUnwrap(service.lastCompletedResult)
+        let firstAudio = try Data(contentsOf: first.audioFileURL)
+        let firstMetadata = try Data(contentsOf: first.metadataFileURL)
+
+        // Same second, same folder name: the second recording must not reuse or clear the first folder
+        await service.startRecording()
+        await service.stopRecording(transcribe: false)
+        let second = try XCTUnwrap(service.lastCompletedResult)
+
+        let baseName = MeetingFormatting.sessionFolderName(for: clock)
+        XCTAssertEqual(first.sessionDirectoryURL.lastPathComponent, baseName)
+        XCTAssertEqual(second.sessionDirectoryURL.lastPathComponent, "\(baseName)-2")
+        XCTAssertEqual(second.sessionID, "\(baseName)-2")
+        XCTAssertEqual(try Data(contentsOf: first.audioFileURL), firstAudio)
+        XCTAssertEqual(try Data(contentsOf: first.metadataFileURL), firstMetadata)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.audioFileURL.path))
+    }
+
     func testTranscriptionAndCaptureFailuresAreSurfaced() async throws {
         let captureEngine = MockMeetingAudioCaptureEngine()
         var transcription = MockMeetingTranscriptionService()
@@ -424,7 +452,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         }
         service.markTranscriptionInterrupted()
 
-        let metadataURL = try XCTUnwrap(captureEngine.lastOutputURL).deletingLastPathComponent()
+        let metadataURL = try XCTUnwrap(captureEngine.lastSessionDirectoryURL)
             .appendingPathComponent("metadata.json")
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

@@ -412,7 +412,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         return true
     }
 
-    /// Quitting mid-recording would leave an unplayable `audio.m4a` and no `metadata.json`, so finalize first (#43).
+    /// Quitting mid-recording would leave unmixed tracks and no `metadata.json`, so finalize first (#43).
     public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard meetingRecorder.hasUnfinalizedRecording else { return .terminateNow }
         isAwaitingTerminationReply = true
