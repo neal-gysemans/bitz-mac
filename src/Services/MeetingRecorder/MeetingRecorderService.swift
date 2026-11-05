@@ -23,7 +23,8 @@ public final class MeetingRecorderService: ObservableObject {
     @Published public private(set) var isTranscribing: Bool = false
     @Published public private(set) var permissionState: MeetingPermissionState
     @Published public private(set) var lastCompletedResult: MeetingRecordingResult?
-    @Published public private(set) var isCompletionBubbleVisible: Bool = false
+    /// The meeting bubble on screen, nil when none (#43 D5).
+    @Published public private(set) var bubble: MeetingBubble?
     @Published public private(set) var statusMessage: String = "Ready to record meetings locally (transcribed on-device)."
 
     public let timerStore = MeetingRecordingTimerStore()
@@ -37,8 +38,15 @@ public final class MeetingRecorderService: ObservableObject {
     /// Two 16-bit tracks take ~1.4 GB per hour, plus the mix; refuse to start below this.
     static let minimumFreeBytesToRecord: Int64 = 2_000_000_000
 
-    /// Optional sound callback so Bitz chimes when recording starts/completes.
+    /// Chimes once when a recording starts and once when its audio is saved.
     public var onPlaySound: ((CyberSoundEvent) -> Void)?
+    /// OPEN SETTINGS on the failure bubble: the delegate opens Settings → Audio.
+    public var onOpenSettings: (() -> Void)?
+    /// One-shot delay before a bubble hides itself; tests inject one they release by hand.
+    var sleep: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
+    private(set) var bubbleHideTask: Task<Void, Never>?
+    static let recordingBubbleDuration: Duration = .seconds(5)
+    static let completionBubbleDuration: Duration = .seconds(45)
 
     private var elapsedTimerTask: Task<Void, Never>?
     private var activeSessionID: String?
@@ -46,14 +54,14 @@ public final class MeetingRecorderService: ObservableObject {
     private var activeStartedAt: Date?
     private var activeDetectedApps: [String] = []
     private var activeCaptureWarning: String?
+    /// Sources still recording; an interruption removes its source so the bubble says what is left.
+    private var activeSources: Set<MeetingCaptureSource> = []
     /// Synchronous guards set before the first `await`, so a double toggle can never start or stop twice.
     private var isStarting = false
     private var isStopping = false
-    private var failureDismissTask: Task<Void, Never>?
     /// The launch-recovery mix in progress; a starting recording cancels it so the two never compete for disk and CPU.
     private var recoveryMixTask: Task<Void, Never>?
     private var transcribingMetadata: (metadata: MeetingRecordingMetadata, url: URL)?
-    var failureBubbleDurationNanoseconds: UInt64 = 6_000_000_000
 
     private static let knownMeetingAppNames: Set<String> = [
         "zoom.us", "Zoom", "Microsoft Teams", "Slack", "FaceTime", "Discord",
@@ -80,14 +88,14 @@ public final class MeetingRecorderService: ObservableObject {
         self.nowProvider = nowProvider
         self.freeBytesProvider = freeBytesProvider
         self.onRevealURL = onRevealURL
-        self.captureEngine.onCaptureInterrupted = { [weak self] message in
-            Task { @MainActor in self?.handleCaptureInterruption(message) }
+        self.captureEngine.onCaptureInterrupted = { [weak self] source, message in
+            Task { @MainActor in self?.handleCaptureInterruption(source, message) }
         }
     }
 
     deinit {
         elapsedTimerTask?.cancel()
-        failureDismissTask?.cancel()
+        bubbleHideTask?.cancel()
     }
 
     /// True while capture is live or still being finalized, so quitting must wait for `finalizeForTermination()`.
@@ -97,30 +105,15 @@ public final class MeetingRecorderService: ObservableObject {
 
     // MARK: - Derived UI State
 
-    /// Whether the speech bubble currently shows an interactive Meeting Recorder action ("OPEN IN FINDER" / "DISMISS").
-    public var isInteractiveBubbleActive: Bool {
-        if case .completed = state, isCompletionBubbleVisible {
-            return true
-        }
+    /// Between Stop and the end of the mix.
+    public var isSaving: Bool {
+        if case .saving = state { return true }
         return false
     }
 
-    /// Ambient speech bubble text displayed while recording, transcribing, or showing completion status.
-    public var activeSpeechBubbleText: String? {
-        switch state {
-        case .idle:
-            return nil
-        case .recording:
-            return "🔴 Recording meeting (\(MeetingFormatting.formatDuration(timerStore.elapsedSeconds)))..."
-        case .transcribing:
-            return "✨ Meeting saved! Transcribing audio..."
-        case .completed(let result):
-            guard isCompletionBubbleVisible else { return nil }
-            return result.bubbleHeadline
-        case .failed(let message):
-            guard isCompletionBubbleVisible else { return nil }
-            return "⚠️ \(message)"
-        }
+    /// Disabled menu item shown instead of Start/Stop while the last recording is still being saved or transcribed.
+    public var busyMenuLabel: String? {
+        isSaving ? MeetingBubble.savingMenuLabel : isTranscribing ? MeetingBubble.transcribingMenuLabel : nil
     }
 
     public func refreshPermissions() {
@@ -158,7 +151,7 @@ public final class MeetingRecorderService: ObservableObject {
         let captureMic = settingsStore.captureMicrophone
         let captureSys = settingsStore.captureSystemAudio
         guard captureMic || captureSys else {
-            showFailure(MeetingRecorderError.noAudioSourcesEnabled.localizedDescription)
+            showFailure(MeetingBubble.noSourceText, message: MeetingRecorderError.noAudioSourcesEnabled.localizedDescription)
             return
         }
 
@@ -175,12 +168,16 @@ public final class MeetingRecorderService: ObservableObject {
             if captureSys && perms.screenAudio != .authorized {
                 msg += " Relaunch Bitz after granting Screen & System Audio Recording."
             }
-            showFailure(msg)
+            showFailure(MeetingBubble.needsPermissionText, detail: missing.joined(separator: " & "), message: msg)
             return
         }
 
         if let freeBytes = freeBytesProvider(settingsStore.meetingsRootDirectoryURL), freeBytes < Self.minimumFreeBytesToRecord {
-            showFailure("Not enough free disk space to record: Bitz needs about 2 GB free on the recordings drive.")
+            showFailure(
+                MeetingBubble.lowDiskText,
+                detail: "Bitz needs about 2 GB free on the recordings drive.",
+                message: "Not enough free disk space to record: Bitz needs about 2 GB free on the recordings drive."
+            )
             return
         }
 
@@ -209,19 +206,27 @@ public final class MeetingRecorderService: ObservableObject {
             )
             activeDetectedApps = Self.detectRunningMeetingApps()
             activeCaptureWarning = nil
-            failureDismissTask?.cancel()
+            activeSources = Set([captureMic ? .microphone : nil, captureSys ? .systemAudio : nil].compactMap { $0 })
             timerStore.elapsedSeconds = 0
-            isCompletionBubbleVisible = false
             isRecording = true
             state = .recording(sessionID: sessionID, startedAt: startDate, elapsedSeconds: 0)
             statusMessage = "Recording meeting into \(sessionDir.lastPathComponent)..."
+            // Shown briefly; the LED, headphones and menu bar REC stay for the whole recording
+            present(.recording, hideAfter: Self.recordingBubbleDuration)
+            onPlaySound?(.meetingRecordingStarted)
             startElapsedTimer()
         } catch {
             // Only the folder this attempt just created; an earlier recording's folder is never reused or removed
             if let createdSessionDir {
                 try? FileManager.default.removeItem(at: createdSessionDir)
             }
-            showFailure(error.localizedDescription)
+            let detail: String
+            if case .captureStartFailed(let reason) = error as? MeetingRecorderError {
+                detail = reason
+            } else {
+                detail = error.localizedDescription
+            }
+            showFailure(MeetingBubble.couldNotStartText, detail: detail, message: error.localizedDescription)
         }
     }
 
@@ -238,6 +243,9 @@ public final class MeetingRecorderService: ObservableObject {
         isStopping = true
         stopElapsedTimer()
         isRecording = false
+        state = .saving(sessionID: sessionID)
+        statusMessage = "Saving meeting into \(sessionDir.lastPathComponent)..."
+        present(.saving)
         await captureEngine.stopCapture()
 
         let endedAt = nowProvider()
@@ -248,7 +256,7 @@ public final class MeetingRecorderService: ObservableObject {
             : !permissionState.canTranscribe ? .speechRecognitionNotAllowed
             : nil
         let shouldTranscribe = transcribe && skipReason == nil
-        var warnings = [activeCaptureWarning].compactMap { $0 }
+        var warnings: [String] = []
 
         var metadata = MeetingRecordingMetadata(
             sessionID: sessionID,
@@ -286,12 +294,15 @@ public final class MeetingRecorderService: ObservableObject {
         Self.writeMetadata(metadata, to: metadataURL)
         // Audio and metadata are final; transcription below never blocks quit or a new start's guard
         isStopping = false
+        // Interruptions are accepted until here, so one reported while finalizing still reaches the result
+        warnings = [activeCaptureWarning].compactMap { $0 } + warnings
 
         let audioURL = Self.transcriptionAudioURL(in: sessionDir)
 
-        onPlaySound?(.charging)
+        onPlaySound?(.meetingRecordingSaved)
 
         var transcriptURLs: (txtURL: URL, jsonURL: URL)?
+        var transcriptError: String?
         if shouldTranscribe {
             isTranscribing = true
             transcriptURLs = await transcribeSession(
@@ -299,7 +310,8 @@ public final class MeetingRecorderService: ObservableObject {
                 audioURL: audioURL,
                 metadata: &metadata,
                 metadataURL: metadataURL,
-                warnings: &warnings
+                warnings: &warnings,
+                transcriptError: &transcriptError
             )
         }
 
@@ -312,15 +324,16 @@ public final class MeetingRecorderService: ObservableObject {
             transcriptJSONURL: transcriptURLs?.jsonURL,
             durationSeconds: duration,
             warning: warnings.isEmpty ? nil : warnings.joined(separator: " "),
-            transcriptSkipReason: skipReason
+            transcriptSkipReason: skipReason,
+            transcriptError: transcriptError
         ))
-        onPlaySound?(.allAgentsDone)
 
         activeSessionID = nil
         activeSessionDirectoryURL = nil
         activeStartedAt = nil
         activeDetectedApps = []
         activeCaptureWarning = nil
+        activeSources = []
     }
 
     /// Nothing is recording, stopping or transcribing, and there is a last recording to transcribe again (D6).
@@ -348,6 +361,7 @@ public final class MeetingRecorderService: ObservableObject {
         }
         var warnings: [String] = []
         var transcriptURLs: (txtURL: URL, jsonURL: URL)?
+        var transcriptError: String?
         if !permissionState.canTranscribe {
             isTranscribing = false
         } else if var metadata = Self.recoveryMetadata(at: metadataURL, sessionDir: sessionDir) {
@@ -356,11 +370,12 @@ public final class MeetingRecorderService: ObservableObject {
                 audioURL: audioURL,
                 metadata: &metadata,
                 metadataURL: metadataURL,
-                warnings: &warnings
+                warnings: &warnings,
+                transcriptError: &transcriptError
             )
         } else {
             isTranscribing = false
-            warnings.append("Transcript not saved: metadata.json could not be read.")
+            transcriptError = MeetingBubble.metadataUnreadableError
         }
         showCompletion(MeetingRecordingResult(
             sessionID: last.sessionID,
@@ -371,7 +386,8 @@ public final class MeetingRecorderService: ObservableObject {
             transcriptJSONURL: transcriptURLs?.jsonURL,
             durationSeconds: last.durationSeconds,
             warning: warnings.isEmpty ? nil : warnings.joined(separator: " "),
-            transcriptSkipReason: permissionState.canTranscribe ? nil : .speechRecognitionNotAllowed
+            transcriptSkipReason: permissionState.canTranscribe ? nil : .speechRecognitionNotAllowed,
+            transcriptError: transcriptError
         ))
     }
 
@@ -384,16 +400,19 @@ public final class MeetingRecorderService: ObservableObject {
 
     /// Transcribes `audioURL` into the session's transcript files (replacing earlier ones), copies the text to the export
     /// folder, and records the outcome in `metadata.json`. The caller sets `isTranscribing` before its first await.
+    /// No transcript at all sets `transcriptError`; a kept or partial one adds to `warnings`.
     private func transcribeSession(
         _ sessionDir: URL,
         audioURL: URL,
         metadata: inout MeetingRecordingMetadata,
         metadataURL: URL,
-        warnings: inout [String]
+        warnings: inout [String],
+        transcriptError: inout String?
     ) async -> (txtURL: URL, jsonURL: URL)? {
         let sessionID = sessionDir.lastPathComponent
         state = .transcribing(sessionID: sessionID, sessionDirectoryURL: sessionDir)
         statusMessage = "✨ Meeting saved! Transcribing audio on-device..."
+        present(.transcribing)
         transcribingMetadata = (metadata, metadataURL)
         defer {
             transcribingMetadata = nil
@@ -439,12 +458,12 @@ public final class MeetingRecorderService: ObservableObject {
         } catch {
             if hasPreviousTranscript {
                 // Metadata (status, locale, export path) still describes the kept transcript, so it is not rewritten
-                warnings.append("Transcribe Again failed — previous transcript kept: \(error.localizedDescription)")
+                warnings.append("\(MeetingBubble.previousTranscriptKeptWarning): \(error.localizedDescription)")
                 return (previousTxtURL, previousJSONURL)
             }
             metadata.transcriptStatus = "failed"
             Self.writeMetadata(metadata, to: metadataURL)
-            warnings.append("Transcript not saved: \(error.localizedDescription)")
+            transcriptError = error.localizedDescription
             return nil
         }
     }
@@ -452,13 +471,16 @@ public final class MeetingRecorderService: ObservableObject {
     private func showCompletion(_ result: MeetingRecordingResult) {
         lastCompletedResult = result
         state = .completed(result)
-        isCompletionBubbleVisible = true
+        present(.completion(for: result), hideAfter: Self.completionBubbleDuration)
         let folder = result.sessionDirectoryURL.lastPathComponent
         statusMessage = result.transcriptTextURL != nil
             ? "Saved \(result.audioFileURL.lastPathComponent) & on-device transcript to \(folder)."
             : "Saved \(result.audioFileURL.lastPathComponent) to \(folder)."
         if let reason = result.transcriptSkipReason {
-            statusMessage += " \(reason.rawValue)"
+            statusMessage += " Transcript skipped: \(reason.text)"
+        }
+        if let error = result.transcriptError {
+            statusMessage += " ⚠️ \(error)"
         }
         if let warning = result.warning {
             statusMessage += " ⚠️ \(warning)"
@@ -576,13 +598,30 @@ public final class MeetingRecorderService: ObservableObject {
             withIntermediateDirectories: true
         )
         onRevealURL(url)
-        isCompletionBubbleVisible = false
+        if bubble?.kind == .completion {
+            present(nil)
+        }
     }
 
-    public func dismissCompletionBubble() {
-        isCompletionBubbleVisible = false
+    public func dismissBubble() {
+        present(nil)
         if case .failed = state {
             state = .idle
+        }
+    }
+
+    /// A button on the meeting bubble.
+    public func perform(_ action: MeetingBubble.Action) {
+        switch action {
+        case .transcribeAgain:
+            Task { await transcribeAgain() }
+        case .openInFinder:
+            revealInFinder()
+        case .openSettings:
+            dismissBubble()
+            onOpenSettings?()
+        case .dismiss:
+            dismissBubble()
         }
     }
 
@@ -595,22 +634,33 @@ public final class MeetingRecorderService: ObservableObject {
 
     // MARK: - Internal Helpers
 
-    func handleCaptureInterruption(_ message: String) {
-        guard isRecording else { return }
+    /// Accepted while recording and while stopping (the warning reaches the result); only a live recording shows a bubble.
+    func handleCaptureInterruption(_ source: MeetingCaptureSource, _ message: String) {
+        guard isRecording || isStopping else { return }
         activeCaptureWarning = message
         statusMessage = "⚠️ \(message)"
+        guard isRecording else { return }
+        activeSources.remove(source)
+        present(.interruption(source, remaining: activeSources))
     }
 
-    /// Failure bubbles have no buttons, so they dismiss themselves (one-shot, nothing runs while idle).
-    private func showFailure(_ message: String) {
+    /// `text` is the short headline; `message` (the full cause) goes to `statusMessage`. Stays until dismissed.
+    private func showFailure(_ text: String, detail: String? = nil, message: String) {
         state = .failed(message)
         statusMessage = message
-        isCompletionBubbleVisible = true
-        failureDismissTask?.cancel()
-        failureDismissTask = Task { @MainActor [weak self, failureBubbleDurationNanoseconds] in
-            try? await Task.sleep(nanoseconds: failureBubbleDurationNanoseconds)
-            guard !Task.isCancelled, let self, case .failed = self.state else { return }
-            self.dismissCompletionBubble()
+        present(.failure(text, detail: detail))
+    }
+
+    /// Replaces the bubble; with `hideAfter` it hides itself once (one-shot task, nothing runs while idle).
+    private func present(_ newBubble: MeetingBubble?, hideAfter: Duration? = nil) {
+        bubbleHideTask?.cancel()
+        bubbleHideTask = nil
+        bubble = newBubble
+        guard let newBubble, let hideAfter else { return }
+        bubbleHideTask = Task { @MainActor [weak self, sleep] in
+            await sleep(hideAfter)
+            guard !Task.isCancelled, let self, self.bubble == newBubble else { return }
+            self.bubble = nil
         }
     }
 

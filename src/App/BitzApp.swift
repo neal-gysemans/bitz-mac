@@ -38,6 +38,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     public let meetingRecorder: MeetingRecorderService
     private var isAwaitingTerminationReply = false
     @Published public private(set) var menuBarTitle: String = "Bitz"
+    /// Red record glyph + "REC" in the status item while a meeting records; static, no per-second updates (#43 D5).
+    @Published public private(set) var isRecordingIndicatorVisible = false
     public private(set) var overlayPanels: [MascotOverlayPanel] = []
     public var overlayPanel: MascotOverlayPanel? { overlayPanels.first }
 
@@ -48,6 +50,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     nonisolated(unsafe) private var localKeyMonitor: Any?
     nonisolated(unsafe) private var globalKeyMonitor: Any?
     private var bubbleInteractivityCancellable: AnyCancellable?
+    private var recordingIndicatorCancellable: AnyCancellable?
     private var warningVisorCancellable: AnyCancellable?
     private var personalityTickCancellable: AnyCancellable?
     private var personalityEnabledCancellable: AnyCancellable?
@@ -191,12 +194,13 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             self?.agentMonitor.hookActionMessage = nil
             self?.agentMonitor.isHookActionError = false
         }
-        // An agent popup, pending approval, or completed meeting notice can show buttons on the speech bubble
-        self.bubbleInteractivityCancellable = Publishers.Merge4(
+        // An agent popup, pending approval, or meeting bubble can show buttons; a thermal warning hides the meeting bubble's
+        self.bubbleInteractivityCancellable = Publishers.Merge5(
             self.updateStore.$isSpeechBubbleAlertActive.map { _ in () },
             self.agentMonitor.$activePopup.map { _ in () },
             self.approvalStore.$activeRequest.map { _ in () },
-            self.meetingRecorder.$isCompletionBubbleVisible.map { _ in () }
+            self.meetingRecorder.$bubble.map { _ in () },
+            self.engine.$currentState.map { $0 == .overheating }.removeDuplicates().map { _ in () }
         )
         .receive(on: DispatchQueue.main)
         .sink { [weak self] in
@@ -206,6 +210,14 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         self.meetingRecorder.onPlaySound = { [weak self] event in
             self?.audioService.play(event, bypassCooldown: true)
         }
+        self.meetingRecorder.onOpenSettings = { [weak self] in
+            self?.showSettings(tab: .audio)
+        }
+        self.recordingIndicatorCancellable = self.meetingRecorder.$isRecording
+            .removeDuplicates()
+            .sink { [weak self] recording in
+                self?.isRecordingIndicatorVisible = recording
+            }
         // The engine only gets a flag, so agent policy stays in AgentMonitorService (R10)
         self.warningVisorCancellable = self.agentMonitor.$activeWarning
             .map { $0 != nil }
@@ -387,9 +399,17 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             }
             return
         }
+        // Personality pauses for the whole recording, so an old line does not come back once the start bubble hides
+        guard !meetingRecorder.isRecording else {
+            if engine.idleCommentaryText != nil {
+                engine.setIdleCommentaryText(nil)
+            }
+            return
+        }
         let isBubbleIdle = agentMonitor.activePopup == nil
             && !updateStore.isSpeechBubbleAlertActive
             && engine.activeSpeechBubbleText == nil
+            && meetingRecorder.bubble == nil
         guard isBubbleIdle else { return }
 
         Task { @MainActor [weak self] in
@@ -549,6 +569,11 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     // MARK: - Menu & Shortcut Actions
 
     @objc public func showSettingsWindow() {
+        showSettings(tab: nil)
+    }
+
+    /// With a `tab`, an already open window is switched to it (meeting failure bubble's OPEN SETTINGS → Audio).
+    public func showSettings(tab: SettingsTab?) {
         SettingsWindowManager.shared.showSettingsWindow(
             rootView: SettingsRootView(
                 engine: engine,
@@ -571,8 +596,10 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
                 personalitySettings: personalitySettings,
                 licensingService: licensingService,
                 meetingSettings: meetingSettings,
-                meetingRecorder: meetingRecorder
-            )
+                meetingRecorder: meetingRecorder,
+                initialTab: tab ?? .general
+            ),
+            replacingContent: tab != nil
         )
     }
 
@@ -1025,13 +1052,17 @@ struct BitzMenuBarContentView: View {
             }
             .keyboardShortcut("p", modifiers: [.command])
 
-            Button(meetingRecorder.isRecording ? "Stop Meeting Recording" : "Start Meeting Recording") {
-                Task {
-                    await meetingRecorder.toggleRecording()
+            if let busy = meetingRecorder.busyMenuLabel {
+                Button(busy) {}
+                    .disabled(true)
+            } else {
+                Button(meetingRecorder.isRecording ? "Stop Meeting Recording" : "Start Meeting Recording") {
+                    Task {
+                        await meetingRecorder.toggleRecording()
+                    }
                 }
+                .keyboardShortcut(meetingSettings.recordingHotkey.menuShortcut)
             }
-            .keyboardShortcut(meetingSettings.recordingHotkey.menuShortcut)
-            .disabled(meetingRecorder.isTranscribing)
 
             if let lastRecording = meetingRecorder.lastCompletedResult {
                 Button("Reveal Last Recording in Finder") {
@@ -1154,8 +1185,22 @@ public struct BitzApp: App {
 struct BitzMenuBarLabel: View {
     @ObservedObject var appDelegate: BitzAppDelegate
 
+    /// Non-template so the status item keeps it red (a SwiftUI `foregroundStyle` is dropped from menu bar labels).
+    private static let recordGlyph: NSImage = {
+        let image = NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "Recording")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [.systemRed])) ?? NSImage()
+        image.isTemplate = false
+        return image
+    }()
+
     var body: some View {
-        if appDelegate.menuBarTitle == "Bitz" {
+        if appDelegate.isRecordingIndicatorVisible {
+            HStack {
+                Image(nsImage: Self.recordGlyph)
+                Text("REC")
+            }
+            .accessibilityLabel("Bitz is recording a meeting")
+        } else if appDelegate.menuBarTitle == "Bitz" {
             Image(systemName: "cat.fill")
                 .accessibilityLabel("Bitz")
         } else {

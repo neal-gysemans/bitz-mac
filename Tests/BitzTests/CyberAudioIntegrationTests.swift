@@ -195,6 +195,15 @@ final class CyberAudioIntegrationTests: XCTestCase {
         XCTAssertFalse(checkMic.allowed)
         XCTAssertEqual(checkMic.reason, .callOrScreenSharingActive)
 
+        // Meeting recorder chimes are never muted by the call gate: the user is by definition in a call (#43 D5)
+        for chime in [CyberSoundEvent.meetingRecordingStarted, .meetingRecordingSaved] {
+            XCTAssertTrue(service.canPlay(chime, bypassCooldown: true).allowed, "\(chime)")
+        }
+        store.setEventEnabled(.meetingRecordingStarted, enabled: false)
+        XCTAssertEqual(service.canPlay(.meetingRecordingStarted).reason, .eventDisabled, "their own toggle still applies")
+        XCTAssertTrue(store.isEventEnabled(.meetingRecordingSaved))
+        store.setEventEnabled(.meetingRecordingStarted, enabled: true)
+
         // Disabling call suppression in settings allows playback during calls
         store.setCallSuppressionEnabled(false)
         let checkMicAllowed = service.canPlay(.burnout)

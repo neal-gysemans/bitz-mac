@@ -17,6 +17,8 @@ public final class CyberAudioSettingsStore: ObservableObject {
     public static let isChargingEnabledKey = "\(keyPrefix)isChargingEnabled"
     public static let isAgentChimeEnabledKey = "\(keyPrefix)isAgentChimeEnabled"
     public static let isAllDoneFanfareEnabledKey = "\(keyPrefix)isAllDoneFanfareEnabled"
+    public static let isMeetingStartChimeEnabledKey = "\(keyPrefix)isMeetingStartChimeEnabled"
+    public static let isMeetingSavedChimeEnabledKey = "\(keyPrefix)isMeetingSavedChimeEnabled"
     public static let isFocusDNDSuppressionEnabledKey = "\(keyPrefix)isFocusDNDSuppressionEnabled"
     // New key so the default-on value every earlier install persisted no longer applies (#95)
     public static let isCallSuppressionEnabledKey = "\(keyPrefix)isMicInUseSuppressionEnabled"
@@ -33,6 +35,8 @@ public final class CyberAudioSettingsStore: ObservableObject {
     @Published public private(set) var isChargingEnabled: Bool
     @Published public private(set) var isAgentChimeEnabled: Bool
     @Published public private(set) var isAllDoneFanfareEnabled: Bool
+    @Published public private(set) var isMeetingStartChimeEnabled: Bool
+    @Published public private(set) var isMeetingSavedChimeEnabled: Bool
     @Published public private(set) var isFocusDNDSuppressionEnabled: Bool
     @Published public private(set) var isCallSuppressionEnabled: Bool
 
@@ -66,6 +70,8 @@ public final class CyberAudioSettingsStore: ObservableObject {
         self.isChargingEnabled = Self.readBool(userDefaults, key: Self.isChargingEnabledKey, defaultVal: true)
         self.isAgentChimeEnabled = Self.readBool(userDefaults, key: Self.isAgentChimeEnabledKey, defaultVal: true)
         self.isAllDoneFanfareEnabled = Self.readBool(userDefaults, key: Self.isAllDoneFanfareEnabledKey, defaultVal: true)
+        self.isMeetingStartChimeEnabled = Self.readBool(userDefaults, key: Self.isMeetingStartChimeEnabledKey, defaultVal: true)
+        self.isMeetingSavedChimeEnabled = Self.readBool(userDefaults, key: Self.isMeetingSavedChimeEnabledKey, defaultVal: true)
         self.isFocusDNDSuppressionEnabled = Self.readBool(userDefaults, key: Self.isFocusDNDSuppressionEnabledKey, defaultVal: true)
         // Opt-in: any app holding the mic open (not just calls) would otherwise mute every sound (#95)
         self.isCallSuppressionEnabled = Self.readBool(userDefaults, key: Self.isCallSuppressionEnabledKey, defaultVal: false)
@@ -148,6 +154,18 @@ public final class CyberAudioSettingsStore: ObservableObject {
         onSettingsChanged?()
     }
 
+    public func setMeetingStartChimeEnabled(_ enabled: Bool) {
+        isMeetingStartChimeEnabled = enabled
+        userDefaults.set(enabled, forKey: Self.isMeetingStartChimeEnabledKey)
+        onSettingsChanged?()
+    }
+
+    public func setMeetingSavedChimeEnabled(_ enabled: Bool) {
+        isMeetingSavedChimeEnabled = enabled
+        userDefaults.set(enabled, forKey: Self.isMeetingSavedChimeEnabledKey)
+        onSettingsChanged?()
+    }
+
     public func setFocusDNDSuppressionEnabled(_ enabled: Bool) {
         isFocusDNDSuppressionEnabled = enabled
         userDefaults.set(enabled, forKey: Self.isFocusDNDSuppressionEnabledKey)
@@ -175,6 +193,10 @@ public final class CyberAudioSettingsStore: ObservableObject {
             return isAgentChimeEnabled
         case .allAgentsDone:
             return isAllDoneFanfareEnabled
+        case .meetingRecordingStarted:
+            return isMeetingStartChimeEnabled
+        case .meetingRecordingSaved:
+            return isMeetingSavedChimeEnabled
         }
     }
 
@@ -192,6 +214,10 @@ public final class CyberAudioSettingsStore: ObservableObject {
             setAgentChimeEnabled(enabled)
         case .allAgentsDone:
             setAllDoneFanfareEnabled(enabled)
+        case .meetingRecordingStarted:
+            setMeetingStartChimeEnabled(enabled)
+        case .meetingRecordingSaved:
+            setMeetingSavedChimeEnabled(enabled)
         }
     }
 }

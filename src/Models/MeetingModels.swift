@@ -233,10 +233,17 @@ public struct MeetingTranscript: Codable, Equatable, Sendable {
     }
 }
 
-/// Why a recording has no transcript although transcription did not fail; the raw value is the bubble text.
-public enum MeetingTranscriptSkipReason: String, Equatable, Sendable {
-    case speechRecognitionNotAllowed = "Audio saved. Transcript skipped: Speech Recognition not allowed — Settings → Audio."
-    case transcriptionTurnedOff = "Audio saved. Transcript skipped: transcription is turned off."
+/// Why a recording has no transcript although transcription did not fail.
+public enum MeetingTranscriptSkipReason: Equatable, Sendable {
+    case speechRecognitionNotAllowed
+    case transcriptionTurnedOff
+
+    public var text: String {
+        switch self {
+        case .speechRecognitionNotAllowed: return MeetingBubble.speechNotAllowedReason
+        case .transcriptionTurnedOff: return MeetingBubble.transcriptionOffReason
+        }
+    }
 }
 
 /// Summary of a completed meeting recording & transcription session (#43).
@@ -248,9 +255,11 @@ public struct MeetingRecordingResult: Equatable, Sendable {
     public let transcriptTextURL: URL?
     public let transcriptJSONURL: URL?
     public let durationSeconds: TimeInterval
-    /// Capture interruption or transcription failure the user must see (nil when everything succeeded).
+    /// Capture interruption, mix, export or partial-transcript problem the user must see (nil when everything succeeded).
     public let warning: String?
     public let transcriptSkipReason: MeetingTranscriptSkipReason?
+    /// Why transcription failed and no transcript exists (nil when it succeeded, was skipped or never ran).
+    public let transcriptError: String?
 
     public init(
         sessionID: String,
@@ -261,7 +270,8 @@ public struct MeetingRecordingResult: Equatable, Sendable {
         transcriptJSONURL: URL? = nil,
         durationSeconds: TimeInterval,
         warning: String? = nil,
-        transcriptSkipReason: MeetingTranscriptSkipReason? = nil
+        transcriptSkipReason: MeetingTranscriptSkipReason? = nil,
+        transcriptError: String? = nil
     ) {
         self.sessionID = sessionID
         self.sessionDirectoryURL = sessionDirectoryURL
@@ -272,16 +282,7 @@ public struct MeetingRecordingResult: Equatable, Sendable {
         self.durationSeconds = durationSeconds
         self.warning = warning
         self.transcriptSkipReason = transcriptSkipReason
-    }
-
-    public var bubbleHeadline: String {
-        if let transcriptSkipReason {
-            return "⚠️ \(transcriptSkipReason.rawValue)" + (warning.map { " \($0)" } ?? "")
-        }
-        if let warning {
-            return "⚠️ Meeting audio saved. \(warning)"
-        }
-        return transcriptTextURL != nil ? "✨ Meeting saved & transcribed!" : "✨ Meeting audio saved!"
+        self.transcriptError = transcriptError
     }
 }
 
@@ -289,6 +290,8 @@ public struct MeetingRecordingResult: Equatable, Sendable {
 public enum MeetingRecorderState: Equatable, Sendable {
     case idle
     case recording(sessionID: String, startedAt: Date, elapsedSeconds: Int)
+    /// Between Stop and the end of the mix: capture is closed, `audio.m4a` is being written.
+    case saving(sessionID: String)
     case transcribing(sessionID: String, sessionDirectoryURL: URL)
     case completed(MeetingRecordingResult)
     case failed(String)

@@ -291,6 +291,65 @@ final class SpeechBubblePanelTests: XCTestCase {
     }
 
     // Synchronous for the same reason as `testOnlyABubbleWithButtonsTakesClicks`
+    func testMeetingBubbleTakesClicksOnlyWithButtonsAndNotUnderAThermalWarning() throws {
+        let (defaults, cleanup) = createIsolatedDefaults()
+        defer { cleanup() }
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("bitz-panel-meeting-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let settings = MeetingSettingsStore(userDefaults: defaults)
+        settings.setMeetingsRootDirectoryURL(tempDir)
+        let checker = MockMeetingPermissionChecker(
+            state: MeetingPermissionState(microphone: .denied, screenAudio: .authorized, speechRecognition: .authorized)
+        )
+        let recorder = MeetingRecorderService(
+            settingsStore: settings,
+            captureEngine: MockMeetingAudioCaptureEngine(),
+            transcriptionService: MockMeetingTranscriptionService(),
+            permissionChecker: checker
+        )
+        let delegate = BitzAppDelegate(
+            telemetryProvider: MockTelemetryProvider(),
+            scaleStore: AvatarScaleStore(userDefaults: defaults),
+            opacityStore: AvatarOpacityStore(userDefaults: defaults),
+            positionStore: AvatarPositionStore(userDefaults: defaults),
+            displayStore: DisplayPreferenceStore(userDefaults: defaults),
+            updateStore: AppUpdateStore(userDefaults: defaults),
+            meetingRecorder: recorder,
+            userDefaults: defaults
+        )
+        delegate.setupOverlayPanel()
+        defer { delegate.overlayPanels.forEach { $0.close() } }
+        let bubble = try XCTUnwrap(delegate.overlayPanel).speechBubblePanel
+        XCTAssertTrue(bubble.ignoresMouseEvents)
+
+        // Failure bubble: OPEN SETTINGS + DISMISS
+        Task { await recorder.startRecording() }
+        XCTAssertTrue(spinRunLoop(until: { !bubble.ignoresMouseEvents }), "Failure bubble buttons must be clickable")
+        XCTAssertFalse(bubble.canBecomeKey)
+
+        // SYSTEM HOT outranks it, so its buttons are hidden and the panel is click-through again
+        delegate.engine.triggerThermalWarning(isOverheating: true)
+        XCTAssertTrue(spinRunLoop(until: { bubble.ignoresMouseEvents }), "No buttons on screen under a thermal warning")
+        if case .wellness(let text) = SpeechBubbleContent.current(
+            engine: delegate.engine,
+            agentMonitor: delegate.agentMonitor,
+            updateStore: delegate.updateStore,
+            telemetryDashboard: delegate.telemetryDashboard,
+            telemetrySettings: delegate.telemetrySettings,
+            meetingRecorder: recorder
+        ) {
+            XCTAssertEqual(text, WellnessPointEngine.thermalWarningText)
+        } else {
+            XCTFail("The thermal warning must outrank the meeting failure bubble")
+        }
+        delegate.engine.triggerThermalWarning(isOverheating: false)
+        XCTAssertTrue(spinRunLoop(until: { !bubble.ignoresMouseEvents }), "The failure bubble is back once it cools down")
+
+        recorder.dismissBubble()
+        XCTAssertTrue(spinRunLoop(until: { bubble.ignoresMouseEvents }), "Click-through right after DISMISS")
+    }
+
+    // Synchronous for the same reason as `testOnlyABubbleWithButtonsTakesClicks`
     func testWarningBubbleTakesClicksOnlyUntilAcknowledged() throws {
         let (defaults, cleanup) = createIsolatedDefaults()
         defer { cleanup() }

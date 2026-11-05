@@ -77,7 +77,7 @@ public struct AudioSettingsTabView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(meetingRecorder.isRecording ? .red : .accentColor)
-                    .disabled(meetingRecorder.isTranscribing)
+                    .disabled(meetingRecorder.busyMenuLabel != nil)
 
                     if let lastResult = meetingRecorder.lastCompletedResult {
                         Button {
@@ -275,8 +275,8 @@ public struct AudioSettingsTabView: View {
         if meetingRecorder.isRecording {
             return "Recording"
         }
-        if meetingRecorder.isTranscribing {
-            return "Transcribing"
+        if let busy = meetingRecorder.busyMenuLabel {
+            return busy
         }
         let hotkey = meetingSettings.recordingHotkey
         return hotkey == .off ? "Ready" : "Ready (\(hotkey.displayString))"
@@ -286,7 +286,7 @@ public struct AudioSettingsTabView: View {
         if meetingRecorder.isRecording {
             return .red
         }
-        if meetingRecorder.isTranscribing {
+        if meetingRecorder.busyMenuLabel != nil {
             return .orange
         }
         return .green
@@ -498,6 +498,10 @@ public struct AudioSettingsTabView: View {
             return "Ascending 8-bit victory fanfare when all agents finish"
         case .charging:
             return "Calm ascending blip when entering offline/break charging"
+        case .meetingRecordingStarted:
+            return "Blip when a meeting recording starts (plays even while in a call)"
+        case .meetingRecordingSaved:
+            return "Fanfare when a meeting recording is saved (plays even while in a call)"
         }
     }
 }

@@ -220,7 +220,7 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             return (false, .systemMuted)
         }
 
-        if settingsStore.isCallSuppressionEnabled && environmentDetector.isMicrophoneOrScreenCaptureActive() {
+        if !event.ignoresCallSuppression && settingsStore.isCallSuppressionEnabled && environmentDetector.isMicrophoneOrScreenCaptureActive() {
             return (false, .callOrScreenSharingActive)
         }
 

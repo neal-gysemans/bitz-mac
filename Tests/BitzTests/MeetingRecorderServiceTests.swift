@@ -20,7 +20,7 @@ final class MockMeetingAudioCaptureEngine: MeetingAudioCapturing, @unchecked Sen
     var trackFrameCount: AVAudioFrameCount = 4_800
     /// Puts a folder at audio.m4a, so the stop-time mix fails and the track is kept.
     var blocksMixOutput = false
-    var onCaptureInterrupted: (@Sendable (String) -> Void)?
+    var onCaptureInterrupted: (@Sendable (MeetingCaptureSource, String) -> Void)?
 
     func startCapture(
         sessionDirectoryURL: URL,
@@ -224,7 +224,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
         await service.startRecording()
         XCTAssertTrue(service.isRecording)
         XCTAssertEqual(captureEngine.startCallCount, 1)
-        XCTAssertEqual(service.activeSpeechBubbleText, "🔴 Recording meeting (00:00)...")
+        XCTAssertEqual(service.bubble, .recording)
+        XCTAssertEqual(playedSounds, [.meetingRecordingStarted])
 
         // Advance clock by 45 seconds and stop recording
         currentClock = currentClock.addingTimeInterval(45)
@@ -233,9 +234,9 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertFalse(service.isRecording)
         XCTAssertFalse(service.isTranscribing)
         XCTAssertEqual(captureEngine.stopCallCount, 1)
-        XCTAssertEqual(playedSounds, [.charging, .allAgentsDone])
-        XCTAssertTrue(service.isInteractiveBubbleActive)
-        XCTAssertEqual(service.activeSpeechBubbleText, "✨ Meeting saved & transcribed!")
+        XCTAssertEqual(playedSounds, [.meetingRecordingStarted, .meetingRecordingSaved], "each chime exactly once")
+        XCTAssertEqual(service.bubble?.text, MeetingBubble.savedAndTranscribedText)
+        XCTAssertEqual(service.bubble?.actions, [.openInFinder, .dismiss])
 
         let result = try XCTUnwrap(service.lastCompletedResult)
         XCTAssertEqual(result.durationSeconds, 45, accuracy: 0.01)
@@ -275,7 +276,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         // One-click reveal in Finder dismisses completion bubble and opens session directory
         service.revealInFinder()
         XCTAssertEqual(revealedURLs, [result.sessionDirectoryURL])
-        XCTAssertFalse(service.isInteractiveBubbleActive)
+        XCTAssertNil(service.bubble)
     }
 
     func testMissingPermissionsShowsGracefulErrorAndDoesNotStartCapture() async {
@@ -306,6 +307,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
         } else {
             XCTFail("Expected .failed state when Microphone permission is denied")
         }
+        XCTAssertEqual(service.bubble, .failure(MeetingBubble.needsPermissionText, detail: "Microphone"))
+        XCTAssertEqual(service.bubble?.actions, [.openSettings, .dismiss])
     }
 
     // MARK: - Recording lifecycle and failure handling
@@ -398,17 +401,240 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(meta.transcriptStatus, "skipped")
     }
 
-    func testFailureBubbleAutoDismisses() async throws {
-        let captureEngine = MockMeetingAudioCaptureEngine()
-        let service = makeService(captureEngine: captureEngine, microphone: .denied)
-        service.failureBubbleDurationNanoseconds = 20_000_000
+    func testFailureBubbleStaysUntilDismissedAndOpenSettingsOpensAudioSettings() async throws {
+        let sleeper = ManualSleeper()
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), microphone: .denied)
+        service.sleep = sleeper.sleep
+        var openedSettings = 0
+        service.onOpenSettings = { openedSettings += 1 }
 
         await service.startRecording()
-        XCTAssertNotNil(service.activeSpeechBubbleText)
+        XCTAssertEqual(service.bubble?.kind, .failure)
+        XCTAssertNil(service.bubbleHideTask, "no auto-dismiss is scheduled")
+        XCTAssertTrue(sleeper.requested.isEmpty)
 
-        try await Task.sleep(nanoseconds: 200_000_000)
-        XCTAssertNil(service.activeSpeechBubbleText)
+        service.perform(.openSettings)
+        XCTAssertEqual(openedSettings, 1)
+        XCTAssertNil(service.bubble)
         XCTAssertEqual(service.state, .idle)
+
+        await service.startRecording()
+        service.perform(.dismiss)
+        XCTAssertNil(service.bubble)
+        XCTAssertEqual(openedSettings, 1)
+    }
+
+    func testFailureTextsAreSingleClauseHeadlines() async throws {
+        let noSource = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        noSource.settingsStore.setCaptureMicrophone(false)
+        noSource.settingsStore.setCaptureSystemAudio(false)
+        await noSource.startRecording()
+        XCTAssertEqual(noSource.bubble?.text, MeetingBubble.noSourceText)
+        noSource.settingsStore.setCaptureMicrophone(true)
+        noSource.settingsStore.setCaptureSystemAudio(true)
+
+        let full = makeService(captureEngine: MockMeetingAudioCaptureEngine(), freeBytes: 1_000)
+        await full.startRecording()
+        XCTAssertEqual(full.bubble?.text, MeetingBubble.lowDiskText)
+
+        let broken = MockMeetingAudioCaptureEngine()
+        broken.shouldThrowOnStart = MeetingRecorderError.captureStartFailed("No active display found.")
+        let failing = makeService(captureEngine: broken)
+        await failing.startRecording()
+        XCTAssertEqual(failing.bubble?.text, MeetingBubble.couldNotStartText)
+        XCTAssertEqual(failing.bubble?.detail, "No active display found.", "no stacked \"Could not start audio capture:\" prefix")
+        XCTAssertEqual(failing.statusMessage, "Could not start audio capture: No active display found.")
+    }
+
+    // MARK: - Bubble visibility and timing (D5)
+
+    func testRecordingBubbleHidesAfterFiveSecondsAndCompletionAfterFortyFive() async throws {
+        let sleeper = ManualSleeper()
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        service.sleep = sleeper.sleep
+
+        await service.startRecording()
+        XCTAssertEqual(service.bubble, .recording)
+        await sleeper.waitForRequests(1)
+        XCTAssertEqual(sleeper.requested, [.seconds(5)])
+        sleeper.releaseAll()
+        await service.bubbleHideTask?.value
+        XCTAssertNil(service.bubble, "the start bubble hides; LED and menu bar REC stay")
+        XCTAssertTrue(service.isRecording)
+
+        await service.stopRecording()
+        XCTAssertEqual(service.bubble?.kind, .completion)
+        await sleeper.waitForRequests(2)
+        XCTAssertEqual(sleeper.requested.last, .seconds(45))
+        sleeper.releaseAll()
+        await service.bubbleHideTask?.value
+        XCTAssertNil(service.bubble)
+    }
+
+    func testANewBubbleCancelsTheOldOnesAutoHide() async throws {
+        let sleeper = ManualSleeper()
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        service.sleep = sleeper.sleep
+
+        await service.startRecording()
+        await sleeper.waitForRequests(1)
+        service.handleCaptureInterruption(.microphone, "Microphone stopped after an audio device change: gone")
+        sleeper.releaseAll()
+        await Task.yield()
+        XCTAssertEqual(service.bubble?.kind, .interruption, "the 5 s timer of the start bubble must not hide the warning")
+        XCTAssertNil(service.bubbleHideTask, "an interruption stays until dismissed")
+        await service.stopRecording(transcribe: false)
+    }
+
+    func testSavingStateBetweenStopAndMix() async throws {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        captureEngine.stopDelayNanoseconds = 50_000_000
+        let service = makeService(captureEngine: captureEngine)
+        await service.startRecording()
+
+        let stop = Task { await service.stopRecording() }
+        while captureEngine.stopCallCount == 0 {
+            await Task.yield()
+        }
+        XCTAssertTrue(service.isSaving)
+        XCTAssertFalse(service.isRecording)
+        XCTAssertEqual(service.bubble, .saving)
+        XCTAssertEqual(service.busyMenuLabel, MeetingBubble.savingMenuLabel)
+
+        // The hotkey during saving neither starts a recording nor drops the saving bubble
+        await service.toggleRecording()
+        XCTAssertEqual(captureEngine.startCallCount, 1)
+        XCTAssertEqual(service.bubble, .saving)
+        await stop.value
+        XCTAssertNil(service.busyMenuLabel)
+    }
+
+    func testTranscribingShowsBusyMenuLabel() async throws {
+        var transcription = MockMeetingTranscriptionService()
+        transcription.delayNanoseconds = 100_000_000
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), transcription: transcription)
+        await service.startRecording()
+        let stop = Task { await service.stopRecording() }
+        while !service.isTranscribing {
+            await Task.yield()
+        }
+        XCTAssertEqual(service.busyMenuLabel, MeetingBubble.transcribingMenuLabel)
+        XCTAssertEqual(service.bubble, .transcribing)
+        await stop.value
+    }
+
+    func testInterruptionsPickTheirTextAndAreAcceptedWhileStopping() async throws {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        let service = makeService(captureEngine: captureEngine)
+        await service.startRecording()
+
+        service.handleCaptureInterruption(.microphone, "Microphone stopped after an audio device change: unplugged")
+        XCTAssertEqual(service.bubble?.text, MeetingBubble.micLostSystemContinuesText)
+        XCTAssertEqual(service.bubble?.actions, [.dismiss])
+        XCTAssertTrue(service.statusMessage.contains("unplugged"))
+        service.handleCaptureInterruption(.systemAudio, "System audio capture stopped: gone")
+        XCTAssertEqual(service.bubble?.text, MeetingBubble.systemLostNothingLeftText, "the mic already dropped")
+
+        // Reported while finalizing: no bubble over "Saving…", but the warning reaches the result
+        captureEngine.stopDelayNanoseconds = 50_000_000
+        let stop = Task { await service.stopRecording(transcribe: false) }
+        while captureEngine.stopCallCount == 0 {
+            await Task.yield()
+        }
+        service.handleCaptureInterruption(.storage, "Could not write meeting audio: disk full")
+        XCTAssertEqual(service.bubble, .saving)
+        await stop.value
+        XCTAssertEqual(service.lastCompletedResult?.warning, "Could not write meeting audio: disk full")
+
+        // Idle: ignored
+        service.handleCaptureInterruption(.microphone, "late")
+        XCTAssertFalse(service.statusMessage.contains("late"))
+
+        let micOnly = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        micOnly.settingsStore.setCaptureSystemAudio(false)
+        await micOnly.startRecording()
+        micOnly.handleCaptureInterruption(.microphone, "gone")
+        XCTAssertEqual(micOnly.bubble?.text, MeetingBubble.micLostNothingLeftText)
+        micOnly.handleCaptureInterruption(.storage, "disk")
+        XCTAssertEqual(micOnly.bubble?.text, MeetingBubble.storageFailedText)
+        await micOnly.stopRecording(transcribe: false)
+        micOnly.settingsStore.setCaptureSystemAudio(true)
+    }
+
+    // MARK: - Delegate wiring (D5)
+
+    func testMenuBarRecIndicatorFollowsRecording() async throws {
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        let delegate = BitzAppDelegate(meetingSettings: service.settingsStore, meetingRecorder: service, userDefaults: defaults)
+        XCTAssertFalse(delegate.isRecordingIndicatorVisible)
+
+        await service.startRecording()
+        XCTAssertTrue(delegate.isRecordingIndicatorVisible)
+        service.dismissBubble()
+        XCTAssertTrue(delegate.isRecordingIndicatorVisible, "REC stays after the start bubble hides")
+
+        await service.stopRecording(transcribe: false)
+        XCTAssertFalse(delegate.isRecordingIndicatorVisible)
+    }
+
+    func testPersonalityPausesWhileRecordingOrAMeetingBubbleShows() async throws {
+        let personalitySettings = PersonalitySettingsStore(userDefaults: defaults)
+        personalitySettings.setEnabled(true)
+        let generator = StubCommentaryGenerator(stubbedResult: .success("Meow during your meeting"))
+        let personality = PersonalityService(primaryGenerator: generator, fallbackGenerator: generator, settingsStore: personalitySettings)
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        let delegate = BitzAppDelegate(
+            personalitySettings: personalitySettings,
+            personalityService: personality,
+            meetingSettings: service.settingsStore,
+            meetingRecorder: service,
+            userDefaults: defaults
+        )
+        // Let the launch-time tick from enabling personality finish first
+        for _ in 0..<40 where delegate.engine.idleCommentaryText == nil {
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertNotNil(delegate.engine.idleCommentaryText)
+        generator.lastGeneratedContext = nil
+
+        await service.startRecording()
+        service.dismissBubble() // the start bubble is gone; the recording still pauses commentary
+        delegate.triggerPersonalityTick(bypassRateLimit: true)
+        XCTAssertNil(delegate.engine.idleCommentaryText, "the old line is cleared for the recording")
+        await service.stopRecording(transcribe: false)
+        XCTAssertEqual(service.bubble?.kind, .completion)
+        delegate.triggerPersonalityTick(bypassRateLimit: true)
+        for _ in 0..<4 { await Task.yield() }
+        XCTAssertNil(generator.lastGeneratedContext, "no commentary is generated while recording or under a meeting bubble")
+        XCTAssertNil(delegate.engine.idleCommentaryText)
+
+        // Control: once the bubble is dismissed, the same tick produces commentary again
+        service.dismissBubble()
+        delegate.triggerPersonalityTick(bypassRateLimit: true)
+        for _ in 0..<40 where delegate.engine.idleCommentaryText == nil {
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertNotNil(generator.lastGeneratedContext)
+        XCTAssertEqual(delegate.engine.idleCommentaryText, "Meow during your meeting")
+    }
+
+    func testBubblePriorityLadder() {
+        let ladder: [MeetingBubble.Priority] = [.thermal, .failure, .interruption, .recording, .progress, .completion, .personality]
+        XCTAssertEqual(ladder, ladder.sorted(by: >))
+        let result = MeetingRecordingResult(
+            sessionID: "s", sessionDirectoryURL: tempDir, audioFileURL: tempDir, metadataFileURL: tempDir, durationSeconds: 1
+        )
+        XCTAssertEqual(MeetingBubble.failure(MeetingBubble.needsPermissionText).priority, .failure)
+        XCTAssertEqual(MeetingBubble.interruption(.microphone, remaining: [.systemAudio]).priority, .interruption)
+        XCTAssertEqual(MeetingBubble.recording.priority, .recording)
+        XCTAssertEqual(MeetingBubble.saving.priority, .progress)
+        XCTAssertEqual(MeetingBubble.transcribing.priority, .progress)
+        XCTAssertEqual(MeetingBubble.completion(for: result).priority, .completion)
+        // Only bubbles with buttons take clicks
+        XCTAssertFalse(MeetingBubble.recording.isInteractive)
+        XCTAssertFalse(MeetingBubble.saving.isInteractive)
+        XCTAssertTrue(MeetingBubble.failure("x").isInteractive)
+        XCTAssertTrue(MeetingBubble.completion(for: result).isInteractive)
     }
 
     func testFailedStartRemovesEmptySessionFolder() async throws {
@@ -454,16 +680,17 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let service = makeService(captureEngine: captureEngine, transcription: transcription)
 
         await service.startRecording()
-        service.handleCaptureInterruption("System audio capture stopped: test")
+        service.handleCaptureInterruption(.systemAudio, "System audio capture stopped: test")
         XCTAssertTrue(service.statusMessage.contains("System audio capture stopped"))
+        XCTAssertEqual(service.bubble?.text, MeetingBubble.systemLostMicContinuesText)
         await service.stopRecording()
 
         let result = try XCTUnwrap(service.lastCompletedResult)
-        let bubble = try XCTUnwrap(service.activeSpeechBubbleText)
-        XCTAssertTrue(bubble.hasPrefix("⚠️"))
-        XCTAssertTrue(bubble.contains("System audio capture stopped"))
-        XCTAssertTrue(bubble.contains("timed out"))
-        XCTAssertEqual(result.bubbleHeadline, bubble)
+        let bubble = try XCTUnwrap(service.bubble)
+        XCTAssertEqual(bubble.text, MeetingBubble.transcriptFailedText, "one short clause, no stacked prefixes")
+        XCTAssertEqual(bubble.detail, "Speech transcription timed out after 60 s. System audio capture stopped: test")
+        XCTAssertEqual(bubble.actions, [.transcribeAgain, .openInFinder, .dismiss])
+        XCTAssertEqual(MeetingBubble.completion(for: result), bubble)
         XCTAssertTrue(service.statusMessage.contains("timed out"))
     }
 
@@ -498,7 +725,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
         await turnedOff.stopRecording()
         let offResult = try XCTUnwrap(turnedOff.lastCompletedResult)
         XCTAssertEqual(offResult.transcriptSkipReason, .transcriptionTurnedOff)
-        XCTAssertEqual(turnedOff.activeSpeechBubbleText, "⚠️ Audio saved. Transcript skipped: transcription is turned off.")
+        XCTAssertEqual(turnedOff.bubble?.text, MeetingBubble.transcriptSkippedText)
+        XCTAssertEqual(turnedOff.bubble?.detail, "Transcription is turned off.")
         XCTAssertEqual(try decodeMetadata(offResult.metadataFileURL).transcriptStatus, "skipped")
 
         let notAllowed = makeService(captureEngine: MockMeetingAudioCaptureEngine(), speechRecognition: .denied)
@@ -507,11 +735,9 @@ final class MeetingRecorderServiceTests: XCTestCase {
         await notAllowed.startRecording()
         await notAllowed.stopRecording()
         XCTAssertEqual(notAllowed.lastCompletedResult?.transcriptSkipReason, .speechRecognitionNotAllowed)
-        XCTAssertEqual(
-            notAllowed.activeSpeechBubbleText,
-            "⚠️ Audio saved. Transcript skipped: Speech Recognition not allowed — Settings → Audio."
-        )
-        XCTAssertTrue(notAllowed.statusMessage.contains("Speech Recognition not allowed"))
+        XCTAssertEqual(notAllowed.bubble?.text, MeetingBubble.transcriptSkippedText)
+        XCTAssertEqual(notAllowed.bubble?.detail, "Speech Recognition is not allowed — Settings → Audio.")
+        XCTAssertTrue(notAllowed.statusMessage.contains("Speech Recognition is not allowed"))
     }
 
     func testTranscribeAgainRewritesTranscriptUpdatesMetadataAndReexports() async throws {
@@ -545,8 +771,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(again.transcriptTextURL, staleTxt)
         XCTAssertTrue(try String(contentsOf: staleTxt, encoding: .utf8).contains("[00:00] Hello team."))
         XCTAssertFalse(service.isTranscribing)
-        XCTAssertTrue(service.isInteractiveBubbleActive)
-        XCTAssertEqual(service.activeSpeechBubbleText, "✨ Meeting saved & transcribed!")
+        XCTAssertEqual(service.bubble?.text, MeetingBubble.savedAndTranscribedText)
 
         let meta = try decodeMetadata(again.metadataFileURL)
         XCTAssertEqual(meta.transcriptStatus, "completed")
@@ -739,7 +964,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertNotNil(result.transcriptTextURL, "The transcript itself is still saved")
         XCTAssertTrue(result.warning?.contains("copy to export folder failed") ?? false)
         XCTAssertTrue(service.statusMessage.contains("copy to export folder failed"))
-        XCTAssertTrue(result.bubbleHeadline.hasPrefix("⚠️"))
+        XCTAssertEqual(MeetingBubble.completion(for: result).text, MeetingBubble.savedWithWarningText)
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -1047,6 +1272,41 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(MeetingTrackMixer.audioFileNames(in: orphan), ["mic.caf"])
         XCTAssertEqual(MeetingTrackMixer.audioFileNames(in: active), ["mic.caf"], "the live session is never touched")
         await service.stopRecording(transcribe: false)
+    }
+}
+
+/// Stands in for `Task.sleep` in bubble auto-hide: records each requested delay and returns only when released.
+final class ManualSleeper: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var durations: [Duration] = []
+
+    var requested: [Duration] { lock.withLock { durations } }
+
+    var sleep: @Sendable (Duration) async -> Void {
+        { [self] duration in
+            await withCheckedContinuation { continuation in
+                lock.withLock {
+                    durations.append(duration)
+                    waiting.append(continuation)
+                }
+            }
+        }
+    }
+
+    func releaseAll() {
+        let released = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            defer { waiting.removeAll() }
+            return waiting
+        }
+        released.forEach { $0.resume() }
+    }
+
+    /// Yields until `count` delays were requested (the hide task runs on the main actor after the caller yields).
+    func waitForRequests(_ count: Int) async {
+        while requested.count < count {
+            await Task.yield()
+        }
     }
 }
 

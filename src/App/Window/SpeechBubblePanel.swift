@@ -82,8 +82,8 @@ public final class SpeechBubblePanel: NSPanel {
             return true
         case .agentPopup(let popup):
             return popup.kind == .warning || popup.kind == .needsApproval
-        case .meetingRecorder(_, let interactive):
-            return interactive
+        case .meeting(let bubble):
+            return bubble.isInteractive
         case .wellness, .carousel:
             return false
         }

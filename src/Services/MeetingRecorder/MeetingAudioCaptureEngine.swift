@@ -24,7 +24,7 @@ public enum MeetingRecorderError: Error, LocalizedError, Equatable, Sendable {
 
 public protocol MeetingAudioCapturing: AnyObject, Sendable {
     /// Called from any thread when live capture breaks mid-recording (device change, stream stop, write failure).
-    var onCaptureInterrupted: (@Sendable (String) -> Void)? { get set }
+    var onCaptureInterrupted: (@Sendable (MeetingCaptureSource, String) -> Void)? { get set }
     /// Writes `mic.caf` and/or `system.caf` (`MeetingTrackWriter`) into `sessionDirectoryURL`.
     func startCapture(
         sessionDirectoryURL: URL,
@@ -50,12 +50,12 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
     private var micWriter: MeetingTrackWriter?
     private var systemWriter: MeetingTrackWriter?
     private var configurationObserver: NSObjectProtocol?
-    private var interruptionHandler: (@Sendable (String) -> Void)?
+    private var interruptionHandler: (@Sendable (MeetingCaptureSource, String) -> Void)?
     private let sampleQueue = DispatchQueue(label: "com.bitz.meetingrecorder.audio", qos: .userInitiated)
     /// Serializes device-change restarts with teardown, so a restart can never revive a stopped engine.
     private let micQueue = DispatchQueue(label: "com.bitz.meetingrecorder.mic", qos: .userInitiated)
 
-    public var onCaptureInterrupted: (@Sendable (String) -> Void)? {
+    public var onCaptureInterrupted: (@Sendable (MeetingCaptureSource, String) -> Void)? {
         get { lock.withLock { interruptionHandler } }
         set { lock.withLock { interruptionHandler = newValue } }
     }
@@ -76,7 +76,7 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
         // Shared origin of both tracks' timelines
         let sessionStart = MeetingTrackWriter.hostSecondsNow()
         let onWriteError: @Sendable (String) -> Void = { [weak self] message in
-            self?.onCaptureInterrupted?(message)
+            self?.onCaptureInterrupted?(.storage, message)
         }
 
         do {
@@ -226,13 +226,13 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
         do {
             try startMicrophone(on: engine)
         } catch {
-            onCaptureInterrupted?("Microphone stopped after an audio device change: \(error.localizedDescription)")
+            onCaptureInterrupted?(.microphone, "Microphone stopped after an audio device change: \(error.localizedDescription)")
         }
     }
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
         guard lock.withLock({ self.scStream === stream }) else { return }
-        onCaptureInterrupted?("System audio capture stopped: \(error.localizedDescription)")
+        onCaptureInterrupted?(.systemAudio, "System audio capture stopped: \(error.localizedDescription)")
     }
 
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {

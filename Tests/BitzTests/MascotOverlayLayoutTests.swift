@@ -179,8 +179,58 @@ final class MascotOverlayLayoutTests: XCTestCase {
         try assertBubbleFitsItsWindow(recordingBubble)
 
         await recorder.stopRecording()
-        XCTAssertTrue(recorder.isInteractiveBubbleActive)
+        XCTAssertEqual(recorder.bubble?.kind, .completion)
         try assertBubbleFitsItsWindow(recordingBubble)
+    }
+
+    /// D5: the failure bubble (headline, detail, OPEN SETTINGS + DISMISS) and the interruption warning fit their windows.
+    func testFailureAndInterruptionMeetingBubblesFitTheirWindows() async throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        fixture.scaleStore.setScale(AvatarScaleStore.maxScaleFactor)
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bitz-layout-meeting-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let meetingSettings = MeetingSettingsStore(userDefaults: defaults)
+        meetingSettings.setMeetingsRootDirectoryURL(tempDir)
+        let denied = MeetingRecorderService(
+            settingsStore: meetingSettings,
+            captureEngine: MockMeetingAudioCaptureEngine(),
+            transcriptionService: MockMeetingTranscriptionService(),
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(microphone: .denied, screenAudio: .denied, speechRecognition: .authorized)
+            )
+        )
+        await denied.startRecording()
+        XCTAssertEqual(denied.bubble?.actions, [.openSettings, .dismiss])
+        try assertBubbleFitsItsWindow(bubbleView(fixture, recorder: denied))
+
+        let recorder = MeetingRecorderService(
+            settingsStore: meetingSettings,
+            captureEngine: MockMeetingAudioCaptureEngine(),
+            transcriptionService: MockMeetingTranscriptionService(),
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .authorized)
+            )
+        )
+        await recorder.startRecording()
+        recorder.handleCaptureInterruption(.microphone, "Microphone stopped after an audio device change: unplugged")
+        XCTAssertEqual(recorder.bubble?.text, MeetingBubble.micLostSystemContinuesText)
+        try assertBubbleFitsItsWindow(bubbleView(fixture, recorder: recorder))
+        await recorder.stopRecording(transcribe: false)
+    }
+
+    private func bubbleView(_ fixture: OverlayFixture, recorder: MeetingRecorderService) -> SpeechBubbleView {
+        SpeechBubbleView(
+            engine: fixture.engine,
+            scaleStore: fixture.scaleStore,
+            agentMonitor: fixture.agentMonitor,
+            updateStore: fixture.updateStore,
+            telemetryDashboard: fixture.telemetryDashboard,
+            telemetrySettings: fixture.telemetrySettings,
+            meetingRecorder: recorder
+        )
     }
 
     /// D6: a failed transcript adds the TRANSCRIBE AGAIN row; the bubble must still fit its window.
@@ -208,7 +258,7 @@ final class MascotOverlayLayoutTests: XCTestCase {
         await recorder.startRecording()
         await recorder.stopRecording()
         XCTAssertNil(recorder.lastCompletedResult?.transcriptTextURL, "the TRANSCRIBE AGAIN row is shown")
-        XCTAssertTrue(recorder.isInteractiveBubbleActive)
+        XCTAssertEqual(recorder.bubble?.actions, [.transcribeAgain, .openInFinder, .dismiss])
 
         let bubble = SpeechBubbleView(
             engine: fixture.engine,

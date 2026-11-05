@@ -77,8 +77,10 @@ public struct SettingsRootView: View {
         personalitySettings: PersonalitySettingsStore? = nil,
         licensingService: LicensingService? = nil,
         meetingSettings: MeetingSettingsStore? = nil,
-        meetingRecorder: MeetingRecorderService? = nil
+        meetingRecorder: MeetingRecorderService? = nil,
+        initialTab: SettingsTab = .general
     ) {
+        self._selectedTab = State(initialValue: initialTab)
         self.interactionSettings = interactionSettings
         self.inboxDirectoryURL = inboxDirectoryURL
         self.paletteStore = paletteStore
