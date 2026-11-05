@@ -728,8 +728,9 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     nonisolated static func recoverSession(_ sessionDir: URL) {
-        // A crash's stale lock; nobody held it at the scan, and a session folder never gets a new recording
-        try? FileManager.default.removeItem(at: sessionDir.appendingPathComponent(MeetingSessionLock.fileName))
+        // Another instance recovering the same session holds it. Releasing removes the lock file, a crash's stale one included
+        guard let lock = MeetingSessionLock(sessionDirectory: sessionDir, wait: false) else { return }
+        defer { lock.release() }
         let metadataURL = sessionDir.appendingPathComponent("metadata.json")
         // Read before the mix deletes the tracks the derived metadata is measured from
         let metadata = recoveryMetadata(at: metadataURL, sessionDir: sessionDir)
@@ -1014,12 +1015,19 @@ final class MeetingSessionLock {
     private let path: String
     private var fd: Int32
 
-    /// nil when the file can't be created. On a volume without `flock` the file is kept anyway; probes there fall back.
-    init?(sessionDirectory: URL) {
+    /// nil when the file can't be created, or with `wait: false` (recovery) when another process holds the lock. The
+    /// recording waits instead: a `state(of:)` probe holds it for microseconds. On a volume without `flock` the file is
+    /// kept anyway; probes there fall back.
+    init?(sessionDirectory: URL, wait: Bool = true) {
         path = sessionDirectory.appendingPathComponent(Self.fileName).path
         fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
         guard fd >= 0 else { return nil }
-        _ = flock(fd, LOCK_EX | LOCK_NB)
+        guard flock(fd, LOCK_EX | LOCK_NB) != 0, errno == EWOULDBLOCK else { return }
+        if wait, flock(fd, LOCK_EX) == 0 { return }
+        // Not ours: close without unlinking the holder's file
+        close(fd)
+        fd = -1
+        return nil
     }
 
     deinit { release() }

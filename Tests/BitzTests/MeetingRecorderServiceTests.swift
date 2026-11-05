@@ -1769,6 +1769,44 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(service.lastCompletedResult?.sessionDirectoryURL.lastPathComponent, session.lastPathComponent)
     }
 
+    /// Two instances launching at once: the second recovery of a session the first holds skips it, untouched.
+    func testARecoveryInProgressElsewhereIsSkipped() throws {
+        let session = try makeSession("2026-11-05_12-30-00")
+        try writeTrack(session.appendingPathComponent(MeetingTrackWriter.micFileName))
+        let first = try XCTUnwrap(MeetingSessionLock(sessionDirectory: session, wait: false))
+        XCTAssertNil(MeetingSessionLock(sessionDirectory: session, wait: false))
+
+        MeetingRecorderService.recoverSession(session)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: session.path).sorted(), [".recording.lock", "mic.caf"])
+        XCTAssertEqual(MeetingSessionLock.state(of: session), .live, "the skip left the holder's lock and file alone")
+
+        first.release()
+        MeetingRecorderService.recoverSession(session)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: session.path).sorted(), ["audio.m4a", "metadata.json"])
+    }
+
+    /// A probe holding the lock as the recording starts only delays it: the recording then holds its lock.
+    func testTheRecordingWaitsOutAProbeAndHoldsItsLock() throws {
+        final class LockBox: @unchecked Sendable { var lock: MeetingSessionLock? }
+        let session = try makeSession("2026-11-05_13-00-00")
+        let probe = try holdSessionLock(in: session)
+        let box = LockBox()
+        let acquired = expectation(description: "owner holds the lock")
+        let early = expectation(description: "owner returned while the probe held the lock")
+        early.isInverted = true
+        DispatchQueue.global().async {
+            box.lock = MeetingSessionLock(sessionDirectory: session)
+            early.fulfill()
+            acquired.fulfill()
+        }
+        wait(for: [early], timeout: 0.3)
+        close(probe)
+        wait(for: [acquired], timeout: 5)
+        XCTAssertNotNil(box.lock)
+        XCTAssertEqual(MeetingSessionLock.state(of: session), .live)
+        box.lock?.release()
+    }
+
     func testTheRecordingHoldsItsLockUntilSavedOnEveryPath() async throws {
         let captureEngine = MockMeetingAudioCaptureEngine()
         let service = makeService(captureEngine: captureEngine)
