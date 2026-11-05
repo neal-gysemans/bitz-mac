@@ -29,6 +29,9 @@ public final class AgentMonitorService: ObservableObject {
     @Published public private(set) var activeWarning: AgentWarning? = nil
     /// Most recently updated context reading (gauge).
     @Published public private(set) var latestContext: AgentContextReading? = nil
+    /// Result message from the last Claude Code hook install/uninstall action (#94 C7: kept on the service so tab switches preserve it).
+    @Published public var hookActionMessage: String? = nil
+    @Published public var isHookActionError: Bool = false
     @Published public var signalSettings: AgentSignalSettings {
         didSet {
             let clamped = signalSettings.clamped()

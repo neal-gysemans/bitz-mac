@@ -243,6 +243,8 @@ final class SettingsIntegrationTests: XCTestCase {
         appDelegate.activityMonitor.startSimulation(points: 20.0, continuousWorkMinutes: 0.0)
         XCTAssertTrue(appDelegate.activityMonitor.isManualOverrideActive)
         XCTAssertEqual(appDelegate.engine.currentState, .dopamineSad)
+        appDelegate.agentMonitor.hookActionMessage = "Failed to install hooks: test"
+        appDelegate.agentMonitor.isHookActionError = true
 
         // Close settings window
         SettingsWindowManager.shared.closeSettingsWindow()
@@ -251,5 +253,34 @@ final class SettingsIntegrationTests: XCTestCase {
         // Simulation override must be automatically cleared
         XCTAssertFalse(appDelegate.activityMonitor.isManualOverrideActive)
         XCTAssertNotEqual(appDelegate.engine.currentState, .dopamineSad)
+        // A stale hook message must not contradict the live badge on reopen
+        XCTAssertNil(appDelegate.agentMonitor.hookActionMessage)
+        XCTAssertFalse(appDelegate.agentMonitor.isHookActionError)
+    }
+
+    /// #94 WP3 (C10 / D-3): Settings opens automatically only on the first launch, not on subsequent logins/launches.
+    func testWP3SettingsOpensOnlyOnFirstLaunchAndReopen() {
+        defer { SettingsWindowManager.shared.closeSettingsWindow() }
+
+        let suiteName = "SettingsFirstLaunchTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        SettingsWindowManager.shared.closeSettingsWindow()
+        XCTAssertFalse(SettingsWindowManager.shared.isWindowOpen)
+
+        let firstDelegate = BitzAppDelegate(
+            telemetryProvider: MockTelemetryProvider(),
+            scaleStore: AvatarScaleStore(userDefaults: defaults),
+            opacityStore: AvatarOpacityStore(userDefaults: defaults),
+            positionStore: AvatarPositionStore(userDefaults: defaults),
+            displayStore: DisplayPreferenceStore(userDefaults: defaults),
+            updateStore: AppUpdateStore(userDefaults: defaults),
+            userDefaults: defaults
+        )
+
+        XCTAssertTrue(firstDelegate.shouldOpenSettingsOnLaunch(), "First launch must open Settings")
+        XCTAssertTrue(defaults.bool(forKey: BitzAppDelegate.hasCompletedInitialLaunchKey))
+        XCTAssertFalse(firstDelegate.shouldOpenSettingsOnLaunch(), "Subsequent launches must not auto-open Settings")
     }
 }

@@ -26,29 +26,6 @@ public struct BehaviorSettingsTabView: View {
             // Section 1: Focus & Health Status
             settingsCard(title: "Focus & Wellness Engine", systemImage: "pawprint.fill") {
                 VStack(alignment: .leading, spacing: 12) {
-                    if activityMonitor.isManualOverrideActive {
-                        HStack(spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Manual Simulation Override Active")
-                                    .font(.caption.bold())
-                                Text("Score updates and idle timers are paused.")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button("Resume Live Sensors") {
-                                activityMonitor.clearManualOverride()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                        }
-                        .padding(10)
-                        .background(Color.orange.opacity(0.12))
-                        .cornerRadius(8)
-                    }
-
                     HStack {
                         Text("Current State:")
                             .font(.subheadline)
@@ -73,14 +50,6 @@ public struct BehaviorSettingsTabView: View {
                             .font(.subheadline.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
-
-                    Button {
-                        engine.triggerPetInteraction()
-                    } label: {
-                        Label("Pet Bitz (<3)", systemImage: "heart.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    .accessibilityLabel("Pet Bitz")
                 }
             }
 
@@ -92,7 +61,7 @@ public struct BehaviorSettingsTabView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     if let frontmost = activityMonitor.lastFrontmostAppName {
                         let isProductive = activityMonitor.lastAppIsProductive
-                        let customTag = activityMonitor.frontmostAppCustomRule.map { $0 ? " (Custom Rule)" : " (Custom Rule)" } ?? ""
+                        let customTag = Self.customRuleTag(for: activityMonitor.frontmostAppCustomRule)
 
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
@@ -200,33 +169,22 @@ public struct BehaviorSettingsTabView: View {
 
                 Divider()
 
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("Deep-Work Streak Threshold:")
-                            .font(.subheadline)
-                        Spacer()
-                        Stepper(
-                            value: Binding(
-                                get: { flowShieldSettings.streakMinutesThreshold },
-                                set: { flowShieldSettings.setStreakMinutesThreshold($0) }
-                            ),
-                            in: FlowShieldSettingsStore.minStreakMinutesThreshold...FlowShieldSettingsStore.maxStreakMinutesThreshold,
-                            step: 5.0
-                        ) {
-                            Text(flowShieldSettings.formattedStreakSummary)
-                                .font(.subheadline.monospacedDigit().bold())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Slider(
+                HStack {
+                    Text("Deep-Work Streak Threshold:")
+                        .font(.subheadline)
+                    Spacer()
+                    Stepper(
                         value: Binding(
-                            get: { min(flowShieldSettings.streakMinutesThreshold, 90.0) },
+                            get: { flowShieldSettings.streakMinutesThreshold },
                             set: { flowShieldSettings.setStreakMinutesThreshold($0) }
                         ),
-                        in: 5.0...90.0,
+                        in: FlowShieldSettingsStore.minStreakMinutesThreshold...FlowShieldSettingsStore.maxStreakMinutesThreshold,
                         step: 5.0
-                    )
+                    ) {
+                        Text(flowShieldSettings.formattedStreakSummary)
+                            .font(.subheadline.monospacedDigit().bold())
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .disabled(!flowShieldSettings.isEnabled)
 
@@ -353,6 +311,12 @@ public struct BehaviorSettingsTabView: View {
     static func pointRateLabel(isProductive: Bool) -> String {
         let delta = isProductive ? WellnessPointEngine.productiveTickDelta : WellnessPointEngine.unproductiveTickDelta
         return String(format: "%+.0f PTS / min", delta * 60 / ActivityMonitorService.sampleIntervalSeconds)
+    }
+
+    /// Formats the custom productivity rule suffix (#94 C11).
+    static func customRuleTag(for rule: Bool?) -> String {
+        guard let rule else { return "" }
+        return rule ? " (Custom: Productive)" : " (Custom: Distraction)"
     }
 
     private func stateBadge(state: BitzState) -> some View {

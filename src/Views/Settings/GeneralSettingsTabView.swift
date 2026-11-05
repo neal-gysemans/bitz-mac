@@ -1,174 +1,28 @@
 import SwiftUI
 import AppKit
 
-/// Settings tab for customizing mascot size, opacity, screen placement, and multi-monitor routing.
+/// Settings tab for screen placement, mascot interaction, and multi-monitor routing.
 public struct GeneralSettingsTabView: View {
-    @ObservedObject public var scaleStore: AvatarScaleStore
-    @ObservedObject public var opacityStore: AvatarOpacityStore
     @ObservedObject public var positionStore: AvatarPositionStore
     @ObservedObject public var displayStore: DisplayPreferenceStore
-    @ObservedObject private var settingsWindowManager: SettingsWindowManager = .shared
-    public var engine: WellnessPointEngine?
     @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
     public var inboxDirectoryURL: URL
-    @ObservedObject public var paletteStore: AvatarPaletteStore
 
     public init(
-        scaleStore: AvatarScaleStore,
-        opacityStore: AvatarOpacityStore,
         positionStore: AvatarPositionStore,
         displayStore: DisplayPreferenceStore,
-        engine: WellnessPointEngine? = nil,
         interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
-        inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory,
-        paletteStore: AvatarPaletteStore = AvatarPaletteStore()
+        inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory
     ) {
         self.interactionSettings = interactionSettings
         self.inboxDirectoryURL = inboxDirectoryURL
-        self.paletteStore = paletteStore
-        self.scaleStore = scaleStore
-        self.opacityStore = opacityStore
         self.positionStore = positionStore
         self.displayStore = displayStore
-        self.engine = engine
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            // Live Interactive Avatar Preview Card
-            liveAvatarPreviewCard
-
-            // Section 1: Mascot Visibility
-            settingsCard(title: "Desktop Mascot Visibility", systemImage: "eye.fill") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Toggle("Show Mascot on Desktop", isOn: $positionStore.isMascotVisible)
-                        .font(.subheadline.bold())
-
-                    Text(positionStore.isMascotVisible
-                        ? "Bitz is currently active and floating on your desktop screen."
-                        : "Bitz is currently hidden from your desktop screen. Toggle on anytime to restore.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            // Section 2: Avatar Size & Scale
-            settingsCard(title: "Avatar Size & Scale", systemImage: "arrow.up.left.and.arrow.down.right") {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Current Size:")
-                            .font(.subheadline)
-                        Spacer()
-                        Text(scaleStore.formattedSizeSummary)
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-
-                    // Stepper Buttons
-                    HStack(spacing: 10) {
-                        Button {
-                            scaleStore.stepDown()
-                        } label: {
-                            Label("Smaller (-10%)", systemImage: "minus")
-                        }
-                        .disabled(!scaleStore.canStepDown)
-
-                        Button {
-                            scaleStore.stepUp()
-                        } label: {
-                            Label("Larger (+10%)", systemImage: "plus")
-                        }
-                        .disabled(!scaleStore.canStepUp)
-
-                        if !scaleStore.isPresetSelected(.defaultSize) {
-                            Button("Reset (100%)") {
-                                scaleStore.resetToDefault()
-                            }
-                        }
-                    }
-
-                    // Segmented Presets (Concise percentage labels to avoid horizontal overflow)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Size Presets")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        // Optional selection: no segment is highlighted while the size sits between presets
-                        Picker("Size Presets", selection: Binding<AvatarSizePreset?>(
-                            get: { AvatarSizePreset.allCases.first(where: { scaleStore.isPresetSelected($0) }) },
-                            set: { if let preset = $0 { scaleStore.selectPreset(preset) } }
-                        )) {
-                            ForEach(AvatarSizePreset.allCases, id: \.rawValue) { preset in
-                                Text(preset.percentageText).tag(Optional(preset))
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-
-                        if let current = AvatarSizePreset.allCases.first(where: { scaleStore.isPresetSelected($0) }) {
-                            Text("Active: \(current.menuTitle)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-
-            // Section 2: Avatar Opacity & Transparency
-            settingsCard(title: "Mascot Opacity & Transparency", systemImage: "circle.lefthalf.filled") {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Current Opacity:")
-                            .font(.subheadline)
-                        Spacer()
-                        Text(opacityStore.formattedOpacitySummary)
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-
-                    HStack(spacing: 10) {
-                        Button {
-                            opacityStore.stepDown()
-                        } label: {
-                            Label("More Transparent (-10%)", systemImage: "chevron.down")
-                        }
-                        .disabled(!opacityStore.canStepDown)
-
-                        Button {
-                            opacityStore.stepUp()
-                        } label: {
-                            Label("More Solid (+10%)", systemImage: "chevron.up")
-                        }
-                        .disabled(!opacityStore.canStepUp)
-                    }
-
-                    // Opacity Presets (Concise labels)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Opacity Presets")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        Picker("Opacity Presets", selection: Binding<AvatarOpacityPreset?>(
-                            get: { AvatarOpacityPreset.allCases.first(where: { opacityStore.isPresetSelected($0) }) },
-                            set: { if let preset = $0 { opacityStore.selectPreset(preset) } }
-                        )) {
-                            ForEach(AvatarOpacityPreset.allCases, id: \.rawValue) { preset in
-                                Text(preset.percentageText).tag(Optional(preset))
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-
-                        if let current = AvatarOpacityPreset.allCases.first(where: { opacityStore.isPresetSelected($0) }) {
-                            Text("Active: \(current.menuTitle)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-
-            // Section 3: Position & Screen Anchoring
+            // Section 1: Position & Screen Anchoring
             settingsCard(title: "Screen Placement & Dragging", systemImage: "rectangle.inset.filled.and.cursorarrow") {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
@@ -204,12 +58,14 @@ public struct GeneralSettingsTabView: View {
                         }
                     }
 
-                    HStack(spacing: 6) {
-                        Image(systemName: "info.circle")
-                            .foregroundStyle(.secondary)
-                        Text("Hold \(interactionSettings.holdModifier.displayName) anytime to freely drag Bitz anywhere on screen.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    if interactionSettings.isHoldToInteractEnabled {
+                        HStack(spacing: 6) {
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.secondary)
+                            Text("Hold \(interactionSettings.holdModifier.displayName) anytime to freely drag Bitz anywhere on screen.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     Picker("Corner Anchor", selection: Binding(
@@ -224,10 +80,7 @@ public struct GeneralSettingsTabView: View {
                 }
             }
 
-            // Section 3b: Theme & Colors
-            AppearancePaletteSectionView(paletteStore: paletteStore)
-
-            // Section 3c: Interaction, Petting & File Drop-Zone
+            // Section 2: Interaction, Petting & File Drop-Zone
             settingsCard(title: "Interaction, Petting & File Drop-Zone", systemImage: "hand.tap.fill") {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Hold a key to interact with Bitz", isOn: $interactionSettings.isHoldToInteractEnabled)
@@ -312,77 +165,6 @@ public struct GeneralSettingsTabView: View {
                 }
             }
         }
-    }
-
-    // MARK: - Live Preview Card
-
-    private var liveAvatarPreviewCard: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 14)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-                )
-
-            // Dotted Matrix Wallpaper Pattern
-            Canvas { context, size in
-                let spacing: CGFloat = 16
-                for x in stride(from: 8, to: size.width, by: spacing) {
-                    for y in stride(from: 8, to: size.height, by: spacing) {
-                        let rect = CGRect(x: x, y: y, width: 2, height: 2)
-                        context.fill(Path(ellipseIn: rect), with: .color(Color.secondary.opacity(0.12)))
-                    }
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-
-            // Real Bitz Cyber Mascot with reactive scale & opacity
-            VStack {
-                let currentState = paletteStore.previewSlot?.previewState ?? engine?.currentState ?? .balanced
-                AnimatedBitzCharacterView(
-                    state: currentState,
-                    showParticles: true,
-                    customVisorColor: paletteStore.resolvedPalette.visorColor(for: currentState),
-                    isPaused: !settingsWindowManager.isWindowVisible,
-                    palette: paletteStore.resolvedPalette
-                )
-                    .scaleEffect(0.70 * CGFloat(scaleStore.scaleFactor))
-                    .frame(height: 140)
-                    .opacity(opacityStore.opacityFactor)
-                    .animation(.spring(response: 0.35, dampingFraction: 0.7), value: scaleStore.scaleFactor)
-                    .animation(.easeInOut(duration: 0.2), value: opacityStore.opacityFactor)
-            }
-            .frame(height: 150)
-            .padding(.top, 16)
-
-            // Top Info Bar
-            VStack {
-                HStack {
-                    Label("Live Mascot Preview", systemImage: "sparkles")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(6)
-
-                    Spacer()
-
-                    let stateTitle = paletteStore.previewSlot?.title ?? (engine?.currentState ?? .balanced).displayName
-                    Text("\(stateTitle) • \(scaleStore.formattedSizeSummary) • \(opacityStore.formattedOpacitySummary)")
-                        .font(.caption2.monospacedDigit().bold())
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(6)
-                }
-                .padding(10)
-                Spacer()
-            }
-        }
-        .frame(height: 175)
     }
 
     // MARK: - Reusable Settings Card Container

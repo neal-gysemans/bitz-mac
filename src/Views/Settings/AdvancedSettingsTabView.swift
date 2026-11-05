@@ -7,17 +7,26 @@ public struct AdvancedSettingsTabView: View {
     @ObservedObject public var engine: WellnessPointEngine
     @ObservedObject public var activityMonitor: ActivityMonitorService
     @ObservedObject public var updateStore: AppUpdateStore
+    public var agentMonitor: AgentMonitorService?
 
     @State private var launchAtLoginEnabled: Bool = (SMAppService.mainApp.status == .enabled)
+    @State private var launchAtLoginMessage: String? = Self.launchAtLoginApprovalMessage(for: SMAppService.mainApp.status)
 
     public init(
         engine: WellnessPointEngine,
         activityMonitor: ActivityMonitorService,
-        updateStore: AppUpdateStore
+        updateStore: AppUpdateStore,
+        agentMonitor: AgentMonitorService? = nil
     ) {
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.updateStore = updateStore
+        self.agentMonitor = agentMonitor
+    }
+
+    /// Shown on open too, since macOS can already be waiting for approval before the toggle is touched.
+    static func launchAtLoginApprovalMessage(for status: SMAppService.Status) -> String? {
+        status == .requiresApproval ? "Approval required in System Settings → General → Login Items." : nil
     }
 
     public var body: some View {
@@ -103,19 +112,70 @@ public struct AdvancedSettingsTabView: View {
                             activityMonitor.startChargingSimulation()
                         }
                     }
+
+                    if let agentMonitor {
+                        Divider()
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Simulate Live Agent Alerts & Audio:")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+
+                            HStack(spacing: 10) {
+                                Button {
+                                    agentMonitor.handleEvent(AgentEvent(
+                                        agentID: "antigravity",
+                                        agentName: "Antigravity",
+                                        kind: .needsApproval,
+                                        message: "Antigravity has a question for you!",
+                                        timestamp: Date()
+                                    ))
+                                } label: {
+                                    Label("Question / Chime", systemImage: "questionmark.bubble.fill")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+
+                                Button {
+                                    agentMonitor.handleEvent(AgentEvent(
+                                        agentID: "antigravity",
+                                        agentName: "Antigravity",
+                                        kind: .done,
+                                        message: "Antigravity finished all tasks!",
+                                        timestamp: Date()
+                                    ))
+                                } label: {
+                                    Label("All Done / Fanfare", systemImage: "checkmark.seal.fill")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
+                    }
                 }
             }
 
             // Section 2: Keyboard Shortcuts Reference
             settingsCard(title: "Keyboard Shortcuts", systemImage: "keyboard") {
-                VStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Global (Works from Any App)")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    shortcutRow(action: "Toggle / Open Settings", keys: ["⌥⌘B"])
+                    Divider()
                     shortcutRow(action: "Move mascot anywhere (drag)", keys: ["⌥ Option", "Drag"])
                     Divider()
                     shortcutRow(action: "Lock position when dragging", keys: ["⎋ Esc", "⏎ Return"])
+
+                    Divider()
+                        .padding(.vertical, 2)
+
+                    Text("When Bitz or Settings is Focused")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    shortcutRow(action: "Open Settings", keys: ["⌘ ,"])
                     Divider()
                     shortcutRow(action: "Pet Bitz mascot", keys: ["⌘ P", "or", "P"])
-                    Divider()
-                    shortcutRow(action: "Toggle / Open Settings", keys: ["⌘ ,", "or", "⌥⌘B"])
                     Divider()
                     shortcutRow(action: "Scale mascot smaller / larger", keys: ["⌘ -", "⌘ ="])
                     Divider()
@@ -128,21 +188,37 @@ public struct AdvancedSettingsTabView: View {
             // Section 3: System & Updates
             settingsCard(title: "System & Software Updates", systemImage: "gear") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Launch Bitz automatically at Login", isOn: Binding(
-                        get: { launchAtLoginEnabled },
-                        set: { shouldEnable in
-                            do {
-                                if shouldEnable {
-                                    try SMAppService.mainApp.register()
-                                } else {
-                                    try SMAppService.mainApp.unregister()
+                    HStack {
+                        Toggle("Launch Bitz automatically at Login", isOn: Binding(
+                            get: { launchAtLoginEnabled },
+                            set: { shouldEnable in
+                                do {
+                                    if shouldEnable {
+                                        try SMAppService.mainApp.register()
+                                    } else {
+                                        try SMAppService.mainApp.unregister()
+                                    }
+                                    let status = SMAppService.mainApp.status
+                                    launchAtLoginEnabled = (status == .enabled)
+                                    launchAtLoginMessage = Self.launchAtLoginApprovalMessage(for: status)
+                                } catch {
+                                    launchAtLoginEnabled = (SMAppService.mainApp.status == .enabled)
+                                    launchAtLoginMessage = "Could not update Login Item: \(error.localizedDescription)"
                                 }
-                                launchAtLoginEnabled = (SMAppService.mainApp.status == .enabled)
-                            } catch {
-                                launchAtLoginEnabled = (SMAppService.mainApp.status == .enabled)
                             }
+                        ))
+                        Spacer()
+                        Button("Open Login Items...") {
+                            SMAppService.openSystemSettingsLoginItems()
                         }
-                    ))
+                        .controlSize(.small)
+                    }
+
+                    if let launchAtLoginMessage {
+                        Text(launchAtLoginMessage)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
 
                     Toggle("Automatically check for updates on startup", isOn: $updateStore.automaticallyCheckForUpdates)
 

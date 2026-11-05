@@ -7,6 +7,8 @@ import SwiftUI
 /// `ActivityMonitorService`, `AvatarScaleStore`, and `AvatarOpacityStore` lifecycle (`FR-001`, `FR-005`, `FR-006`).
 @MainActor
 public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
+    public static let hasCompletedInitialLaunchKey = "Bitz.HasCompletedInitialLaunch"
+
     public let riveController: ProductionRiveController
     public let engine: WellnessPointEngine
     public let activityMonitor: ActivityMonitorService
@@ -48,6 +50,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     private var personalityEnabledCancellable: AnyCancellable?
     private var personalityPresetCancellable: AnyCancellable?
     private var screenReconfigTask: Task<Void, Never>?
+    private let userDefaults: UserDefaults
 
     public override convenience init() {
         self.init(
@@ -87,6 +90,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         licensingService: LicensingService? = nil,
         userDefaults: UserDefaults = .standard
     ) {
+        self.userDefaults = userDefaults
         self.licensingService = licensingService ?? LicensingService()
         let resolvedApprovalStore = approvalStore ?? AgentApprovalStore()
         self.approvalStore = resolvedApprovalStore
@@ -176,6 +180,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             self?.updatePanelsInteractivity()
             self?.activityMonitor.clearManualOverride()
             self?.paletteStore.cancelPreview()
+            self?.agentMonitor.hookActionMessage = nil
+            self?.agentMonitor.isHookActionError = false
         }
         // An agent popup or pending approval can cover the update alert's buttons, so re-check on all changes
         self.bubbleInteractivityCancellable = Publishers.Merge3(
@@ -339,10 +345,21 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         agentMonitor.startMonitoring()
         telemetryDashboard.start()
         updateStore.startPeriodicChecks()
-        showSettingsWindow()
+        if shouldOpenSettingsOnLaunch() {
+            showSettingsWindow()
+        }
         if personalitySettings.isEnabled {
             triggerPersonalityTick(bypassRateLimit: true)
         }
+    }
+
+    /// Returns true only on the very first launch, marking initial launch complete so subsequent logins stay quiet (#94 C10 / D-3).
+    public func shouldOpenSettingsOnLaunch() -> Bool {
+        if userDefaults.bool(forKey: Self.hasCompletedInitialLaunchKey) {
+            return false
+        }
+        userDefaults.set(true, forKey: Self.hasCompletedInitialLaunchKey)
+        return true
     }
 
     /// Evaluates live telemetry and triggers on-device or templated personality commentary.

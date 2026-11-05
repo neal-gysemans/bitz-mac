@@ -8,6 +8,24 @@ public struct AgentHookInstaller {
         case codex
     }
 
+    public static var defaultClaudeSettingsURL: URL {
+        URL(fileURLWithPath: ("~/.claude/settings.json" as NSString).expandingTildeInPath)
+    }
+
+    /// Reads the settings file once: `all` when every Bitz hook event is installed, `any` when at least one is.
+    /// A missing, unreadable or invalid file, or one without a `hooks` object, counts as nothing installed.
+    public static func claudeHookStatus(at url: URL = defaultClaudeSettingsURL) -> (all: Bool, any: Bool) {
+        guard let data = try? Data(contentsOf: url),
+              let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let hooks = try? hooksDictionary(in: settings) else {
+            return (false, false)
+        }
+        let installed = bitzHooks.keys.map { event in
+            ((try? hookEntries(hooks[event], event: event)) ?? []).contains(where: groupHasBitzCommand)
+        }
+        return (!installed.isEmpty && installed.allSatisfy { $0 }, installed.contains(true))
+    }
+
     public static func dropEventScript(agentID: String, agentName: String, kind: String, message: String) -> String {
         let dir = DropboxAgentAdapter.defaultDirectoryURL.path
         let cleanID = agentID.replacingOccurrences(of: "'", with: "")

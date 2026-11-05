@@ -4,6 +4,7 @@ import AppKit
 /// Identifies each configurable section within the Bitz Settings window.
 public enum SettingsTab: String, CaseIterable, Identifiable {
     case general = "General"
+    case appearance = "Appearance"
     case behaviors = "Behaviors"
     case agents = "AI Agents"
     case personality = "Personality"
@@ -16,7 +17,8 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
 
     public var icon: String {
         switch self {
-        case .general: return "paintbrush.fill"
+        case .general: return "slider.horizontal.3"
+        case .appearance: return "paintbrush.fill"
         case .behaviors: return "pawprint.fill"
         case .agents: return "cpu.fill"
         case .personality: return "sparkles"
@@ -132,33 +134,6 @@ public struct SettingsRootView: View {
                 SettingsWindowManager.shared.closeSettingsWindow()
             }
             .keyboardShortcut("w", modifiers: [.command])
-
-            Button(role: .destructive) {
-                NSApplication.shared.terminate(nil)
-            } label: {
-                Label("Quit Bitz", systemImage: "power")
-                    .font(.subheadline.bold())
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .keyboardShortcut("q", modifiers: [.command])
-
-            // Window-scoped shortcut listeners
-            Group {
-                Button("") { scaleStore.stepDown() }
-                    .keyboardShortcut("-", modifiers: [.command])
-                Button("") { scaleStore.stepUp() }
-                    .keyboardShortcut("=", modifiers: [.command])
-                Button("") { opacityStore.stepDown() }
-                    .keyboardShortcut("[", modifiers: [.command])
-                Button("") { opacityStore.stepUp() }
-                    .keyboardShortcut("]", modifiers: [.command])
-                Button("") { engine.triggerPetInteraction() }
-                    .keyboardShortcut("p", modifiers: [.command])
-            }
-            .frame(width: 0, height: 0)
-            .opacity(0)
-            .allowsHitTesting(false)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
@@ -214,13 +189,16 @@ public struct SettingsRootView: View {
         switch selectedTab {
         case .general:
             GeneralSettingsTabView(
-                scaleStore: scaleStore,
-                opacityStore: opacityStore,
                 positionStore: positionStore,
                 displayStore: displayStore,
-                engine: engine,
                 interactionSettings: interactionSettings,
-                inboxDirectoryURL: inboxDirectoryURL,
+                inboxDirectoryURL: inboxDirectoryURL
+            )
+        case .appearance:
+            AppearanceSettingsTabView(
+                scaleStore: scaleStore,
+                opacityStore: opacityStore,
+                engine: engine,
                 paletteStore: paletteStore
             )
         case .behaviors:
@@ -257,7 +235,8 @@ public struct SettingsRootView: View {
             AdvancedSettingsTabView(
                 engine: engine,
                 activityMonitor: activityMonitor,
-                updateStore: updateStore
+                updateStore: updateStore,
+                agentMonitor: agentMonitor
             )
         }
     }

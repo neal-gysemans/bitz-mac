@@ -4,9 +4,8 @@ import AppKit
 /// Settings tab for managing AI Coding Agent detection, speech bubble popups, and Claude Code hook installation.
 public struct AgentsSettingsTabView: View {
     @ObservedObject public var agentMonitor: AgentMonitorService
+    public var claudeSettingsURL: URL
 
-    @State private var hookActionMessage: String? = nil
-    @State private var isHookActionError: Bool = false
     /// Agents whose window picker sits on Custom; needed because a preset value would otherwise snap the picker back.
     @State private var customWindowAgentIDs: Set<String> = []
 
@@ -14,8 +13,12 @@ public struct AgentsSettingsTabView: View {
     static let customWindowTag = 0
     private static let contextWindowAgents = [(id: "claude", name: "Claude Code"), (id: "antigravity", name: "Antigravity")]
 
-    public init(agentMonitor: AgentMonitorService) {
+    public init(
+        agentMonitor: AgentMonitorService,
+        claudeSettingsURL: URL = AgentHookInstaller.defaultClaudeSettingsURL
+    ) {
         self.agentMonitor = agentMonitor
+        self.claudeSettingsURL = claudeSettingsURL
     }
 
     public var body: some View {
@@ -31,44 +34,6 @@ public struct AgentsSettingsTabView: View {
                         Text("Displays a floating alert bubble when a background AI agent completes a task or requests human confirmation.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    }
-
-                    Divider()
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Simulate Live Agent Alerts & Audio:")
-                            .font(.caption.bold())
-                            .foregroundStyle(.secondary)
-
-                        HStack(spacing: 10) {
-                            Button {
-                                agentMonitor.handleEvent(AgentEvent(
-                                    agentID: "antigravity",
-                                    agentName: "Antigravity",
-                                    kind: .needsApproval,
-                                    message: "Antigravity has a question for you!",
-                                    timestamp: Date()
-                                ))
-                            } label: {
-                                Label("Question / Chime", systemImage: "questionmark.bubble.fill")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-
-                            Button {
-                                agentMonitor.handleEvent(AgentEvent(
-                                    agentID: "antigravity",
-                                    agentName: "Antigravity",
-                                    kind: .done,
-                                    message: "Antigravity finished all tasks!",
-                                    timestamp: Date()
-                                ))
-                            } label: {
-                                Label("All Done / Fanfare", systemImage: "checkmark.seal.fill")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
                     }
                 }
             }
@@ -157,48 +122,61 @@ public struct AgentsSettingsTabView: View {
 
             // Section 4: Claude Code Integration
             settingsCard(title: "Claude Code Hook Integration", systemImage: "terminal.fill") {
+                let hookStatus = AgentHookInstaller.claudeHookStatus(at: claudeSettingsURL)
+                let isInstalled = hookStatus.all
+
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Install notification hooks to `~/.claude/settings.json` for real-time task completions and tool-use approval popups.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack {
+                        Text("Install notification hooks to `~/.claude/settings.json` for real-time task completions and tool-use approval popups.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(isInstalled ? "Installed" : "Not Installed")
+                            .font(.caption.bold())
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background((isInstalled ? Color.green : Color.secondary).opacity(0.15))
+                            .foregroundStyle(isInstalled ? Color.green : Color.secondary)
+                            .cornerRadius(6)
+                    }
 
                     HStack(spacing: 12) {
                         Button {
-                            let url = URL(fileURLWithPath: ("~/.claude/settings.json" as NSString).expandingTildeInPath)
                             do {
-                                try AgentHookInstaller.updateSettingsFile(at: url, AgentHookInstaller.installClaudeHooks)
-                                hookActionMessage = "Claude Code hooks successfully installed!"
-                                isHookActionError = false
+                                try AgentHookInstaller.updateSettingsFile(at: claudeSettingsURL, AgentHookInstaller.installClaudeHooks)
+                                agentMonitor.hookActionMessage = "Claude Code hooks successfully installed!"
+                                agentMonitor.isHookActionError = false
                             } catch {
-                                hookActionMessage = "Failed to install hooks: \(error.localizedDescription)"
-                                isHookActionError = true
+                                agentMonitor.hookActionMessage = "Failed to install hooks: \(error.localizedDescription)"
+                                agentMonitor.isHookActionError = true
                             }
                         } label: {
                             Label("Install Hook", systemImage: "arrow.down.doc.fill")
                         }
+                        .disabled(isInstalled)
 
                         Button {
-                            let url = URL(fileURLWithPath: ("~/.claude/settings.json" as NSString).expandingTildeInPath)
                             do {
-                                try AgentHookInstaller.updateSettingsFile(at: url, AgentHookInstaller.uninstallClaudeHooks)
-                                hookActionMessage = "Claude Code hooks uninstalled."
-                                isHookActionError = false
+                                try AgentHookInstaller.updateSettingsFile(at: claudeSettingsURL, AgentHookInstaller.uninstallClaudeHooks)
+                                agentMonitor.hookActionMessage = "Claude Code hooks uninstalled."
+                                agentMonitor.isHookActionError = false
                             } catch {
-                                hookActionMessage = "Failed to uninstall: \(error.localizedDescription)"
-                                isHookActionError = true
+                                agentMonitor.hookActionMessage = "Failed to uninstall: \(error.localizedDescription)"
+                                agentMonitor.isHookActionError = true
                             }
                         } label: {
                             Label("Uninstall Hook", systemImage: "trash")
                         }
+                        .disabled(!hookStatus.any)
                     }
 
-                    if let msg = hookActionMessage {
+                    if let msg = agentMonitor.hookActionMessage {
                         HStack(spacing: 6) {
-                            Image(systemName: isHookActionError ? "xmark.circle.fill" : "checkmark.circle.fill")
-                                .foregroundStyle(isHookActionError ? .red : .green)
+                            Image(systemName: agentMonitor.isHookActionError ? "xmark.circle.fill" : "checkmark.circle.fill")
+                                .foregroundStyle(agentMonitor.isHookActionError ? .red : .green)
                             Text(msg)
                                 .font(.caption.bold())
-                                .foregroundStyle(isHookActionError ? .red : .green)
+                                .foregroundStyle(agentMonitor.isHookActionError ? .red : .green)
                         }
                         .padding(.top, 4)
                     }
