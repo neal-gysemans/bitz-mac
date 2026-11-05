@@ -97,6 +97,33 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
         self.transcriptLocale = transcriptLocale
         self.transcriptExportPath = transcriptExportPath
     }
+
+    private enum LegacyCodingKeys: String, CodingKey {
+        case audioFileName
+    }
+
+    /// Also reads metadata from before the per-source tracks: one `audioFileName` and no `audioStatus`.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessionID = try container.decode(String.self, forKey: .sessionID)
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        endedAt = try container.decode(Date.self, forKey: .endedAt)
+        durationSeconds = try container.decode(TimeInterval.self, forKey: .durationSeconds)
+        captureMicrophone = try container.decode(Bool.self, forKey: .captureMicrophone)
+        captureSystemAudio = try container.decode(Bool.self, forKey: .captureSystemAudio)
+        detectedAppNames = try container.decode([String].self, forKey: .detectedAppNames)
+        let legacyFileName = try decoder.container(keyedBy: LegacyCodingKeys.self).decodeIfPresent(String.self, forKey: .audioFileName)
+        audioFileNames = try container.decodeIfPresent([String].self, forKey: .audioFileNames)
+            ?? legacyFileName.map { [$0] }
+            ?? [MeetingTrackMixer.audioFileName]
+        // Older recordings were encoded straight to audio.m4a
+        audioStatus = try container.decodeIfPresent(String.self, forKey: .audioStatus)
+            ?? (audioFileNames.contains(MeetingTrackMixer.audioFileName) ? "mixed" : "unmixed")
+        recovered = try container.decodeIfPresent(Bool.self, forKey: .recovered)
+        transcriptStatus = try container.decode(String.self, forKey: .transcriptStatus)
+        transcriptLocale = try container.decodeIfPresent(String.self, forKey: .transcriptLocale)
+        transcriptExportPath = try container.decodeIfPresent(String.self, forKey: .transcriptExportPath)
+    }
 }
 
 /// A single timestamped segment from on-device speech recognition (#43).

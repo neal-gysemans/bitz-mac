@@ -50,6 +50,8 @@ public final class MeetingRecorderService: ObservableObject {
     private var isStarting = false
     private var isStopping = false
     private var failureDismissTask: Task<Void, Never>?
+    /// The launch-recovery mix in progress; a starting recording cancels it so the two never compete for disk and CPU.
+    private var recoveryMixTask: Task<Void, Never>?
     private var transcribingMetadata: (metadata: MeetingRecordingMetadata, url: URL)?
     var failureBubbleDurationNanoseconds: UInt64 = 6_000_000_000
 
@@ -150,6 +152,7 @@ public final class MeetingRecorderService: ObservableObject {
         guard !isRecording && !isTranscribing && !isStarting && !isStopping else { return }
         isStarting = true
         defer { isStarting = false }
+        recoveryMixTask?.cancel()
 
         let captureMic = settingsStore.captureMicrophone
         let captureSys = settingsStore.captureSystemAudio
@@ -273,7 +276,7 @@ public final class MeetingRecorderService: ObservableObject {
         if mixed {
             Self.restrictToOwner(mixedURL)
         }
-        metadata.audioStatus = mixed ? "mixed" : "unmixed"
+        metadata.audioStatus = MeetingTrackMixer.audioStatus(in: sessionDir)
         metadata.audioFileNames = MeetingTrackMixer.audioFileNames(in: sessionDir)
         Self.writeMetadata(metadata, to: metadataURL)
         // Audio and metadata are final; transcription below never blocks quit or a new start's guard
@@ -372,42 +375,78 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     /// Launch recovery (D1): mixes sessions a crash or quit left as tracks, one at a time at utility priority,
-    /// never while a recording runs. No transcription; the session gets `recovered: true`.
+    /// never while a recording runs (a start cancels the mix in progress). No transcription; the session gets `recovered: true`.
     public func recoverUnmixedSessions() async {
         let root = settingsStore.meetingsRootDirectoryURL
         let sessions = await Task.detached(priority: .utility) {
             let folders = (try? FileManager.default.contentsOfDirectory(
                 at: root,
-                includingPropertiesForKeys: nil,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
                 options: .skipsHiddenFiles
             )) ?? []
-            return folders.filter(MeetingTrackMixer.needsMix).sorted { $0.path < $1.path }
+            return folders.filter(Self.needsRecovery).sorted { $0.path < $1.path }
         }.value
         for sessionDir in sessions {
             guard !hasUnfinalizedRecording else { return }
-            await Task.detached(priority: .utility) {
+            let task = Task.detached(priority: .utility) {
                 Self.recoverSession(sessionDir)
-            }.value
+            }
+            recoveryMixTask = task
+            await task.value
         }
+        recoveryMixTask = nil
+    }
+
+    /// Only folders Bitz names (`yyyy-MM-dd_HH-mm-ss`, optional `-N`), never symlinks: the recordings root can be any folder.
+    nonisolated static func isSessionFolder(_ url: URL) -> Bool {
+        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        return values?.isDirectory == true && values?.isSymbolicLink == false
+            && url.lastPathComponent.wholeMatch(of: #/[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}(-[0-9]+)?/#) != nil
+    }
+
+    nonisolated static func needsRecovery(_ sessionDir: URL) -> Bool {
+        isSessionFolder(sessionDir)
+            && (MeetingTrackMixer.needsMix(sessionDir) || !MeetingTrackMixer.tracksCoveredByMix(in: sessionDir).isEmpty)
     }
 
     nonisolated static func recoverSession(_ sessionDir: URL) {
-        // Rechecked: a recording stopped since the scan may have mixed this folder already
-        guard MeetingTrackMixer.needsMix(sessionDir) else { return }
         let metadataURL = sessionDir.appendingPathComponent("metadata.json")
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        // A crash mid-recording leaves no metadata.json; derive what the tracks can tell
-        var metadata = (try? Data(contentsOf: metadataURL)).flatMap { try? decoder.decode(MeetingRecordingMetadata.self, from: $0) }
-            ?? recoveredMetadata(for: sessionDir)
-        let outcome = MeetingTrackMixer.mixSession(in: sessionDir)
-        if outcome.mixed {
+        // Read before the mix deletes the tracks the derived metadata is measured from
+        let metadata = recoveryMetadata(at: metadataURL, sessionDir: sessionDir)
+        let mixedNow: Bool
+        // Rechecked: a recording stopped since the scan may have mixed this folder already
+        if MeetingTrackMixer.needsMix(sessionDir) {
+            mixedNow = MeetingTrackMixer.mixSession(in: sessionDir).mixed
+        } else {
+            // audio.m4a is a verified mix; the tracks it covers are left over from a cleanup cut short (kill, failed delete)
+            let leftovers = MeetingTrackMixer.tracksCoveredByMix(in: sessionDir)
+            guard !leftovers.isEmpty else { return }
+            leftovers.forEach { try? FileManager.default.removeItem(at: $0) }
+            // Metadata derived from a leftover track would understate the recording; only existing metadata is updated
+            guard FileManager.default.fileExists(atPath: metadataURL.path) else { return }
+            mixedNow = false
+        }
+        if mixedNow {
             restrictToOwner(sessionDir.appendingPathComponent(MeetingTrackMixer.audioFileName))
+        }
+        // Metadata that exists but does not decode is left as it is rather than replaced
+        guard var metadata else { return }
+        if mixedNow {
             metadata.recovered = true
         }
-        metadata.audioStatus = outcome.mixed ? "mixed" : "unmixed"
+        metadata.audioStatus = MeetingTrackMixer.audioStatus(in: sessionDir)
         metadata.audioFileNames = MeetingTrackMixer.audioFileNames(in: sessionDir)
         writeMetadata(metadata, to: metadataURL)
+    }
+
+    /// The session's metadata to merge into; derived from the tracks when a crash left none; nil when it does not decode.
+    nonisolated private static func recoveryMetadata(at url: URL, sessionDir: URL) -> MeetingRecordingMetadata? {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return recoveredMetadata(for: sessionDir)
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? Data(contentsOf: url)).flatMap { try? decoder.decode(MeetingRecordingMetadata.self, from: $0) }
     }
 
     nonisolated private static func recoveredMetadata(for sessionDir: URL) -> MeetingRecordingMetadata {

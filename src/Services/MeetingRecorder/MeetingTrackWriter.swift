@@ -219,6 +219,7 @@ enum MeetingTrackMixError: Error, LocalizedError, Equatable {
     case noAudio
     case lengthMismatch(expected: AVAudioFramePosition, actual: AVAudioFramePosition)
     case outputOccupied
+    case cancelled
 
     var errorDescription: String? {
         switch self {
@@ -227,7 +228,9 @@ enum MeetingTrackMixError: Error, LocalizedError, Equatable {
         case .lengthMismatch(let expected, let actual):
             return "The mixed file has \(actual) frames instead of \(expected)."
         case .outputOccupied:
-            return "audio.m4a already exists and is not a file Bitz wrote."
+            return "audio.m4a already exists and is not a damaged earlier mix."
+        case .cancelled:
+            return "Mixing stopped because a recording started."
         }
     }
 }
@@ -236,8 +239,11 @@ enum MeetingTrackMixError: Error, LocalizedError, Equatable {
 /// Stop, quit and launch recovery all finish a session through `mixSession(in:)`.
 public enum MeetingTrackMixer {
     public static let audioFileName = "audio.m4a"
-    /// One read/mix/encode step (1 s); the encoded file must match the longest track to within one chunk.
+    /// One read/mix/encode step (1 s).
     static let chunkFrames: AVAudioFrameCount = 48_000
+    /// How far the encoded length may differ from the longest track. AVAudioFile stores the AAC priming and remainder,
+    /// so the length came back exact in a probe (1 to 2.88M frames); two AAC packets of margin in case an encoder drops them.
+    static let lengthToleranceFrames: AVAudioFramePosition = 2_048
     /// Two tracks sum to at most 2.0 before the clamp; applied to the whole mix so the level never jumps when one track ends.
     public static let headroomGain: Float = 0.85
     /// About 3 s per 10 min of two tracks; the quit path skips a mix that would not fit its budget.
@@ -309,22 +315,37 @@ public enum MeetingTrackMixer {
         trackURLs(in: sessionDirectory).compactMap { try? AVAudioFile(forReading: $0).length }
     }
 
+    /// Length of a readable `audio.m4a`. Mixes are encoded to `audio.mixing.m4a` and renamed only once verified,
+    /// so a readable `audio.m4a` is a verified mix.
+    static func mixedLength(in sessionDirectory: URL) -> AVAudioFramePosition? {
+        try? AVAudioFile(forReading: sessionDirectory.appendingPathComponent(audioFileName)).length
+    }
+
+    /// Metadata `audioStatus` from the files: "mixed" (readable `audio.m4a`), "empty" (every track holds no frames), else "unmixed".
+    static func audioStatus(in sessionDirectory: URL) -> String {
+        if mixedLength(in: sessionDirectory) != nil { return "mixed" }
+        let tracks = trackURLs(in: sessionDirectory).filter { FileManager.default.fileExists(atPath: $0.path) }
+        return tracks.allSatisfy { (try? AVAudioFile(forReading: $0).length) == 0 } ? "empty" : "unmixed"
+    }
+
     static func estimatedMixSeconds(in sessionDirectory: URL) -> Double {
         let trackSeconds = trackLengths(in: sessionDirectory).reduce(0) { $0 + Double($1) } / MeetingTrackWriter.sampleRate
         return trackSeconds * estimatedMixSecondsPerTrackSecond
     }
 
-    /// Launch recovery: tracks are left over and there is no `audio.m4a` that matches them (crash, quit, failed mix).
+    /// Launch recovery: a track holds audio and there is no readable `audio.m4a` (crash, quit, failed mix).
+    /// A readable `audio.m4a` is never replaced, so mixing again could only throw it away; empty or unreadable
+    /// tracks have nothing to mix, so such a session is not retried at every launch.
     static func needsMix(_ sessionDirectory: URL) -> Bool {
-        guard trackURLs(in: sessionDirectory).contains(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
-            return false
-        }
-        let audioURL = sessionDirectory.appendingPathComponent(audioFileName)
-        do {
-            try verifyMix(at: audioURL, expectedFrames: trackLengths(in: sessionDirectory).max() ?? 0)
-            return false
-        } catch {
-            return true
+        guard let longest = trackLengths(in: sessionDirectory).max(), longest > 0 else { return false }
+        return mixedLength(in: sessionDirectory) == nil
+    }
+
+    /// Readable tracks a verified `audio.m4a` already covers: left over when deleting them after the mix was cut short.
+    static func tracksCoveredByMix(in sessionDirectory: URL) -> [URL] {
+        guard let mixed = mixedLength(in: sessionDirectory) else { return [] }
+        return trackURLs(in: sessionDirectory).filter { url in
+            (try? AVAudioFile(forReading: url).length).map { $0 <= mixed + lengthToleranceFrames } ?? false
         }
     }
 
@@ -348,6 +369,7 @@ public enum MeetingTrackMixer {
 
     /// Mixes the readable tracks one chunk at a time (never a whole track in memory) into `outputURL` and verifies it.
     /// Encodes to `audio.mixing.m4a` first and removes it on any failure, so a failed mix never leaves a partial `audio.m4a`.
+    /// Checks for cancellation every chunk (launch recovery is cancelled when a recording starts); the tracks stay.
     /// Missing tracks are skipped; tracks that exist but cannot be read are reported in `warnings` and kept.
     /// Returns the tracks that went into the mix. `outputSettings` lets tests encode PCM and check exact samples.
     @discardableResult
@@ -389,6 +411,7 @@ public enum MeetingTrackMixer {
                     interleaved: false
                 )
                 while true {
+                    guard !Task.isCancelled else { throw MeetingTrackMixError.cancelled }
                     for (reader, buffer) in zip(readers, buffers) {
                         if reader.framePosition < reader.length {
                             try reader.read(into: buffer, frameCount: chunkFrames)
@@ -411,21 +434,21 @@ public enum MeetingTrackMixer {
         return mixedTracks
     }
 
-    /// The mix opens and its length matches the longest track to within one chunk.
+    /// The mix opens and its length matches the longest track to within `lengthToleranceFrames`.
     static func verifyMix(at url: URL, expectedFrames: AVAudioFramePosition) throws {
         let length = try AVAudioFile(forReading: url).length
-        guard abs(length - expectedFrames) <= AVAudioFramePosition(chunkFrames) else {
+        guard abs(length - expectedFrames) <= lengthToleranceFrames else {
             throw MeetingTrackMixError.lengthMismatch(expected: expectedFrames, actual: length)
         }
     }
 
-    /// An `audio.m4a` next to the tracks can only be an earlier failed or partial mix: replace a regular file, nothing else.
+    /// Replaces only a damaged `audio.m4a` (a regular file that does not open); a readable one is a verified mix and stays.
     private static func replaceOutput(_ outputURL: URL, with partialURL: URL) throws {
         guard let type = (try? FileManager.default.attributesOfItem(atPath: outputURL.path))?[.type] as? FileAttributeType else {
             try FileManager.default.moveItem(at: partialURL, to: outputURL)
             return
         }
-        guard type == .typeRegular else { throw MeetingTrackMixError.outputOccupied }
+        guard type == .typeRegular, (try? AVAudioFile(forReading: outputURL)) == nil else { throw MeetingTrackMixError.outputOccupied }
         _ = try FileManager.default.replaceItemAt(outputURL, withItemAt: partialURL)
     }
 }

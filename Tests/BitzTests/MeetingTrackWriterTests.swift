@@ -385,6 +385,23 @@ final class MeetingTrackWriterTests: XCTestCase {
         XCTAssertEqual(outcome.warnings.count, 1)
         XCTAssertTrue(outcome.warnings[0].hasPrefix("system.caf could not be read"), outcome.warnings[0])
         XCTAssertEqual(MeetingTrackMixer.audioFileNames(in: tempDir), ["audio.m4a", "system.caf"])
+        // The next launch sees a finished mix, not a session to mix again
+        XCTAssertFalse(MeetingTrackMixer.needsMix(tempDir))
+        XCTAssertEqual(MeetingTrackMixer.tracksCoveredByMix(in: tempDir), [])
+        XCTAssertEqual(MeetingTrackMixer.audioStatus(in: tempDir), "mixed")
+    }
+
+    func testCancelledMixKeepsTracksAndLeavesNoPartialFile() async throws {
+        try writeTrack(MeetingTrackWriter.micFileName, value: 0.25, frames: 96_000)
+        let sessionDirectory: URL = tempDir
+        let outcome = await Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return MeetingTrackMixer.mixSession(in: sessionDirectory)
+        }.value
+
+        XCTAssertFalse(outcome.mixed)
+        XCTAssertTrue(outcome.warnings.contains { $0.contains("a recording started") }, "\(outcome.warnings)")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: tempDir.path), ["mic.caf"])
     }
 
     func testRetryReplacesAnEarlierInvalidMix() throws {
@@ -407,7 +424,8 @@ final class MeetingTrackWriterTests: XCTestCase {
         try MeetingTrackMixer.mixTracks([track], into: output, warnings: &warnings)
 
         XCTAssertNoThrow(try MeetingTrackMixer.verifyMix(at: output, expectedFrames: 96_000))
-        XCTAssertThrowsError(try MeetingTrackMixer.verifyMix(at: output, expectedFrames: 96_000 + 48_001 + 2_048)) { error in
+        XCTAssertNoThrow(try MeetingTrackMixer.verifyMix(at: output, expectedFrames: 96_000 + MeetingTrackMixer.lengthToleranceFrames))
+        XCTAssertThrowsError(try MeetingTrackMixer.verifyMix(at: output, expectedFrames: 96_000 + MeetingTrackMixer.lengthToleranceFrames + 1)) { error in
             guard case MeetingTrackMixError.lengthMismatch = error else { return XCTFail("\(error)") }
         }
         XCTAssertThrowsError(try MeetingTrackMixer.verifyMix(at: tempDir.appendingPathComponent("missing.m4a"), expectedFrames: 0))
