@@ -137,8 +137,8 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
         )
     }
 
-    /// Picker entries after "Automatic": the user's preferred languages first (in their order, the exact preferred locale
-    /// before its siblings), then the rest by name. One entry per language (and script): the user's exact preferred
+    /// Picker entries after "Automatic": the user's preferred languages first (in their order, preferred variants in the
+    /// user's order before their siblings), then the rest by name. One entry per language (and script): the user's exact preferred
     /// variants, else the language's default region (en → en-US), else the first. The region is shown only when that
     /// leaves more than one entry for a language, e.g. English (United States) / English (United Kingdom) but plain "French".
     static func orderedLocaleOptions(
@@ -148,12 +148,14 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
     ) -> [(id: String, label: String)] {
         func normalized(_ id: String) -> String { id.replacingOccurrences(of: "_", with: "-") }
         func language(_ id: String) -> String { Locale(identifier: id).language.languageCode?.identifier ?? id }
-        // Traditional and Simplified Chinese stay separate entries
+        // Traditional and Simplified Chinese stay separate entries, and so does zh-HK (Cantonese, not Mandarin)
         func languageAndScript(_ id: String) -> String {
+            if id == "zh-HK" { return id }
             let full = Locale.Language(identifier: Locale.Language(identifier: id).maximalIdentifier)
             return [full.languageCode?.identifier ?? id, full.script?.identifier].compactMap { $0 }.joined(separator: "-")
         }
-        let preferredIDs = Set(preferredLanguages.map(normalized))
+        let preferredOrder = preferredLanguages.map(normalized)
+        let preferredIDs = Set(preferredOrder)
         let ids = Dictionary(grouping: Set(identifiers.map(normalized)).sorted(), by: languageAndScript)
             .flatMap { key, variants -> [String] in
                 let preferred = variants.filter(preferredIDs.contains)
@@ -169,7 +171,7 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
                 : displayLocale.localizedString(forLanguageCode: language(id)) ?? id
         }
         func rank(_ id: String) -> (Int, Int) {
-            (preferredLanguageCodes.firstIndex(of: language(id)) ?? .max, preferredIDs.contains(id) ? 0 : 1)
+            (preferredLanguageCodes.firstIndex(of: language(id)) ?? .max, preferredOrder.firstIndex(of: id) ?? .max)
         }
         return ids.map { (id: $0, label: label($0)) }.sorted { a, b in
             let (rankA, rankB) = (rank(a.id), rank(b.id))
@@ -336,10 +338,7 @@ public enum MeetingTranscriptWriter {
         let plainText = transcript.formattedPlainText()
         try plainText.write(to: txtURL, atomically: true, encoding: .utf8)
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        let jsonData = try encoder.encode(transcript)
+        let jsonData = try MeetingFormatting.jsonEncoder().encode(transcript)
         try jsonData.write(to: jsonURL, options: .atomic)
 
         return (txtURL, jsonURL)

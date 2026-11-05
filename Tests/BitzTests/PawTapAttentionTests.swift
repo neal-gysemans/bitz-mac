@@ -84,8 +84,7 @@ final class PawTapAttentionTests: XCTestCase {
             telemetrySettings: fixture.telemetrySettings,
             interactionSettings: MascotInteractionSettingsStore(userDefaults: defaults),
             paletteStore: paletteStore,
-            agentMonitor: fixture.agentMonitor,
-            meetingRecorder: .stub(defaults: defaults)
+            agentMonitor: fixture.agentMonitor
         )
 
         XCTAssertFalse(overlay.isAttentionCueActive, "Attention cue must be inactive when no popup exists")
@@ -125,8 +124,7 @@ final class PawTapAttentionTests: XCTestCase {
             telemetrySettings: fixture.telemetrySettings,
             interactionSettings: MascotInteractionSettingsStore(userDefaults: defaults),
             paletteStore: paletteStore,
-            agentMonitor: fixture.agentMonitor,
-            meetingRecorder: .stub(defaults: defaults)
+            agentMonitor: fixture.agentMonitor
         )
 
         // Test .almostDone event
@@ -162,7 +160,6 @@ final class PawTapAttentionTests: XCTestCase {
             engine: fixture.engine,
             paletteStore: paletteStore,
             agentMonitor: fixture.agentMonitor,
-            meetingRecorder: .stub(defaults: defaults),
             isAttentionCueActive: true
         )
         XCTAssertTrue(overlayExplicitTrue.isAttentionCueActive, "Explicit true must override nil activePopup")
@@ -171,7 +168,6 @@ final class PawTapAttentionTests: XCTestCase {
             engine: fixture.engine,
             paletteStore: paletteStore,
             agentMonitor: fixture.agentMonitor,
-            meetingRecorder: .stub(defaults: defaults),
             isAttentionCueActive: false
         )
         // Trigger .needsApproval

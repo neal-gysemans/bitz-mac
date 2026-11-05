@@ -23,7 +23,7 @@ public enum SpeechBubbleContent {
         }
     }
 
-    /// The thermal warning outranks meeting bubbles (`MeetingBubble.Priority.thermal`); other wellness text does not,
+    /// The thermal warning outranks meeting bubbles; other wellness text does not,
     /// so a 45-minute "take a break" never hides a recording that failed to start.
     @MainActor
     public static func thermalWarning(_ engine: WellnessPointEngine) -> String? {
@@ -151,9 +151,9 @@ public struct SpeechBubbleView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .frame(maxWidth: Self.maxBubbleWidth)
-            .background(RoundedRectangle(cornerRadius: 8).fill(fill))
+            // Shadow on the filled shape before the stroke overlay (AGENTS.md §2.6)
+            .background(RoundedRectangle(cornerRadius: 8).fill(fill).shadow(color: stroke.opacity(0.7), radius: 6))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(stroke, lineWidth: 1.5))
-            .shadow(color: stroke.opacity(0.7), radius: 6)
     }
 
     private func agentPopupColors(for kind: AgentEventKind) -> (stroke: Color, fill: Color) {
@@ -270,20 +270,12 @@ public struct SpeechBubbleView: View {
         let colors = meetingColors(for: meeting.kind, visorColor: visorColor)
         let rowActions = meeting.actions.filter { $0 != .transcribeAgain }
         return VStack(spacing: 5) {
-            Group {
-                if meeting.kind == .recording {
-                    MeetingRecordingTimerBubbleObserver(timerStore: meetingRecorder.timerStore) { elapsed in
-                        Text("\(meeting.text) (\(elapsed))")
-                    }
-                } else {
-                    Text(meeting.text)
-                }
-            }
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
-            .multilineTextAlignment(.center)
-            .foregroundStyle(Color.white)
-            // The headline is one short clause and never truncates; only the detail may
-            .fixedSize(horizontal: false, vertical: true)
+            Text(meeting.text)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(Color.white)
+                // The headline is one short clause and never truncates; only the detail may
+                .fixedSize(horizontal: false, vertical: true)
 
             if let detail = meeting.detail {
                 Text(detail)
@@ -336,16 +328,6 @@ public struct SpeechBubbleView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(action.accessibilityLabel)
-    }
-}
-
-/// Leaf observer for the 1s recording timer so only the timer text re-renders while recording (#43, #70).
-private struct MeetingRecordingTimerBubbleObserver<Content: View>: View {
-    @ObservedObject var timerStore: MeetingRecordingTimerStore
-    @ViewBuilder let content: (String) -> Content
-
-    var body: some View {
-        content(MeetingFormatting.formatDuration(timerStore.elapsedSeconds))
     }
 }
 

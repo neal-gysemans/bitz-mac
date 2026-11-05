@@ -290,6 +290,47 @@ final class SpeechBubblePanelTests: XCTestCase {
         XCTAssertTrue(panel.ignoresMouseEvents)
     }
 
+    /// The mascot gets the delegate's real `agentMonitor` (paw-tap cue) and only a recording flag, kept in step with the
+    /// recorder. Synchronous for the same reason as `testOnlyABubbleWithButtonsTakesClicks`.
+    func testMascotGetsTheRealAgentMonitorAndTheRecordingFlag() throws {
+        let (defaults, cleanup) = createIsolatedDefaults()
+        defer { cleanup() }
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("bitz-panel-mascot-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let settings = MeetingSettingsStore(userDefaults: defaults)
+        settings.setMeetingsRootDirectoryURL(tempDir)
+        settings.setConsentAcknowledged(true)
+        let recorder = MeetingRecorderService(
+            settingsStore: settings,
+            captureEngine: MockMeetingAudioCaptureEngine(),
+            transcriptionService: MockMeetingTranscriptionService(),
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .authorized)
+            )
+        )
+        let delegate = BitzAppDelegate(
+            telemetryProvider: MockTelemetryProvider(),
+            scaleStore: AvatarScaleStore(userDefaults: defaults),
+            opacityStore: AvatarOpacityStore(userDefaults: defaults),
+            positionStore: AvatarPositionStore(userDefaults: defaults),
+            displayStore: DisplayPreferenceStore(userDefaults: defaults),
+            updateStore: AppUpdateStore(userDefaults: defaults),
+            meetingRecorder: recorder,
+            userDefaults: defaults
+        )
+        delegate.setupOverlayPanel()
+        defer { delegate.overlayPanels.forEach { $0.close() } }
+        let hostingView = try XCTUnwrap(delegate.overlayPanel?.contentView as? NSHostingView<MascotOverlayView>)
+
+        XCTAssertTrue(hostingView.rootView.agentMonitor === delegate.agentMonitor)
+        XCTAssertFalse(hostingView.rootView.isRecordingMeeting)
+
+        Task { await recorder.startRecording() }
+        XCTAssertTrue(spinRunLoop(until: { hostingView.rootView.isRecordingMeeting }), "Bitz puts its headphones on")
+        Task { await recorder.stopRecording(transcribe: false) }
+        XCTAssertTrue(spinRunLoop(until: { !hostingView.rootView.isRecordingMeeting }), "and takes them off after the recording")
+    }
+
     // Synchronous for the same reason as `testOnlyABubbleWithButtonsTakesClicks`
     func testMeetingBubbleTakesClicksOnlyWithButtonsAndNotUnderAThermalWarning() throws {
         let (defaults, cleanup) = createIsolatedDefaults()

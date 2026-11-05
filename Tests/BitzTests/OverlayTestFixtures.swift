@@ -84,7 +84,6 @@ final class OverlayFixture {
             positionStore: positionStore,
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
-            meetingRecorder: meetingRecorder,
             onEarTopChanged: onEarTopChanged
         )
     }

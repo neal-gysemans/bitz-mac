@@ -6,7 +6,7 @@ import SwiftUI
 /// Application delegate managing the transparent `MascotOverlayPanel`, `WellnessPointEngine`,
 /// `ActivityMonitorService`, `AvatarScaleStore`, and `AvatarOpacityStore` lifecycle (`FR-001`, `FR-005`, `FR-006`).
 @MainActor
-public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
+public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, ObservableObject {
     public static let hasCompletedInitialLaunchKey = "Bitz.HasCompletedInitialLaunch"
 
     public let riveController: ProductionRiveController
@@ -210,10 +210,15 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         self.meetingRecorder.onOpenSettings = { [weak self] in
             self?.showSettings(tab: .audio)
         }
-        self.recordingIndicatorCancellable = self.meetingRecorder.$isRecording
+        self.recordingIndicatorCancellable = self.meetingRecorder.$state
+            .map { $0 == .recording }
             .removeDuplicates()
             .sink { [weak self] recording in
                 self?.isRecordingIndicatorVisible = recording
+                // The mascot gets only this flag, so other recorder updates never re-render it (AGENTS.md §2.5)
+                self?.overlayPanels.forEach { panel in
+                    (panel.contentView as? NSHostingView<MascotOverlayView>)?.rootView.isRecordingMeeting = recording
+                }
             }
         // The engine only gets a flag, so agent policy stays in AgentMonitorService (R10)
         self.warningVisorCancellable = self.agentMonitor.$activeWarning
@@ -545,6 +550,16 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         appMenu.addItem(opacityDownItem)
         appMenu.addItem(NSMenuItem.separator())
 
+        // No key equivalent: the recording chord is configurable and handled by `handleKeyEvent`; title set in `validateMenuItem`
+        let meetingItem = NSMenuItem(
+            title: "Start Meeting Recording",
+            action: #selector(toggleMeetingRecordingAction),
+            keyEquivalent: ""
+        )
+        meetingItem.target = self
+        appMenu.addItem(meetingItem)
+        appMenu.addItem(NSMenuItem.separator())
+
         let closeItem = NSMenuItem(
             title: "Close Window",
             action: #selector(NSWindow.performClose(_:)),
@@ -635,6 +650,14 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         Task { @MainActor [weak self] in
             await self?.meetingRecorder.toggleRecording()
         }
+    }
+
+    /// The main menu's meeting item mirrors the menu bar: Start/Stop, or a disabled Saving…/Transcribing….
+    public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(toggleMeetingRecordingAction) else { return true }
+        menuItem.title = meetingRecorder.busyMenuLabel
+            ?? (meetingRecorder.isRecording ? "Stop Meeting Recording" : "Start Meeting Recording")
+        return meetingRecorder.busyMenuLabel == nil
     }
 
     /// Handles keyboard shortcuts locally or globally without stealing key focus.
@@ -837,7 +860,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             interactionSettings: interactionSettings,
             paletteStore: paletteStore,
             agentMonitor: agentMonitor,
-            meetingRecorder: meetingRecorder,
+            isRecordingMeeting: meetingRecorder.isRecording,
             onFilesDropped: { [weak self] urls in
                 guard let self else { return }
                 do {

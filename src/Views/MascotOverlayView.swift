@@ -19,7 +19,9 @@ public struct MascotOverlayView: View {
     @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
     @ObservedObject public var paletteStore: AvatarPaletteStore
     @ObservedObject public var agentMonitor: AgentMonitorService
-    @ObservedObject public var meetingRecorder: MeetingRecorderService
+    /// A plain flag, not the recorder: its other updates must never invalidate the mascot (AGENTS.md §2.5).
+    /// `BitzAppDelegate` sets it on the hosting view's `rootView` when a recording starts or stops.
+    public var isRecordingMeeting: Bool
 
     private let explicitAttentionCue: Bool?
 
@@ -52,7 +54,7 @@ public struct MascotOverlayView: View {
         interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         agentMonitor: AgentMonitorService = AgentMonitorService(),
-        meetingRecorder: MeetingRecorderService,
+        isRecordingMeeting: Bool = false,
         isAttentionCueActive: Bool? = nil,
         onFilesDropped: (([URL]) -> Void)? = nil,
         onDragChanged: ((NSPoint, NSScreen?) -> Void)? = nil,
@@ -71,7 +73,7 @@ public struct MascotOverlayView: View {
         self.interactionSettings = interactionSettings
         self.paletteStore = paletteStore
         self.agentMonitor = agentMonitor
-        self.meetingRecorder = meetingRecorder
+        self.isRecordingMeeting = isRecordingMeeting
         self.explicitAttentionCue = isAttentionCueActive
         self.onFilesDropped = onFilesDropped
         self.onDragChanged = onDragChanged
@@ -156,7 +158,7 @@ public struct MascotOverlayView: View {
     }
 
     private var isLoafPosture: Bool {
-        !meetingRecorder.isRecording && (displayedState == .burnout || displayedState == .charging)
+        BitzCharacterView.isLoaf(state: displayedState, isRecording: isRecordingMeeting)
     }
 
     // Holding ⌥ alone only shows the border, so typing ⌥ shortcuts in other apps doesn't flash the HUD
@@ -184,7 +186,7 @@ public struct MascotOverlayView: View {
                 isPaused: isAnimationPaused,
                 palette: paletteStore.resolvedPalette,
                 isAttentionCueActive: isAttentionCueActive,
-                isRecordingMeeting: meetingRecorder.isRecording
+                isRecordingMeeting: isRecordingMeeting
             )
             .frame(width: 180, height: 140)
             .opacity(opacityStore.opacityFactor)

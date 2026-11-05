@@ -1,33 +1,19 @@
 import AppKit
 import Foundation
 
-// MARK: - Isolated Elapsed Timer Store (Leaf View Observation, AGENTS.md §2.5)
-
-/// Publishes the 1-second elapsed timer exclusively to leaf subviews (`MeetingRecordingTimerBubbleView`)
-/// so `MascotOverlayView` and `SpeechBubbleView` roots never re-evaluate on every elapsed second (#43, #70).
-@MainActor
-public final class MeetingRecordingTimerStore: ObservableObject {
-    @Published public fileprivate(set) var elapsedSeconds: Int = 0
-
-    public init() {}
-}
-
 // MARK: - Meeting Recorder Coordinator Service
 
-/// Coordinates dual-stream meeting audio recording (`audio.m4a`), metadata export (`metadata.json`),
+/// Coordinates two-track meeting audio recording (`audio.m4a`), metadata export (`metadata.json`),
 /// native on-device transcription (`transcript.txt` & `transcript.json`), and Finder reveal (#43).
 @MainActor
 public final class MeetingRecorderService: ObservableObject {
     @Published public private(set) var state: MeetingRecorderState = .idle
-    @Published public private(set) var isRecording: Bool = false
-    @Published public private(set) var isTranscribing: Bool = false
     @Published public private(set) var permissionState: MeetingPermissionState
     @Published public private(set) var lastCompletedResult: MeetingRecordingResult?
     /// The meeting bubble on screen, nil when none (#43 D5).
     @Published public private(set) var bubble: MeetingBubble?
     @Published public private(set) var statusMessage: String = "Ready to record meetings locally (transcribed on-device)."
 
-    public let timerStore = MeetingRecordingTimerStore()
     public let settingsStore: MeetingSettingsStore
     private let captureEngine: any MeetingAudioCapturing
     private let transcriptionService: any MeetingTranscriptionProviding
@@ -50,7 +36,6 @@ public final class MeetingRecorderService: ObservableObject {
     static let recordingBubbleDuration: Duration = .seconds(5)
     static let completionBubbleDuration: Duration = .seconds(45)
 
-    private var elapsedTimerTask: Task<Void, Never>?
     private var activeSessionID: String?
     private var activeSessionDirectoryURL: URL?
     private var activeStartedAt: Date?
@@ -59,16 +44,22 @@ public final class MeetingRecorderService: ObservableObject {
     /// Sources still recording; an interruption removes its source so the bubble says what is left.
     private var activeSources: Set<MeetingCaptureSource> = []
     /// Synchronous guards set before the first `await`, so a double toggle can never start or stop twice.
-    private var isStarting = false
-    private var isStopping = false
+    private var isStarting = false { didSet { resumeFinalizeWaitersIfIdle() } }
+    private var isStopping = false { didSet { resumeFinalizeWaitersIfIdle() } }
+    /// Quit waiting for an in-flight start or stop; resumed when both guards clear, so nothing polls.
+    private var finalizeWaiters: [CheckedContinuation<Void, Never>] = []
     /// The launch-recovery mix in progress; a starting recording cancels it so the two never compete for disk and CPU.
     private var recoveryMixTask: Task<Void, Never>?
     /// Launch recovery is scanning or mixing; retention waits so it never deletes a folder being recovered.
     private(set) var isRecovering = false
     private var transcribingMetadata: (metadata: MeetingRecordingMetadata, url: URL)?
 
-    /// Meeting apps by bundle ID, as `ActivityMonitorService` matches them; browsers are never listed.
-    nonisolated static let meetingAppBundleKeywords = ActivityMonitorService.workMeetingBundleKeywords + ["discord"]
+    /// Meeting apps by bundle ID, as `ActivityMonitorService` matches them; browsers are never listed. The extra apps are
+    /// for the recorder only: Discord, Webex (`Cisco-Systems.Spark`) and Tuple.
+    nonisolated static let meetingAppBundleKeywords = ActivityMonitorService.workMeetingBundleKeywords
+        + ["discord", "cisco-systems.spark", "app.tuple.app"]
+    /// shortcut: Around's bundle ID could not be verified, so it is matched by its exact app name; switch to the bundle ID once confirmed.
+    nonisolated static let meetingAppNamesWithoutKnownBundleID: Set<String> = ["Around"]
     /// Bound on ` (N)` suffixes when another app keeps taking the export name.
     nonisolated static let maxExportAttempts = 100
     static let transientPasteboardType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
@@ -100,7 +91,6 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     deinit {
-        elapsedTimerTask?.cancel()
         bubbleHideTask?.cancel()
     }
 
@@ -111,11 +101,10 @@ public final class MeetingRecorderService: ObservableObject {
 
     // MARK: - Derived UI State
 
+    public var isRecording: Bool { state == .recording }
     /// Between Stop and the end of the mix.
-    public var isSaving: Bool {
-        if case .saving = state { return true }
-        return false
-    }
+    public var isSaving: Bool { state == .saving }
+    public var isTranscribing: Bool { state == .transcribing }
 
     /// Disabled menu item shown instead of Start/Stop while the last recording is still being saved or transcribed.
     public var busyMenuLabel: String? {
@@ -222,14 +211,11 @@ public final class MeetingRecorderService: ObservableObject {
             activeDetectedApps = Self.detectRunningMeetingApps()
             activeCaptureWarning = nil
             activeSources = Set([captureMic ? .microphone : nil, captureSys ? .systemAudio : nil].compactMap { $0 })
-            timerStore.elapsedSeconds = 0
-            isRecording = true
-            state = .recording(sessionID: sessionID, startedAt: startDate, elapsedSeconds: 0)
+            state = .recording
             statusMessage = "Recording meeting into \(sessionDir.lastPathComponent)..."
             // Shown briefly; the LED, headphones and menu bar REC stay for the whole recording
             present(.recording, hideAfter: Self.recordingBubbleDuration)
             onPlaySound?(.meetingRecordingStarted)
-            startElapsedTimer()
         } catch {
             // Only the folder this attempt just created; an earlier recording's folder is never reused or removed
             if let createdSessionDir {
@@ -256,9 +242,7 @@ public final class MeetingRecorderService: ObservableObject {
         }
 
         isStopping = true
-        stopElapsedTimer()
-        isRecording = false
-        state = .saving(sessionID: sessionID)
+        state = .saving
         statusMessage = "Saving meeting into \(sessionDir.lastPathComponent)..."
         present(.saving)
         await captureEngine.stopCapture()
@@ -327,7 +311,6 @@ public final class MeetingRecorderService: ObservableObject {
         var transcriptURLs: (txtURL: URL, jsonURL: URL)?
         var transcriptError: String?
         if shouldTranscribe {
-            isTranscribing = true
             transcriptURLs = await transcribeSession(
                 sessionDir,
                 audioURL: audioURL,
@@ -373,7 +356,7 @@ public final class MeetingRecorderService: ObservableObject {
     public func transcribeAgain() async {
         guard canTranscribeAgain, let last = lastCompletedResult else { return }
         // Set before the first await, so a double click or a start in between is refused
-        isTranscribing = true
+        state = .transcribing
         let sessionDir = last.sessionDirectoryURL
         let metadataURL = last.metadataFileURL
         let audioURL = Self.transcriptionAudioURL(in: sessionDir)
@@ -389,21 +372,21 @@ public final class MeetingRecorderService: ObservableObject {
         var warnings: [String] = []
         var transcriptURLs: (txtURL: URL, jsonURL: URL)?
         var transcriptError: String?
-        if !permissionState.canTranscribe {
-            isTranscribing = false
-        } else if var metadata = Self.recoveryMetadata(at: metadataURL, sessionDir: sessionDir) {
-            transcriptURLs = await transcribeSession(
-                sessionDir,
-                audioURL: audioURL,
-                metadata: &metadata,
-                metadataURL: metadataURL,
-                warnings: &warnings,
-                transcriptError: &transcriptError
-            )
-        } else {
-            isTranscribing = false
-            transcriptError = MeetingBubble.metadataUnreadableError
+        if permissionState.canTranscribe {
+            if var metadata = Self.recoveryMetadata(at: metadataURL, sessionDir: sessionDir) {
+                transcriptURLs = await transcribeSession(
+                    sessionDir,
+                    audioURL: audioURL,
+                    metadata: &metadata,
+                    metadataURL: metadataURL,
+                    warnings: &warnings,
+                    transcriptError: &transcriptError
+                )
+            } else {
+                transcriptError = MeetingBubble.metadataUnreadableError
+            }
         }
+        // Ends the transcribing state on every path
         showCompletion(MeetingRecordingResult(
             sessionID: last.sessionID,
             sessionDirectoryURL: sessionDir,
@@ -426,7 +409,7 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     /// Transcribes `audioURL` into the session's transcript files (replacing earlier ones), copies the text to the export
-    /// folder, and records the outcome in `metadata.json`. The caller sets `isTranscribing` before its first await.
+    /// folder, and records the outcome in `metadata.json`. The state stays `.transcribing` until the caller's `showCompletion`.
     /// No transcript at all sets `transcriptError`; a kept or partial one adds to `warnings`.
     private func transcribeSession(
         _ sessionDir: URL,
@@ -437,14 +420,11 @@ public final class MeetingRecorderService: ObservableObject {
         transcriptError: inout String?
     ) async -> (txtURL: URL, jsonURL: URL)? {
         let sessionID = sessionDir.lastPathComponent
-        state = .transcribing(sessionID: sessionID, sessionDirectoryURL: sessionDir)
+        state = .transcribing
         statusMessage = "✨ Meeting saved! Transcribing audio on-device..."
         present(.transcribing)
         transcribingMetadata = (metadata, metadataURL)
-        defer {
-            transcribingMetadata = nil
-            isTranscribing = false
-        }
+        defer { transcribingMetadata = nil }
         // Only a Transcribe Again finds transcript files here; a fresh session folder has none. Read before the run:
         // the previous export is replaced only while it still holds exactly these bytes (not edited by hand).
         let previousTxtURL = sessionDir.appendingPathComponent("transcript.txt")
@@ -508,7 +488,7 @@ public final class MeetingRecorderService: ObservableObject {
 
     private func showCompletion(_ result: MeetingRecordingResult) {
         lastCompletedResult = result
-        state = .completed(result)
+        state = .completed
         present(.completion(for: result), hideAfter: Self.completionBubbleDuration)
         let folder = result.sessionDirectoryURL.lastPathComponent
         statusMessage = result.transcriptTextURL != nil
@@ -530,7 +510,7 @@ public final class MeetingRecorderService: ObservableObject {
     public func finalizeForTermination(mixBudget: Duration = .milliseconds(4_500)) async {
         let mixDeadline = ContinuousClock.now + mixBudget
         while isStarting || isStopping {
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            await withCheckedContinuation { finalizeWaiters.append($0) }
         }
         await stopRecording(transcribe: false, mixDeadline: mixDeadline)
     }
@@ -602,23 +582,25 @@ public final class MeetingRecorderService: ObservableObject {
         }
     }
 
-    /// Session folders Bitz created (its folder name and a decodable `metadata.json`) that started more than `days` ago.
-    /// The folder's modification date must agree, so a wrong `startedAt` alone never expires a recent session.
-    /// Symlinks are never candidates. The caller guarantees no session is active, so none is in progress here.
+    /// Session folders Bitz created (its folder name and a decodable `metadata.json`) that started more than `days` before
+    /// `now`, or before the newest session if that is earlier: a clock jumped forward never expires recordings that were
+    /// within `days` of the newest one. The folder's modification date must agree, so a wrong `startedAt` alone never
+    /// expires a recent session. Symlinks are never candidates. The caller guarantees no session is active.
     nonisolated static func expiredSessions(in root: URL, olderThanDays days: Int, now: Date) -> [URL] {
-        let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
         let folders = (try? FileManager.default.contentsOfDirectory(
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey],
             options: .skipsHiddenFiles
         )) ?? []
-        return folders.filter { sessionDir in
+        let sessions = folders.compactMap { sessionDir -> (url: URL, startedAt: Date, modified: Date)? in
             guard isSessionFolder(sessionDir),
                   let modified = try? sessionDir.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
-                  modified < cutoff,
-                  let metadata = decodedMetadata(at: sessionDir.appendingPathComponent("metadata.json")) else { return false }
-            return metadata.startedAt < cutoff
+                  let metadata = decodedMetadata(at: sessionDir.appendingPathComponent("metadata.json")) else { return nil }
+            return (sessionDir, metadata.startedAt, modified)
         }
+        let anchor = min(now, sessions.map(\.startedAt).max() ?? now)
+        let cutoff = anchor.addingTimeInterval(-Double(days) * 86_400)
+        return sessions.filter { $0.modified < cutoff && $0.startedAt < cutoff }.map(\.url)
     }
 
     /// Only folders Bitz names (`yyyy-MM-dd_HH-mm-ss`, optional `-N`, after `prefix`), never symlinks: the recordings
@@ -728,7 +710,7 @@ public final class MeetingRecorderService: ObservableObject {
 
     public func dismissBubble() {
         present(nil)
-        if case .failed = state {
+        if state == .failed {
             state = .idle
         }
     }
@@ -770,9 +752,16 @@ public final class MeetingRecorderService: ObservableObject {
         present(.interruption(source, remaining: activeSources))
     }
 
+    private func resumeFinalizeWaitersIfIdle() {
+        guard !isStarting, !isStopping, !finalizeWaiters.isEmpty else { return }
+        let waiters = finalizeWaiters
+        finalizeWaiters = []
+        waiters.forEach { $0.resume() }
+    }
+
     /// `text` is the short headline; `message` (the full cause) goes to `statusMessage`. Stays until dismissed.
     private func showFailure(_ text: String, detail: String? = nil, message: String) {
-        state = .failed(message)
+        state = .failed
         statusMessage = message
         present(.failure(text, detail: detail))
     }
@@ -788,28 +777,6 @@ public final class MeetingRecorderService: ObservableObject {
             guard !Task.isCancelled, let self, self.bubble == newBubble else { return }
             self.bubble = nil
         }
-    }
-
-    private func startElapsedTimer() {
-        stopElapsedTimer()
-        elapsedTimerTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                guard !Task.isCancelled, let self, self.isRecording,
-                      let startedAt = self.activeStartedAt else {
-                    break
-                }
-                let elapsed = max(0, Int(self.nowProvider().timeIntervalSince(startedAt).rounded(.down)))
-                if self.timerStore.elapsedSeconds != elapsed {
-                    self.timerStore.elapsedSeconds = elapsed
-                }
-            }
-        }
-    }
-
-    private func stopElapsedTimer() {
-        elapsedTimerTask?.cancel()
-        elapsedTimerTask = nil
     }
 
     /// Claims a new session folder. A name already taken by an earlier recording gets `-2`, `-3`… instead.
@@ -840,8 +807,10 @@ public final class MeetingRecorderService: ObservableObject {
         ifUnchangedFrom previousTranscript: Data? = nil
     ) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        if let previousName, let previousTranscript {
-            let previous = directory.appendingPathComponent((previousName as NSString).lastPathComponent)
+        // The name comes from metadata.json, which anyone can edit: only a plain file name inside `directory` is replaced
+        let name = previousName.map { ($0 as NSString).lastPathComponent }
+        if let name, !["", ".", "..", "/"].contains(name), let previousTranscript {
+            let previous = directory.appendingPathComponent(name)
             if (try? Data(contentsOf: previous)) == previousTranscript {
                 try Data(contentsOf: txtURL).write(to: previous, options: .atomic)
                 restrictToOwner(previous)
@@ -879,10 +848,7 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     nonisolated static func writeMetadata(_ metadata: MeetingRecordingMetadata, to url: URL) {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        if let data = try? encoder.encode(metadata) {
+        if let data = try? MeetingFormatting.jsonEncoder().encode(metadata) {
             try? data.write(to: url, options: .atomic)
             restrictToOwner(url)
         }
@@ -897,13 +863,17 @@ public final class MeetingRecorderService: ObservableObject {
         return try? existing.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
     }
 
+    /// Regular (Dock) apps only: helpers such as Electron renderer processes share the main app's bundle ID prefix.
     private static func detectRunningMeetingApps() -> [String] {
-        meetingAppNames(in: NSWorkspace.shared.runningApplications.map { ($0.bundleIdentifier, $0.localizedName) })
+        meetingAppNames(in: NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .map { ($0.bundleIdentifier, $0.localizedName) })
     }
 
-    /// Names of the apps whose bundle ID matches a meeting app keyword, sorted and unique.
+    /// Names of the apps whose bundle ID matches a meeting app keyword (or, without a known ID, whose name matches), sorted and unique.
     nonisolated static func meetingAppNames(in apps: [(bundleID: String?, name: String?)]) -> [String] {
         let names = apps.compactMap { app -> String? in
+            if let name = app.name, meetingAppNamesWithoutKnownBundleID.contains(name) { return name }
             guard let bundleID = app.bundleID?.lowercased(),
                   meetingAppBundleKeywords.contains(where: { bundleID.contains($0) }) else { return nil }
             return app.name ?? app.bundleID

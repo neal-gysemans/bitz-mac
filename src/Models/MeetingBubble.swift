@@ -37,14 +37,6 @@ public struct MeetingBubble: Equatable, Sendable {
         }
     }
 
-    /// The speech bubble ladder around meeting bubbles: a thermal warning hides any meeting bubble, and personality
-    /// commentary never shows over one. Agent popups and the update alert sit above all of these, as before.
-    public enum Priority: Int, Comparable, Sendable {
-        case personality, completion, progress, recording, interruption, failure, thermal
-
-        public static func < (lhs: Priority, rhs: Priority) -> Bool { lhs.rawValue < rhs.rawValue }
-    }
-
     public let kind: Kind
     /// Headline: one short clause, never truncated.
     public let text: String
@@ -57,16 +49,6 @@ public struct MeetingBubble: Equatable, Sendable {
         self.text = text
         self.detail = detail
         self.actions = actions
-    }
-
-    public var priority: Priority {
-        switch kind {
-        case .failure: return .failure
-        case .interruption: return .interruption
-        case .recording: return .recording
-        case .saving, .transcribing: return .progress
-        case .completion: return .completion
-        }
     }
 
     /// Only a bubble with buttons makes the bubble panel take clicks (AGENTS.md §4.1).

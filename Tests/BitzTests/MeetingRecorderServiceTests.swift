@@ -304,11 +304,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
         await service.startRecording()
         XCTAssertFalse(service.isRecording)
         XCTAssertEqual(captureEngine.startCallCount, 0)
-        if case .failed(let message) = service.state {
-            XCTAssertTrue(message.contains("Microphone"))
-        } else {
-            XCTFail("Expected .failed state when Microphone permission is denied")
-        }
+        XCTAssertEqual(service.state, .failed, "Expected .failed state when Microphone permission is denied")
+        XCTAssertTrue(service.statusMessage.contains("Microphone"))
         XCTAssertEqual(service.bubble, .failure(MeetingBubble.needsPermissionText, detail: "Microphone"))
         XCTAssertEqual(service.bubble?.actions, [.openSettings, .dismiss])
     }
@@ -477,15 +474,29 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let sleeper = ManualSleeper()
         let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
         service.sleep = sleeper.sleep
-
         await service.startRecording()
         await sleeper.waitForRequests(1)
-        service.handleCaptureInterruption(.microphone, "Microphone stopped after an audio device change: gone")
         sleeper.releaseAll()
-        await Task.yield()
-        XCTAssertEqual(service.bubble?.kind, .interruption, "the 5 s timer of the start bubble must not hide the warning")
-        XCTAssertNil(service.bubbleHideTask, "an interruption stays until dismissed")
-        await service.stopRecording(transcribe: false)
+        await service.bubbleHideTask?.value
+        await service.stopRecording()
+        await sleeper.waitForRequests(2)
+        let firstCompletion = try XCTUnwrap(service.bubble)
+        let firstHide = try XCTUnwrap(service.bubbleHideTask)
+
+        // Transcribe Again shows an equal completion bubble, so only cancellation stops the first 45 s timer hiding it
+        await service.transcribeAgain()
+        XCTAssertEqual(service.bubble, firstCompletion)
+        sleeper.releaseOldest()
+        await firstHide.value
+        XCTAssertEqual(service.bubble, firstCompletion, "the old bubble's timer must not hide the new one")
+
+        let interrupted = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        interrupted.sleep = sleeper.sleep
+        await interrupted.startRecording()
+        interrupted.handleCaptureInterruption(.microphone, "Microphone stopped after an audio device change: gone")
+        XCTAssertEqual(interrupted.bubble?.kind, .interruption)
+        XCTAssertNil(interrupted.bubbleHideTask, "an interruption stays until dismissed")
+        await interrupted.stopRecording(transcribe: false)
     }
 
     func testSavingStateBetweenStopAndMix() async throws {
@@ -619,19 +630,46 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(delegate.engine.idleCommentaryText, "Meow during your meeting")
     }
 
-    func testBubblePriorityLadder() {
-        let ladder: [MeetingBubble.Priority] = [.thermal, .failure, .interruption, .recording, .progress, .completion, .personality]
-        XCTAssertEqual(ladder, ladder.sorted(by: >))
+    /// Thermal warning > meeting bubble > other wellness text (dopamine, overworked), as `SpeechBubbleContent.current` picks.
+    func testMeetingBubbleOutranksWellnessTextButNotTheThermalWarning() async throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        func current() -> SpeechBubbleContent? {
+            SpeechBubbleContent.current(
+                engine: fixture.engine,
+                agentMonitor: fixture.agentMonitor,
+                updateStore: fixture.updateStore,
+                telemetryDashboard: fixture.telemetryDashboard,
+                telemetrySettings: fixture.telemetrySettings,
+                meetingRecorder: service
+            )
+        }
+        func isMeeting(_ content: SpeechBubbleContent?) -> Bool {
+            if case .meeting = content { return true }
+            return false
+        }
+
+        await service.startRecording()
+        XCTAssertEqual(service.bubble, .recording)
+
+        fixture.engine.setPoints(10)
+        XCTAssertEqual(fixture.engine.displayedSpeechBubbleText, WellnessPointEngine.dopamineSadText)
+        XCTAssertTrue(isMeeting(current()), "a meeting bubble beats the dopamine text")
+
+        fixture.engine.setPoints(80, continuousWorkMinutes: WellnessPointEngine.overworkedWorkMinutesThreshold)
+        XCTAssertEqual(fixture.engine.displayedSpeechBubbleText, WellnessPointEngine.overworkedWarningText)
+        XCTAssertTrue(isMeeting(current()), "a meeting bubble beats the overworked text")
+
+        fixture.engine.triggerThermalWarning(isOverheating: true)
+        guard case .wellness(let text) = current() else { return XCTFail("the thermal warning beats a meeting bubble") }
+        XCTAssertEqual(text, WellnessPointEngine.thermalWarningText)
+        await service.stopRecording(transcribe: false)
+    }
+
+    func testOnlyMeetingBubblesWithButtonsAreInteractive() {
         let result = MeetingRecordingResult(
             sessionID: "s", sessionDirectoryURL: tempDir, audioFileURL: tempDir, metadataFileURL: tempDir, durationSeconds: 1
         )
-        XCTAssertEqual(MeetingBubble.failure(MeetingBubble.needsPermissionText).priority, .failure)
-        XCTAssertEqual(MeetingBubble.interruption(.microphone, remaining: [.systemAudio]).priority, .interruption)
-        XCTAssertEqual(MeetingBubble.recording.priority, .recording)
-        XCTAssertEqual(MeetingBubble.saving.priority, .progress)
-        XCTAssertEqual(MeetingBubble.transcribing.priority, .progress)
-        XCTAssertEqual(MeetingBubble.completion(for: result).priority, .completion)
-        // Only bubbles with buttons take clicks
         XCTAssertFalse(MeetingBubble.recording.isInteractive)
         XCTAssertFalse(MeetingBubble.saving.isInteractive)
         XCTAssertTrue(MeetingBubble.failure("x").isInteractive)
@@ -928,6 +966,26 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertTrue(types.contains(NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")))
     }
 
+    func testAHostileExportFileNameNeverWritesOutsideTheExportFolder() throws {
+        let parent = tempDir.appendingPathComponent("hostile", isDirectory: true)
+        let exportDir = parent.appendingPathComponent("export", isDirectory: true)
+        try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+        let previous = Data("old transcript".utf8)
+        let outside = parent.appendingPathComponent("x")
+        try previous.write(to: outside)
+        let txt = tempDir.appendingPathComponent("transcript.txt")
+        try Data("new transcript".utf8).write(to: txt)
+
+        for name in ["../x", "..", "/"] {
+            let exported = try MeetingRecorderService.exportTranscript(
+                txt, sessionID: "S", to: exportDir, replacing: name, ifUnchangedFrom: previous
+            )
+            XCTAssertEqual(exported.deletingLastPathComponent().standardizedFileURL.path, exportDir.standardizedFileURL.path, name)
+        }
+        XCTAssertEqual(try Data(contentsOf: outside), previous)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: parent.path).sorted(), ["export", "x"])
+    }
+
     func testDetectedAppsMatchMeetingAppsByBundleIDAndNeverBrowsers() {
         let names = MeetingRecorderService.meetingAppNames(in: [
             ("us.zoom.xos", "zoom.us"),
@@ -939,9 +997,13 @@ final class MeetingRecorderServiceTests: XCTestCase {
             ("com.apple.Safari", "Safari"),
             ("company.thebrowser.Browser", "Arc"),
             ("com.example.renamed", "Zoom"),
-            (nil, "Microsoft Teams")
+            (nil, "Microsoft Teams"),
+            ("Cisco-Systems.Spark", "Webex"),
+            ("app.tuple.app", "Tuple"),
+            ("com.example.around", "Around"),
+            ("com.example.other", "Around Me")
         ])
-        XCTAssertEqual(names, ["FaceTime", "Microsoft Teams", "com.tinyspeck.slackmacgap", "zoom.us"])
+        XCTAssertEqual(names, ["Around", "FaceTime", "Microsoft Teams", "Tuple", "Webex", "com.tinyspeck.slackmacgap", "zoom.us"])
     }
 
     func testTranscribeAgainWriteFailureIsNotReportedAsARecognitionFailure() async throws {
@@ -1269,8 +1331,8 @@ final class MeetingRecorderServiceTests: XCTestCase {
 
         XCTAssertFalse(service.isRecording)
         XCTAssertEqual(captureEngine.startCallCount, 0)
-        guard case .failed(let message) = service.state else { return XCTFail("expected a failure, got \(service.state)") }
-        XCTAssertTrue(message.contains("free disk space"), message)
+        XCTAssertEqual(service.state, .failed)
+        XCTAssertTrue(service.statusMessage.contains("free disk space"), service.statusMessage)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: tempDir.path), [])
 
         // Unknown free space does not block recording
@@ -1411,6 +1473,27 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(meta.audioFileNames, ["audio.m4a", "system.caf"])
     }
 
+    /// The commit fails after `beforeCommit` recorded the tracks: the final metadata must not claim a mix that never landed.
+    func testAMixFailingAfterBeforeCommitLeavesNoMixedTracksOnDisk() async throws {
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        let service = makeService(captureEngine: captureEngine)
+        await service.startRecording()
+        let session = try XCTUnwrap(captureEngine.lastSessionDirectoryURL)
+        // A damaged audio.m4a is replaced, so beforeCommit runs; being immutable, the replace itself then fails
+        let damaged = session.appendingPathComponent(MeetingTrackMixer.audioFileName)
+        try Data("not audio".utf8).write(to: damaged)
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: damaged.path)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: damaged.path) }
+
+        await service.stopRecording(transcribe: false)
+
+        let metadataURL = session.appendingPathComponent("metadata.json")
+        XCTAssertFalse(try String(contentsOf: metadataURL, encoding: .utf8).contains("mixed_tracks"))
+        let metadata = try decodeMetadata(metadataURL)
+        XCTAssertEqual(metadata.audioStatus, .unmixed)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: session.appendingPathComponent(MeetingTrackWriter.micFileName).path))
+    }
+
     func testRecoveryReconcilesOlderMetadataAKillLeftStale() async throws {
         let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
         let session = try makeSession("2026-11-05_10-45-00")
@@ -1516,13 +1599,14 @@ final class MeetingRecorderServiceTests: XCTestCase {
     }
 
     func testLaunchRecoveryNeverRunsDuringARecording() async throws {
-        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine())
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        let service = makeService(captureEngine: captureEngine)
         let orphan = tempDir.appendingPathComponent("2026-11-05_09-00-00", isDirectory: true)
         try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: false)
         try writeTrack(orphan.appendingPathComponent(MeetingTrackWriter.micFileName))
 
         await service.startRecording()
-        let active = try XCTUnwrap(service.state.recordingSessionDirectory(in: tempDir))
+        let active = try XCTUnwrap(captureEngine.lastSessionDirectoryURL)
         await service.recoverUnmixedSessions()
 
         XCTAssertEqual(MeetingTrackMixer.audioFileNames(in: orphan), ["mic.caf"])
@@ -1550,6 +1634,12 @@ final class ManualSleeper: @unchecked Sendable {
         }
     }
 
+    /// Releases only the earliest pending delay.
+    func releaseOldest() {
+        let released = lock.withLock { waiting.isEmpty ? nil : waiting.removeFirst() }
+        released?.resume()
+    }
+
     func releaseAll() {
         let released = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
             defer { waiting.removeAll() }
@@ -1566,9 +1656,3 @@ final class ManualSleeper: @unchecked Sendable {
     }
 }
 
-private extension MeetingRecorderState {
-    func recordingSessionDirectory(in root: URL) -> URL? {
-        guard case .recording(let sessionID, _, _) = self else { return nil }
-        return root.appendingPathComponent(sessionID, isDirectory: true)
-    }
-}

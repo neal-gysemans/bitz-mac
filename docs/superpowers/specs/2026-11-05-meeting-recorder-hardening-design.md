@@ -71,6 +71,7 @@ Ship the meeting recorder in a state where a recording can never be silently los
 - Language picker: "Automatic", then the user's preferred languages, then one entry per remaining language (region shown only where it disambiguates, e.g. English (US)/(UK)); no invalid selection while the list loads.
 - **First-recording notice (consent):** before the first recording ever, a one-time sheet/alert explains what is captured (microphone + all system audio, via the Screen & System Audio Recording permission), where files go, that transcription is on-device, and "Let other participants know before you record." Recording starts only after "Continue"; stored as `bitz.meeting.consentAcknowledged`. This is also where the Screen Recording scope is explained before `CGRequestScreenCaptureAccess` (Security #6).
 - **Retention:** setting "Delete recordings after" Off (default) / 30 / 90 days; runs at launch and after each recording; deletes only session folders under the recordings root that Bitz created (have a valid `metadata.json`) and are older than the limit.
+  - Safeguards: the folder's modification date must also be past the limit; each run first sweeps `.deleting-<session>` folders a cut-short delete left (a session is renamed to that before removal); the cutoff is measured from `min(now, newest session start)`, so a clock jumped forward never expires sessions within the limit of the newest one (and the newest session is never expired).
 
 ### D8. Export and metadata hygiene (Security #9, #10; Architecture #12)
 - Export: on "file exists" during `copyItem`, retry with the next suffix (bounded); when the chosen export folder is inside a git work tree or a cloud-sync location, show the sync/git caption.
@@ -86,6 +87,7 @@ Ship the meeting recorder in a state where a recording can never be silently los
 - Comments that contradict code fixed (start sound, UTC, "synchronized"/"ring buffer").
 - `isLoaf(state:isRecording:)` single static helper; `MascotOverlayView` receives `isRecordingMeeting: Bool` instead of observing the whole recorder.
 - NITs: Advanced shortcut row style; shared `JSONEncoder` factory; `finalizeForTermination` awaits stored tasks instead of polling; `CyberHeadphonesOverlay` `Equatable` used or dropped.
+- Follow-ups: `SystemDiffViewer` / `GitActivityProvider` read git's output before waiting for exit (a diff over the ~64 KB pipe buffer deadlocked); the 1 Hz elapsed timer (`MeetingRecordingTimerStore`) and the "(00:03)" counter on the 5 s recording bubble are removed, so nothing ticks while recording.
 - **Shared Info.plist template:** `Scripts/Info.plist.template` used by `package_and_run.sh` and `create_dmg.sh`.
 - **Local test builds use a separate bundle ID:** `package_and_run.sh` defaults to `com.bitz.cybercat.dev` (override with `BITZ_BUNDLE_ID`); `create_dmg.sh` keeps `com.bitz.cybercat`.
 - `MascotOverlayView` now gets the real `agentMonitor` (drive-by from the original commit): keep, add a test.

@@ -128,7 +128,7 @@ public struct BitzCharacterView: View {
         self.time = time
         self.isBlinking = isBlinking
         self.isPetReactionActive = isPetReactionActive
-        self.isLoafPosture = isLoafPosture ?? (!isRecordingMeeting && (state == .burnout || state == .charging))
+        self.isLoafPosture = isLoafPosture ?? BitzCharacterView.isLoaf(state: state, isRecording: isRecordingMeeting)
         self.showParticles = showParticles
         self.customVisorColor = customVisorColor
         self.isRecordingMeeting = isRecordingMeeting
@@ -155,6 +155,11 @@ public struct BitzCharacterView: View {
             // Critical Red (#FF1E1E)
             return (1.0, 30.0 / 255.0, 30.0 / 255.0)
         }
+    }
+
+    /// Bitz lies down as a loaf in burnout and while charging, but sits up with headphones on while recording a meeting.
+    public static func isLoaf(state: BitzState, isRecording: Bool) -> Bool {
+        !isRecording && (state == .burnout || state == .charging)
     }
 
     /// How far the head & ears assembly is lifted above its resting place in the frame.
@@ -419,7 +424,7 @@ private struct MascotHeadAssemblyView: View, Equatable {
 
 /// Holographic cyber-headphones with a red recording indicator LED worn by Bitz during active meeting capture (#43).
 /// Entirely contained within the 132×92 pt head chassis so `earOverflow` and window bounds are never exceeded.
-private struct CyberHeadphonesOverlay: View, Equatable {
+private struct CyberHeadphonesOverlay: View {
     let visorColor: Color
     let palette: AvatarResolvedPalette
     let pulsesLED: Bool
@@ -522,7 +527,7 @@ public struct LiveBitzCharacterView: View {
         self.palette = palette
         self.state = state
         self.isPetReactionActive = isPetReactionActive
-        self.isLoafPosture = isLoafPosture ?? (!isRecordingMeeting && (state == .burnout || state == .charging))
+        self.isLoafPosture = isLoafPosture ?? BitzCharacterView.isLoaf(state: state, isRecording: isRecordingMeeting)
         self.showParticles = showParticles
         self.customVisorColor = customVisorColor
         self.isPaused = isPaused

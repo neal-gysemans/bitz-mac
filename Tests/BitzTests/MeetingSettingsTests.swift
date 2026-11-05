@@ -112,6 +112,7 @@ final class MeetingSettingsTests: XCTestCase {
 
     func testRetentionDeletesOnlyOldBitzSessionsWithValidMetadata() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        try makeNewestSession(at: now)
         let old = now.addingTimeInterval(-40 * 86_400)
         let expired = try makeSession("2026-01-01_10-00-00", startedAt: old)
         let young = try makeSession("2026-01-02_10-00-00", startedAt: now.addingTimeInterval(-10 * 86_400))
@@ -162,6 +163,7 @@ final class MeetingSettingsTests: XCTestCase {
 
     func testExpiredSessionsFilterUsesMetadataStartDate() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        try makeNewestSession(at: now)
         let justOld = try makeSession("2026-01-01_10-00-00", startedAt: now.addingTimeInterval(-30 * 86_400 - 1))
         _ = try makeSession("2026-01-01_10-00-01", startedAt: now.addingTimeInterval(-30 * 86_400 + 60))
 
@@ -173,6 +175,7 @@ final class MeetingSettingsTests: XCTestCase {
 
     func testRetentionStillExpiresSessionsWithMetadataFromEarlierBuilds() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        try makeNewestSession(at: now)
         let folder = tempDir.appendingPathComponent("2026-01-01_10-00-00", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
         // camelCase keys with a single audioFileName: the oldest schema this branch wrote
@@ -195,8 +198,24 @@ final class MeetingSettingsTests: XCTestCase {
         XCTAssertEqual(MeetingRecorderService.expiredSessions(in: tempDir, olderThanDays: 30, now: now), [])
     }
 
+    /// A clock jumped a year ahead must not expire recordings that were within the limit of the newest one.
+    func testAForwardClockJumpOnlyExpiresSessionsOlderThanTheNewestByTheLimit() throws {
+        let newest = Date(timeIntervalSince1970: 1_800_000_000)
+        try makeNewestSession(at: newest)
+        let recent = try makeSession("2026-01-02_10-00-00", startedAt: newest.addingTimeInterval(-29 * 86_400))
+        let old = try makeSession("2026-01-01_10-00-00", startedAt: newest.addingTimeInterval(-31 * 86_400))
+        let jumped = newest.addingTimeInterval(365 * 86_400)
+
+        XCTAssertEqual(
+            MeetingRecorderService.expiredSessions(in: tempDir, olderThanDays: 30, now: jumped).map(\.lastPathComponent),
+            [old.lastPathComponent],
+            "\(recent.lastPathComponent) was within 30 days of the newest session"
+        )
+    }
+
     func testRetentionDeletesASymlinkInsideASessionButNeverItsTarget() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        try makeNewestSession(at: now)
         let old = now.addingTimeInterval(-40 * 86_400)
         let outside = FileManager.default.temporaryDirectory.appendingPathComponent("bitz-outside-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: outside) }
@@ -219,6 +238,7 @@ final class MeetingSettingsTests: XCTestCase {
 
     func testRetentionRenamesASessionAwayBeforeDeletingAndSweepsWhatADeleteLeftBehind() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        try makeNewestSession(at: now)
         let old = now.addingTimeInterval(-40 * 86_400)
         let session = try makeSession("2026-01-01_10-00-00", startedAt: old)
         // A folder whose contents cannot be removed makes the delete stop halfway
@@ -277,6 +297,7 @@ final class MeetingSettingsTests: XCTestCase {
 
     func testRetentionWaitsWhileRecovering() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        try makeNewestSession(at: now)
         let expired = try makeSession("2026-01-01_10-00-00", startedAt: now.addingTimeInterval(-40 * 86_400))
         _ = try makeOrphanSession("2026-01-02_10-00-00")
         let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), now: { now })
@@ -296,6 +317,7 @@ final class MeetingSettingsTests: XCTestCase {
     func testLaunchRecoversBeforeApplyingRetention() async throws {
         let orphan = try makeOrphanSession("2026-01-01_10-00-00")
         let now = Date().addingTimeInterval(100 * 86_400)
+        try makeNewestSession(at: now)
         let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), now: { now })
         service.settingsStore.setRetentionDays(30)
 
@@ -331,6 +353,8 @@ final class MeetingSettingsTests: XCTestCase {
         XCTAssertEqual(options.map(\.label), ["English", "Dutch"])
     }
 
+    /// Preferred variants keep the user's order (en-US before en-GB, though "United Kingdom" sorts first); zh-HK is
+    /// Cantonese, so it keeps its own entry next to Traditional and Simplified Chinese.
     func testLanguageOptionsKeepEveryPreferredVariantAndSplitChineseByScript() {
         let options = SpeechFrameworkTranscriptionService.orderedLocaleOptions(
             Self.englishHeavyLocales + ["zh-CN", "zh-TW", "zh-HK"],
@@ -338,12 +362,23 @@ final class MeetingSettingsTests: XCTestCase {
             displayLocale: Locale(identifier: "en_US")
         )
 
-        XCTAssertEqual(options.map(\.id), ["en-GB", "en-US", "zh-CN", "zh-TW", "nl-BE"])
+        XCTAssertEqual(options.map(\.id), ["en-US", "en-GB", "zh-CN", "zh-HK", "zh-TW", "nl-BE"])
         let labels = Dictionary(uniqueKeysWithValues: options.map { ($0.id, $0.label) })
         XCTAssertEqual(labels["en-US"], "English (United States)")
         XCTAssertEqual(labels["en-GB"], "English (United Kingdom)")
         XCTAssertEqual(labels["zh-TW"], "Chinese (Taiwan)")
+        XCTAssertEqual(labels["zh-HK"], "Chinese (Hong Kong)")
         XCTAssertEqual(labels["nl-BE"], "Dutch")
+    }
+
+    func testCantoneseStaysListedWhenTraditionalChineseIsPreferred() {
+        let options = SpeechFrameworkTranscriptionService.orderedLocaleOptions(
+            ["zh-CN", "zh-TW", "zh-HK", "fr-FR"],
+            preferredLanguages: ["zh-TW", "fr-FR"],
+            displayLocale: Locale(identifier: "en_US")
+        )
+
+        XCTAssertEqual(options.map(\.id), ["zh-TW", "zh-CN", "zh-HK", "fr-FR"])
     }
 
     func testASavedVariantMissingFromTheListStaysSelectable() {
@@ -405,6 +440,12 @@ final class MeetingSettingsTests: XCTestCase {
     /// Sets the folder's modification date, which retention also requires to be past the limit.
     private func backdate(_ folder: URL, to date: Date) throws {
         try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: folder.path)
+    }
+
+    /// The newest recording, made at `now`. Retention measures from the newest session, so without one nothing older expires.
+    @discardableResult
+    private func makeNewestSession(at now: Date) throws -> URL {
+        try makeSession("2027-01-15_08-00-00", startedAt: now)
     }
 
     /// A session a crash left as a track and no metadata, so launch recovery mixes it and writes its metadata.

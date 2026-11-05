@@ -87,8 +87,7 @@ final class MascotOverlayLayoutTests: XCTestCase {
             positionStore: fixture.positionStore,
             telemetryDashboard: fixture.telemetryDashboard,
             telemetrySettings: fixture.telemetrySettings,
-            paletteStore: paletteStore,
-            meetingRecorder: .stub(defaults: defaults)
+            paletteStore: paletteStore
         )
         try assertNothingDrawnOutside(view, size: MascotOverlayPanel.defaultPanelSize)
     }

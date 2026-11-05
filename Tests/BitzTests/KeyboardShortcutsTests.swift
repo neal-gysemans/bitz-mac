@@ -253,6 +253,24 @@ final class KeyboardShortcutsTests: XCTestCase {
         )
     }
 
+    func testMainMenuHasTheMeetingRecordingItem() throws {
+        let suiteName = "KeyboardShortcutsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let delegate = BitzAppDelegate(meetingRecorder: .stub(defaults: defaults), userDefaults: defaults)
+        _ = NSApplication.shared
+        NSApp?.mainMenu = nil
+        delegate.setupApplicationMenu()
+
+        let item = try XCTUnwrap(NSApp?.mainMenu?.items.first?.submenu?.items.first {
+            $0.action == #selector(BitzAppDelegate.toggleMeetingRecordingAction)
+        })
+        XCTAssertTrue(item.target === delegate)
+        XCTAssertTrue(delegate.validateMenuItem(item))
+        XCTAssertEqual(item.title, "Start Meeting Recording")
+    }
+
     // MARK: - Meeting recording hotkey (#43)
 
     private func makeMeetingDelegate(

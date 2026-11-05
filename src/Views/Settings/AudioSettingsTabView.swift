@@ -10,6 +10,9 @@ public struct AudioSettingsTabView: View {
     @ObservedObject public var meetingRecorder: MeetingRecorderService
     /// Built once in `.onAppear` (probing recognizers is not free), never in `body`.
     @State private var transcriptionLocaleOptions: [(id: String, label: String)] = []
+    /// `syncWarning` reads the file system, so it runs when a folder changes, never in `body`.
+    @State private var recordingsFolderWarning: String?
+    @State private var exportFolderWarning: String?
 
     public init(
         settingsStore: CyberAudioSettingsStore,
@@ -39,6 +42,8 @@ public struct AudioSettingsTabView: View {
         }
         .onAppear {
             meetingRecorder.refreshPermissions()
+            updateRecordingsFolderWarning()
+            updateExportFolderWarning()
             // Probing ~60 recognizers takes ~0.2 s, so build the list off the main thread
             Task {
                 transcriptionLocaleOptions = await Task.detached(priority: .utility) {
@@ -46,6 +51,16 @@ public struct AudioSettingsTabView: View {
                 }.value
             }
         }
+        .onChange(of: meetingSettings.meetingsRootDirectoryURL) { updateRecordingsFolderWarning() }
+        .onChange(of: meetingSettings.transcriptExportDirectoryURL) { updateExportFolderWarning() }
+    }
+
+    private func updateRecordingsFolderWarning() {
+        recordingsFolderWarning = MeetingSettingsStore.syncWarning(for: meetingSettings.meetingsRootDirectoryURL)
+    }
+
+    private func updateExportFolderWarning() {
+        exportFolderWarning = meetingSettings.transcriptExportDirectoryURL.flatMap { MeetingSettingsStore.syncWarning(for: $0) }
     }
 
     // MARK: - Meeting Recorder Card (#43)
@@ -154,7 +169,7 @@ public struct AudioSettingsTabView: View {
                 caption((meetingSettings.meetingsRootDirectoryURL.path as NSString).abbreviatingWithTildeInPath,
                         enabled: !meetingRecorder.isRecording)
 
-                if let warning = MeetingSettingsStore.syncWarning(for: meetingSettings.meetingsRootDirectoryURL) {
+                if let warning = recordingsFolderWarning {
                     Text("Recordings folder: \(warning)")
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -275,8 +290,7 @@ public struct AudioSettingsTabView: View {
                 caption("Every transcript is copied, including work meetings — turn this off for recordings that must not leave Bitz's folder.",
                         enabled: true)
 
-                if let exportURL = meetingSettings.transcriptExportDirectoryURL,
-                   let warning = MeetingSettingsStore.syncWarning(for: exportURL) {
+                if let warning = exportFolderWarning {
                     Text("Export folder: \(warning)")
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -380,6 +394,10 @@ public struct AudioSettingsTabView: View {
                 }
 
                 Text("Low-latency 8-bit cybernetic sound effects for mascot wellness transitions and AI coding agent lifecycle alerts. Automatically pauses engine when silent (0.0% idle CPU).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text("Turning this off silences every sound except the meeting start chime (Meeting Recorder card).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -546,7 +564,7 @@ public struct AudioSettingsTabView: View {
         case .charging:
             return "Calm ascending blip when entering offline/break charging"
         case .meetingRecordingStarted:
-            return "Plays when a recording starts so you know Bitz is listening. Silent only when your Mac is muted."
+            return "Plays even with Cyber Audio off or Focus on, so you know Bitz is listening. Only this switch or a muted Mac silences it."
         case .meetingRecordingSaved:
             return "Fanfare when a meeting recording is saved — plays while the mic is in use; system mute, Focus suppression and Enable Cyber Audio still silence it"
         }

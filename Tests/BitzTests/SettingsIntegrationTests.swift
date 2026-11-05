@@ -203,7 +203,6 @@ final class SettingsIntegrationTests: XCTestCase {
             positionStore: positionStore,
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
-            meetingRecorder: .stub(defaults: defaults),
             onOpenSettings: {
                 settingsOpened = true
             }

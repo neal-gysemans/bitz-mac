@@ -334,14 +334,15 @@ public struct MeetingRecordingResult: Equatable, Sendable {
 }
 
 /// Lifecycle state of the Meeting Audio Recorder & Transcription pipeline (#43).
+/// The session and result live on `MeetingRecorderService`; the failure text is its `statusMessage`.
 public enum MeetingRecorderState: Equatable, Sendable {
     case idle
-    case recording(sessionID: String, startedAt: Date, elapsedSeconds: Int)
+    case recording
     /// Between Stop and the end of the mix: capture is closed, `audio.m4a` is being written.
-    case saving(sessionID: String)
-    case transcribing(sessionID: String, sessionDirectoryURL: URL)
-    case completed(MeetingRecordingResult)
-    case failed(String)
+    case saving
+    case transcribing
+    case completed
+    case failed
 }
 
 // MARK: - Meeting Recording Hotkey
@@ -389,8 +390,16 @@ public enum MeetingRecordingHotkey: String, CaseIterable, Identifiable, Sendable
 
 // MARK: - Meeting Formatting
 
-/// Formatting helpers shared by the recorder, transcript writer and speech bubble (#43).
+/// Formatting helpers shared by the recorder and transcript writer (#43).
 public enum MeetingFormatting {
+    /// `metadata.json` and `transcript.json`: pretty, sorted keys, ISO 8601 dates.
+    public static func jsonEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }
+
     /// Formats elapsed seconds as `MM:SS` (or `HH:MM:SS` when >= 1 hour).
     public static func formatDuration(_ totalSeconds: Int) -> String {
         let clamped = max(0, totalSeconds)
@@ -403,7 +412,7 @@ public enum MeetingFormatting {
         return String(format: "%02d:%02d", minutes, seconds)
     }
 
-    /// Generates a deterministic session folder name `YYYY-MM-DD_HH-mm-ss` in UTC/local calendar.
+    /// Generates a deterministic session folder name `YYYY-MM-DD_HH-mm-ss` in `timeZone` (local time by default).
     public static func sessionFolderName(for date: Date, timeZone: TimeZone = .current) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")

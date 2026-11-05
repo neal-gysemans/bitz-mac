@@ -7,15 +7,12 @@ import Foundation
 
 public enum MeetingRecorderError: Error, LocalizedError, Equatable, Sendable {
     case noAudioSourcesEnabled
-    case permissionDenied(String)
     case captureStartFailed(String)
 
     public var errorDescription: String? {
         switch self {
         case .noAudioSourcesEnabled:
             return "Enable at least Microphone or System Audio before recording."
-        case .permissionDenied(let detail):
-            return detail
         case .captureStartFailed(let reason):
             return "Could not start audio capture: \(reason)"
         }
