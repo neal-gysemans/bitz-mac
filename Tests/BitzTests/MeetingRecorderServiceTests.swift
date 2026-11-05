@@ -94,6 +94,8 @@ struct MockMeetingTranscriptionService: MeetingTranscriptionProviding {
     var onTranscribe: (@Sendable (URL) -> Void)?
     /// Checked on each call, so one service can succeed first and fail later; nil means `error` always applies.
     var failsNow: (@Sendable () -> Bool)?
+    /// Checked on each call; a transcript returned here replaces the default one.
+    var transcriptNow: (@Sendable () -> MeetingTranscript?)?
 
     func transcribe(
         audioFileURL: URL,
@@ -105,6 +107,7 @@ struct MockMeetingTranscriptionService: MeetingTranscriptionProviding {
             try? await Task.sleep(nanoseconds: delayNanoseconds)
         }
         if let error, failsNow?() ?? true { throw error }
+        if let transcript = transcriptNow?() { return transcript }
         return MeetingTranscript(
             sessionID: sessionID,
             localeIdentifier: locale?.identifier ?? "en-US",
@@ -357,6 +360,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
 
         XCTAssertEqual(captureEngine.startCallCount, 1)
         XCTAssertTrue(service.isRecording)
+        XCTAssertEqual(service.bubble, .recording, "a double press while starting shows no notice")
     }
 
     func testStartDuringStopIsRejectedAndRecordingStaysStoppable() async {
@@ -504,8 +508,10 @@ final class MeetingRecorderServiceTests: XCTestCase {
 
     func testSavingStateBetweenStopAndMix() async throws {
         let captureEngine = MockMeetingAudioCaptureEngine()
-        captureEngine.stopDelayNanoseconds = 50_000_000
+        captureEngine.stopDelayNanoseconds = 300_000_000
+        let sleeper = ManualSleeper()
         let service = makeService(captureEngine: captureEngine)
+        service.sleep = sleeper.sleep
         await service.startRecording()
 
         let stop = Task { await service.stopRecording() }
@@ -517,12 +523,20 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(service.bubble, .saving)
         XCTAssertEqual(service.busyMenuLabel, MeetingBubble.savingMenuLabel)
 
-        // The hotkey during saving neither starts a recording nor drops the saving bubble
+        // The hotkey during saving does not start a recording; a short notice says why, then gives way to the saving bubble
         await service.toggleRecording()
         XCTAssertEqual(captureEngine.startCallCount, 1)
+        XCTAssertEqual(service.bubble, .stillSaving)
+        await sleeper.waitForRequests(2)
+        XCTAssertEqual(sleeper.requested.last, MeetingRecorderService.busyNoticeDuration)
+        await service.toggleRecording()
+        XCTAssertEqual(sleeper.requested.count, 2, "a second press while the notice shows does not restart it")
+        sleeper.releaseAll()
+        await service.bubbleHideTask?.value
         XCTAssertEqual(service.bubble, .saving)
         await stop.value
         XCTAssertNil(service.busyMenuLabel)
+        sleeper.releaseAll()
     }
 
     func testTranscribingShowsBusyMenuLabel() async throws {
@@ -536,6 +550,9 @@ final class MeetingRecorderServiceTests: XCTestCase {
         }
         XCTAssertEqual(service.busyMenuLabel, MeetingBubble.transcribingMenuLabel)
         XCTAssertEqual(service.bubble, .transcribing)
+        await service.startRecording()
+        XCTAssertEqual(service.bubble, .stillTranscribing)
+        XCTAssertFalse(service.isRecording)
         await stop.value
     }
 
@@ -894,6 +911,68 @@ final class MeetingRecorderServiceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: txtURL), transcriptBefore)
         XCTAssertEqual(try Data(contentsOf: first.metadataFileURL), metadataBefore, "status, locale and export path stay")
         XCTAssertFalse(service.isTranscribing)
+    }
+
+    func testTranscribeAgainNeverReplacesATranscriptWithLessText() async throws {
+        final class Next: @unchecked Sendable { var transcript: MeetingTranscript? }
+        let next = Next()
+        var transcription = MockMeetingTranscriptionService()
+        transcription.transcriptNow = { next.transcript }
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), transcription: transcription)
+        service.settingsStore.setMeetingsRootDirectoryURL(tempDir.appendingPathComponent("Meetings", isDirectory: true))
+        let exportDir = tempDir.appendingPathComponent("Export", isDirectory: true)
+        service.settingsStore.setTranscriptExportDirectoryURL(exportDir)
+        await service.startRecording()
+        await service.stopRecording()
+        let first = try XCTUnwrap(service.lastCompletedResult)
+        let txtURL = try XCTUnwrap(first.transcriptTextURL)
+        let jsonURL = try XCTUnwrap(first.transcriptJSONURL)
+        let snapshot = { [first] in
+            try [txtURL, jsonURL, first.metadataFileURL].map { try Data(contentsOf: $0) }
+                + FileManager.default.contentsOfDirectory(atPath: exportDir.path).sorted().map { try Data(contentsOf: exportDir.appendingPathComponent($0)) }
+        }
+        let before = try snapshot()
+
+        let partial = MeetingTranscript(sessionID: first.sessionID, localeIdentifier: "en-US", fullText: "Hello", segments: [],
+                                        warning: "Transcript may be incomplete: transcription timed out")
+        for rerun in [MeetingTranscript(sessionID: first.sessionID, localeIdentifier: "en-US", fullText: " ", segments: []), partial] {
+            next.transcript = rerun
+            await service.transcribeAgain()
+            let again = try XCTUnwrap(service.lastCompletedResult)
+            XCTAssertEqual(again.warning, MeetingBubble.lessTextKeptWarning)
+            XCTAssertEqual(again.transcriptTextURL, txtURL)
+            XCTAssertEqual(try snapshot(), before, "transcript, metadata and export are kept")
+        }
+
+        // An earlier run that found no speech is replaced, even by a partial transcript
+        _ = try MeetingTranscriptWriter.write(
+            MeetingTranscript(sessionID: first.sessionID, localeIdentifier: "en-US", fullText: "", segments: []),
+            to: first.sessionDirectoryURL
+        )
+        await service.transcribeAgain()
+        XCTAssertEqual(service.lastCompletedResult?.warning, partial.warning)
+        XCTAssertTrue(try String(contentsOf: txtURL, encoding: .utf8).contains("Hello"))
+    }
+
+    func testTranscriptFilesChangeTogetherOrNotAtAll() throws {
+        let sessionDir = tempDir.appendingPathComponent("2026-11-05_10-00-00", isDirectory: true)
+        let old = MeetingTranscript(sessionID: "s", localeIdentifier: "en-US", fullText: "Old", segments: [])
+        let written = try MeetingTranscriptWriter.write(old, to: sessionDir)
+        let before = try [written.txtURL, written.jsonURL].map { try Data(contentsOf: $0) }
+        let new = MeetingTranscript(sessionID: "s", localeIdentifier: "en-US", fullText: "New", segments: [])
+
+        for url in [written.txtURL, written.jsonURL] {
+            // A folder at the temporary name makes that one write fail
+            try FileManager.default.createDirectory(at: MeetingTranscriptWriter.savingURL(for: url), withIntermediateDirectories: false)
+            XCTAssertThrowsError(try MeetingTranscriptWriter.write(new, to: sessionDir))
+            XCTAssertEqual(try [written.txtURL, written.jsonURL].map { try Data(contentsOf: $0) }, before, url.lastPathComponent)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: sessionDir.path).sorted(), ["transcript.json", "transcript.txt"])
+        }
+
+        _ = try MeetingTranscriptWriter.write(new, to: sessionDir)
+        XCTAssertTrue(try String(contentsOf: written.txtURL, encoding: .utf8).contains("New"))
+        XCTAssertTrue(try String(contentsOf: written.jsonURL, encoding: .utf8).contains("New"))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: sessionDir.path).sorted(), ["transcript.json", "transcript.txt"])
     }
 
     func testReexportReplacesItsOwnUneditedCopyButNeverAnotherFile() async throws {

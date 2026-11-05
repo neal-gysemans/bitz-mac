@@ -36,6 +36,7 @@ public final class MeetingRecorderService: ObservableObject {
     private(set) var bubbleHideTask: Task<Void, Never>?
     static let recordingBubbleDuration: Duration = .seconds(5)
     static let completionBubbleDuration: Duration = .seconds(45)
+    static let busyNoticeDuration: Duration = .seconds(4)
 
     private var activeSessionID: String?
     private var activeSessionDirectoryURL: URL?
@@ -139,7 +140,14 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     public func startRecording() async {
-        guard !isRecording && !isTranscribing && !isStarting && !isStopping else { return }
+        guard !isRecording && !isTranscribing && !isStarting && !isStopping else {
+            // A press while the last meeting is still saving or transcribing says why; a double press while starting stays silent
+            let notice: MeetingBubble? = isSaving ? .stillSaving : isTranscribing ? .stillTranscribing : nil
+            if let notice, bubble != notice {
+                present(notice, hideAfter: Self.busyNoticeDuration, thenShow: bubble)
+            }
+            return
+        }
         isStarting = true
         defer { isStarting = false }
 
@@ -452,6 +460,12 @@ public final class MeetingRecorderService: ObservableObject {
         } catch {
             return giveUp(error.localizedDescription, keptWarning: "\(MeetingBubble.previousTranscriptKeptWarning): \(error.localizedDescription)")
         }
+        // An empty or partial re-run never replaces a transcript with text (an unreadable transcript.json counts as text)
+        let newIsLess = !transcript.hasText || transcript.warning != nil
+        if newIsLess, previousTranscript != nil, Self.decodedTranscript(at: previousJSONURL).map(\.hasText) ?? true {
+            warnings.append(MeetingBubble.lessTextKeptWarning)
+            return (previousTxtURL, previousJSONURL)
+        }
         let written: (txtURL: URL, jsonURL: URL)
         do {
             written = try MeetingTranscriptWriter.write(transcript, to: sessionDir)
@@ -723,6 +737,12 @@ public final class MeetingRecorderService: ObservableObject {
         return decodedMetadata(at: url)
     }
 
+    nonisolated static func decodedTranscript(at url: URL) -> MeetingTranscript? {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? Data(contentsOf: url)).flatMap { try? decoder.decode(MeetingTranscript.self, from: $0) }
+    }
+
     nonisolated static func decodedMetadata(at url: URL) -> MeetingRecordingMetadata? {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -818,8 +838,9 @@ public final class MeetingRecorderService: ObservableObject {
         present(.failure(text, detail: detail))
     }
 
-    /// Replaces the bubble; with `hideAfter` it hides itself once (one-shot task, nothing runs while idle).
-    private func present(_ newBubble: MeetingBubble?, hideAfter: Duration? = nil) {
+    /// Replaces the bubble; with `hideAfter` it hides itself once (one-shot task, nothing runs while idle), giving way to
+    /// `restore` (the bubble it covered) unless another bubble replaced it meanwhile.
+    private func present(_ newBubble: MeetingBubble?, hideAfter: Duration? = nil, thenShow restore: MeetingBubble? = nil) {
         bubbleHideTask?.cancel()
         bubbleHideTask = nil
         bubble = newBubble
@@ -827,7 +848,7 @@ public final class MeetingRecorderService: ObservableObject {
         bubbleHideTask = Task { @MainActor [weak self, sleep] in
             await sleep(hideAfter)
             guard !Task.isCancelled, let self, self.bubble == newBubble else { return }
-            self.bubble = nil
+            self.bubble = restore
         }
     }
 

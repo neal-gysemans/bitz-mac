@@ -188,7 +188,7 @@ public struct AudioSettingsTabView: View {
 
                 // The cutoff is anchored on the newest recording, not on today (MeetingRecorderService retention)
                 if let days = meetingSettings.retentionDays {
-                    caption("Deletes recordings Bitz made that are more than \(days) days older than your newest one, at launch and after each recording. Your newest recordings stay until you delete them in Finder, so a wrong Mac clock never removes recent ones.",
+                    caption("Deletes recordings Bitz made that are more than \(days) days older than your newest one, at launch and after each recording. Your newest recordings stay until you delete them in Finder, so a Mac clock set ahead never removes recent ones.",
                             enabled: true)
                 } else {
                     caption("Only recordings Bitz made in the recordings folder are deleted, at launch and after each recording.",

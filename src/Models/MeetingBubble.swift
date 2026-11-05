@@ -75,6 +75,7 @@ public struct MeetingBubble: Equatable, Sendable {
     public static let speechNotAllowedReason = "Speech Recognition is not allowed — Settings → Audio."
     public static let transcriptionOffReason = "Transcription is turned off."
     public static let previousTranscriptKeptWarning = "Transcribe Again failed — previous transcript kept"
+    public static let lessTextKeptWarning = "Transcribe Again found less text — previous transcript kept"
     public static let transcriptNotSavedError = "Transcript recognized but could not be saved"
     public static let metadataUnreadableError = "metadata.json could not be read."
 
@@ -82,6 +83,9 @@ public struct MeetingBubble: Equatable, Sendable {
     public static let noSourceText = "⚠️ Turn on Microphone or System Audio"
     public static let lowDiskText = "⚠️ Not enough disk space to record"
     public static let couldNotStartText = "⚠️ Recording couldn't start"
+
+    public static let stillSavingText = "⏳ Still saving the last meeting — try again in a moment"
+    public static let stillTranscribingText = "⏳ Still transcribing the last meeting — try again in a moment"
 
     public static let savingMenuLabel = "Saving…"
     public static let transcribingMenuLabel = "Transcribing…"
@@ -91,6 +95,9 @@ public struct MeetingBubble: Equatable, Sendable {
     public static let recording = MeetingBubble(kind: .recording, text: recordingText)
     public static let saving = MeetingBubble(kind: .saving, text: savingText)
     public static let transcribing = MeetingBubble(kind: .transcribing, text: transcribingText)
+    /// A start refused while the last meeting is busy; same look as the busy bubble it briefly covers.
+    public static let stillSaving = MeetingBubble(kind: .saving, text: stillSavingText)
+    public static let stillTranscribing = MeetingBubble(kind: .transcribing, text: stillTranscribingText)
 
     /// `remaining`: sources still recording after `source` dropped.
     public static func interruption(_ source: MeetingCaptureSource, remaining: Set<MeetingCaptureSource>) -> MeetingBubble {

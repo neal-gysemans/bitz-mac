@@ -235,6 +235,10 @@ public struct MeetingTranscript: Codable, Equatable, Sendable {
         self.warning = warning
     }
 
+    public var hasText: Bool {
+        !fullText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !segments.isEmpty
+    }
+
     /// Formats a human-readable plain-text transcript with timestamped lines for `transcript.txt`.
     public func formattedPlainText() -> String {
         var lines: [String] = [
@@ -243,8 +247,7 @@ public struct MeetingTranscript: Codable, Equatable, Sendable {
             ""
         ]
 
-        let trimmedFull = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedFull.isEmpty && segments.isEmpty {
+        if !hasText {
             lines.append("(No speech detected in recording.)")
             return lines.joined(separator: "\n") + "\n"
         }
@@ -273,7 +276,7 @@ public struct MeetingTranscript: Codable, Equatable, Sendable {
                 lines.append("[\(stamp)] \(currentPhraseWords.joined(separator: " "))")
             }
         } else {
-            lines.append(trimmedFull)
+            lines.append(fullText.trimmingCharacters(in: .whitespacesAndNewlines))
         }
 
         return lines.joined(separator: "\n") + "\n"

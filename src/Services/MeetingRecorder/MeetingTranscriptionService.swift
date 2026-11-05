@@ -326,6 +326,8 @@ final class ContinuationGate: @unchecked Sendable {
 // MARK: - Transcript File Writer
 
 public enum MeetingTranscriptWriter {
+    /// Both files are written to `savingURL` names first and renamed only once both exist, so `.txt` and `.json`
+    /// never describe different runs; a failed write changes nothing.
     public static func write(
         _ transcript: MeetingTranscript,
         to sessionDirectoryURL: URL
@@ -334,13 +336,19 @@ public enum MeetingTranscriptWriter {
 
         let txtURL = sessionDirectoryURL.appendingPathComponent("transcript.txt")
         let jsonURL = sessionDirectoryURL.appendingPathComponent("transcript.json")
+        let pending = [txtURL, jsonURL].map(savingURL(for:))
+        defer { pending.forEach { try? FileManager.default.removeItem(at: $0) } }
 
-        let plainText = transcript.formattedPlainText()
-        try plainText.write(to: txtURL, atomically: true, encoding: .utf8)
-
-        let jsonData = try MeetingFormatting.jsonEncoder().encode(transcript)
-        try jsonData.write(to: jsonURL, options: .atomic)
-
+        try Data(transcript.formattedPlainText().utf8).write(to: pending[0])
+        try MeetingFormatting.jsonEncoder().encode(transcript).write(to: pending[1])
+        for (from, to) in zip(pending, [txtURL, jsonURL]) {
+            guard rename(from.path, to.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
         return (txtURL, jsonURL)
+    }
+
+    /// Hidden name a transcript file is written under before it replaces the real one.
+    static func savingURL(for url: URL) -> URL {
+        url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).saving")
     }
 }
