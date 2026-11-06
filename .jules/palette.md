@@ -9,3 +9,6 @@
 ## 2026-11-03 - Missing Tooltips on Small HUD Buttons
 **Learning:** Buttons in small HUDs (like speech bubbles) often use abbreviated text (e.g., "JUMP" or "DIFF") to save space. This can make their purpose unclear to users, hurting discoverability and usability.
 **Action:** Use `.help("Descriptive tooltip")` on custom small HUD buttons with abbreviated text to provide context on hover. Also ensure they have an `.accessibilityLabel()` for screen reader users.
+## 2024-05-19 - Added accessibility labels and help tooltips to icon buttons
+**Learning:** Found small, icon-centric buttons or buttons using heavily abbreviated text in HUD overlays (like "LOCK") and popovers (like `ProBadgeView`) that lacked `.help()` context and standard screen reader `.accessibilityLabel()`.
+**Action:** Always add `.help("Description")` and `.accessibilityLabel("Description")` to any small utility button, especially those using system images, icons, or constrained text in HUDs, ensuring they match existing patterns in `AgentApprovalHUDView` and `SpeechBubbleView`.

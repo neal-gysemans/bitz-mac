@@ -44,6 +44,8 @@ public struct ProFeatureGateModifier: ViewModifier {
                     ProBadgeView()
                 }
                 .buttonStyle(.plain)
+                .help("View Pro features")
+                .accessibilityLabel("View Pro Features")
                 .popover(isPresented: $showingPopover) {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
