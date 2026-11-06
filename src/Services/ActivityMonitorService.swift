@@ -427,16 +427,16 @@ public enum BrowserTabTelemetryReader {
         while let range = ascii.range(of: "https://", options: [], range: searchRange) ??
                           ascii.range(of: "http://", options: [], range: searchRange) {
             let sub = ascii[range.lowerBound...]
-            var urlChars: [Character] = []
+            var endIdx = sub.startIndex
             for ch in sub {
                 if let scalar = ch.unicodeScalars.first,
                    scalar.value >= 0x21 && scalar.value <= 0x7E && ch != "\"" && ch != "'" && ch != "<" && ch != ">" {
-                    urlChars.append(ch)
+                    endIdx = sub.index(after: endIdx)
                 } else {
                     break
                 }
             }
-            let candidate = String(urlChars)
+            let candidate = String(sub[..<endIdx])
             if candidate.count > 10,
                !candidate.contains("google.com/complete/search"),
                !candidate.contains("accounts.google.com/RotateCookies"),

@@ -17,6 +17,12 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
     // Preloaded sound buffers decoded once at launch
     public private(set) var loadedBuffers: [CyberSoundEvent: AVAudioPCMBuffer] = [:]
 
+    private static let candidateBasePaths = [
+        "Resources/Sounds/",
+        "src/Resources/Sounds/",
+        "../Resources/Sounds/"
+    ]
+
     // Audio Engine components
     private let engine: AVAudioEngine
     private let mixerNode: AVAudioMixerNode
@@ -156,13 +162,8 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             return mainSubURL
         }
 
-        let candidatePaths = [
-            "Resources/Sounds/\(fileName)",
-            "src/Resources/Sounds/\(fileName)",
-            "../Resources/Sounds/\(fileName)"
-        ]
-
-        for path in candidatePaths {
+        for basePath in Self.candidateBasePaths {
+            let path = basePath + fileName
             let fileURL = URL(fileURLWithPath: path)
             if FileManager.default.fileExists(atPath: fileURL.path) {
                 return fileURL
