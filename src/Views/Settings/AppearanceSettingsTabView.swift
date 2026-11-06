@@ -8,17 +8,20 @@ public struct AppearanceSettingsTabView: View {
     @ObservedObject private var settingsWindowManager: SettingsWindowManager = .shared
     public var engine: WellnessPointEngine?
     @ObservedObject public var paletteStore: AvatarPaletteStore
+    public var licensingService: (any LicensingServiceProtocol)?
 
     public init(
         scaleStore: AvatarScaleStore,
         opacityStore: AvatarOpacityStore,
         engine: WellnessPointEngine? = nil,
-        paletteStore: AvatarPaletteStore = AvatarPaletteStore()
+        paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
+        licensingService: (any LicensingServiceProtocol)? = nil
     ) {
         self.scaleStore = scaleStore
         self.opacityStore = opacityStore
         self.engine = engine
         self.paletteStore = paletteStore
+        self.licensingService = licensingService
     }
 
     public var body: some View {
@@ -139,7 +142,7 @@ public struct AppearanceSettingsTabView: View {
             }
 
             // Section 3: Theme & Colors
-            AppearancePaletteSectionView(paletteStore: paletteStore)
+            AppearancePaletteSectionView(paletteStore: paletteStore, licensingService: licensingService)
         }
     }
 

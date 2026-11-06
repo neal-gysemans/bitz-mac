@@ -149,6 +149,16 @@ public enum AvatarThemePreset: String, CaseIterable, Identifiable, Sendable {
 
     public var id: String { rawValue }
 
+    /// Indicates whether this theme preset requires a Bitz Pro license.
+    public var isPro: Bool {
+        switch self {
+        case .cyberpunkClassic, .colorblindSafe:
+            return false
+        case .tokyoNight, .catppuccinMocha, .dracula, .nord, .matrix, .stealth, .solarized:
+            return true
+        }
+    }
+
     public var title: String {
         switch self {
         case .cyberpunkClassic: return "Cyberpunk Classic"

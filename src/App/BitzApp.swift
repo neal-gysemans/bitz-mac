@@ -91,12 +91,13 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         userDefaults: UserDefaults = .standard
     ) {
         self.userDefaults = userDefaults
-        self.licensingService = licensingService ?? LicensingService()
+        let resolvedLicensingService = licensingService ?? LicensingService()
+        self.licensingService = resolvedLicensingService
         let resolvedApprovalStore = approvalStore ?? AgentApprovalStore()
         self.approvalStore = resolvedApprovalStore
         self.appActivator = appActivator ?? WorkspaceAppActivator()
         self.diffViewer = diffViewer ?? SystemDiffViewer()
-        self.paletteStore = paletteStore ?? AvatarPaletteStore(userDefaults: userDefaults)
+        self.paletteStore = paletteStore ?? AvatarPaletteStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
         let resolvedPersonalitySettings = personalitySettings ?? PersonalitySettingsStore(userDefaults: userDefaults)
         self.personalitySettings = resolvedPersonalitySettings
         let resolvedPersonalityService = personalityService ?? PersonalityService(
@@ -138,7 +139,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         let claudeAdapter = ClaudeCodeTranscriptAdapter()
         self.agentMonitor = AgentMonitorService(
             adapters: [processAdapter, dropboxAdapter, antigravityAdapter, claudeAdapter],
-            userDefaults: userDefaults
+            userDefaults: userDefaults,
+            licensingService: resolvedLicensingService
         )
 
         self.audioService.observe(wellnessEngine: self.engine)
@@ -885,6 +887,7 @@ struct BitzMenuBarContentView: View {
     var audioService: CyberAudioService? = nil
     @ObservedObject var flowShieldSettings: FlowShieldSettingsStore
     let flowShieldService: FlowShieldService
+    public var licensingService: (any LicensingServiceProtocol)?
     var onOpenSettings: () -> Void
 
     public init(
@@ -900,9 +903,11 @@ struct BitzMenuBarContentView: View {
         flowShieldSettings: FlowShieldSettingsStore? = nil,
         flowShieldService: FlowShieldService? = nil,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
+        licensingService: (any LicensingServiceProtocol)? = nil,
         onOpenSettings: @escaping () -> Void = {}
     ) {
         self.paletteStore = paletteStore
+        self.licensingService = licensingService
         self.onOpenSettings = onOpenSettings
         self.engine = engine
         self.activityMonitor = activityMonitor
@@ -990,9 +995,19 @@ struct BitzMenuBarContentView: View {
 
             Menu("Theme") {
                 ForEach(AvatarThemePreset.allCases) { preset in
-                    Toggle(preset.title, isOn: Binding(
+                    let isUnlocked = licensingService?.isFeatureUnlocked(.customThemes) ?? true
+                    let isLocked = preset.isPro && !isUnlocked
+                    let label = isLocked ? "\(preset.title) (Pro 🔒)" : preset.title
+                    Toggle(label, isOn: Binding(
                         get: { paletteStore.selectedPreset == preset },
-                        set: { if $0 { paletteStore.selectPreset(preset) } }
+                        set: { if $0 {
+                            if isLocked {
+                                onOpenSettings()
+                                NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                            } else {
+                                paletteStore.selectPreset(preset)
+                            }
+                        } }
                     ))
                 }
             }
@@ -1056,6 +1071,7 @@ public struct BitzApp: App {
                 flowShieldSettings: appDelegate.flowShieldSettings,
                 flowShieldService: appDelegate.flowShieldService,
                 paletteStore: appDelegate.paletteStore,
+                licensingService: appDelegate.licensingService,
                 onOpenSettings: appDelegate.showSettingsWindow
             )
         } label: {

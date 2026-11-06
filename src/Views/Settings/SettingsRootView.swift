@@ -52,7 +52,7 @@ public struct SettingsRootView: View {
     @ObservedObject public var personalitySettings: PersonalitySettingsStore
     @ObservedObject public var licensingService: LicensingService
 
-    @State private var selectedTab: SettingsTab = .general
+    @State private var selectedTab: SettingsTab
 
     public init(
         engine: WellnessPointEngine,
@@ -73,8 +73,10 @@ public struct SettingsRootView: View {
         inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         personalitySettings: PersonalitySettingsStore? = nil,
-        licensingService: LicensingService? = nil
+        licensingService: LicensingService? = nil,
+        initialTab: SettingsTab = .general
     ) {
+        _selectedTab = State(initialValue: initialTab)
         self.interactionSettings = interactionSettings
         self.inboxDirectoryURL = inboxDirectoryURL
         self.paletteStore = paletteStore
@@ -119,6 +121,9 @@ public struct SettingsRootView: View {
             minHeight: SettingsWindowManager.minimumContentSize.height
         )
         .background(Color(nsColor: .windowBackgroundColor))
+        .onReceive(NotificationCenter.default.publisher(for: .bitzOpenProSettingsTab)) { _ in
+            selectedTab = .pro
+        }
     }
 
     // MARK: - Bottom Utility Footer Bar
@@ -199,7 +204,8 @@ public struct SettingsRootView: View {
                 scaleStore: scaleStore,
                 opacityStore: opacityStore,
                 engine: engine,
-                paletteStore: paletteStore
+                paletteStore: paletteStore,
+                licensingService: licensingService
             )
         case .behaviors:
             BehaviorSettingsTabView(
@@ -210,7 +216,8 @@ public struct SettingsRootView: View {
             )
         case .agents:
             AgentsSettingsTabView(
-                agentMonitor: agentMonitor
+                agentMonitor: agentMonitor,
+                licensingService: licensingService
             )
         case .personality:
             PersonalitySettingsTabView(
@@ -240,4 +247,8 @@ public struct SettingsRootView: View {
             )
         }
     }
+}
+
+public extension Notification.Name {
+    static let bitzOpenProSettingsTab = Notification.Name("BitzOpenProSettingsTab")
 }

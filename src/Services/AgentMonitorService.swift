@@ -68,6 +68,7 @@ public final class AgentMonitorService: ObservableObject {
     /// Agent whose approval popup was shown last; valid while `activePopup` is that approval.
     private var approvalPopupAgentID: String? = nil
     private let stallSweepInterval: TimeInterval
+    public var licensingService: (any LicensingServiceProtocol)?
 
     public var onEventHandled: (@MainActor (AgentEvent) -> Void)? = nil
 
@@ -80,12 +81,14 @@ public final class AgentMonitorService: ObservableObject {
         adapters: [AgentAdapter] = [],
         clock: @escaping @Sendable () -> Date = { Date() },
         userDefaults: UserDefaults = .standard,
-        stallSweepInterval: TimeInterval = 5
+        stallSweepInterval: TimeInterval = 5,
+        licensingService: (any LicensingServiceProtocol)? = nil
     ) {
         self.adapters = adapters
         self.clock = clock
         self.userDefaults = userDefaults
         self.stallSweepInterval = stallSweepInterval
+        self.licensingService = licensingService
         self.popupsEnabled = userDefaults.object(forKey: Self.popupsEnabledKey) as? Bool ?? true
         self.signalSettings = userDefaults.data(forKey: Self.signalSettingsKey)
             .flatMap { try? JSONDecoder().decode(AgentSignalSettings.self, from: $0) }?
@@ -252,9 +255,9 @@ public final class AgentMonitorService: ObservableObject {
         // Popup priority while a warning is active: data-model.md "Warning slot".
         switch event.kind {
         case .started:
-            activeAgents.insert(id)
+            registerActiveAgent(id)
         case .working:
-            activeAgents.insert(id)
+            registerActiveAgent(id)
             session.turnActive = true
             session.awaitingApproval = false
             session.lastActivity = now
@@ -266,7 +269,7 @@ public final class AgentMonitorService: ObservableObject {
                 restoreWarningBubble(ifOverriddenBy: id)
             }
         case .almostDone:
-            activeAgents.insert(id)
+            registerActiveAgent(id)
             session.lastActivity = now
             if activeWarning == nil {
                 if signalSettings.almostDoneEnabled {
@@ -277,7 +280,7 @@ public final class AgentMonitorService: ObservableObject {
                 restoreWarningBubble(ifOverriddenBy: id)
             }
         case .needsApproval:
-            activeAgents.insert(id)
+            registerActiveAgent(id)
             session.awaitingApproval = true
             if activeWarning?.agentID == id {
                 acknowledgeWarning()
@@ -373,6 +376,21 @@ public final class AgentMonitorService: ObservableObject {
     public func handleSystemWake() {
         let now = clock()
         for id in sessions.keys { sessions[id]?.lastActivity = now }
+    }
+
+    private func registerActiveAgent(_ id: String) {
+        if let licensingService, !licensingService.isFeatureUnlocked(.multiAgentSwarm) {
+            // Free tier: allow 1 active simultaneously monitored agent.
+            // If another agent is already active and this agent takes over activity,
+            // replace active set so only 1 agent is active at any time.
+            if !activeAgents.contains(id) && !activeAgents.isEmpty {
+                activeAgents = [id]
+            } else {
+                activeAgents.insert(id)
+            }
+        } else {
+            activeAgents.insert(id)
+        }
     }
 
     /// Clears the warning (Got it / menu Dismiss Agent Warning) and its bubble.

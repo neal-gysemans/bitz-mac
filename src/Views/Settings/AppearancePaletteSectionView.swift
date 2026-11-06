@@ -3,11 +3,23 @@ import SwiftUI
 /// Settings card: theme presets, chassis/trim/glow, and per-emotion color rows with live preview.
 public struct AppearancePaletteSectionView: View {
     @ObservedObject public var paletteStore: AvatarPaletteStore
+    public var licensingService: (any LicensingServiceProtocol)?
 
     @State private var hexDrafts: [String: String] = [:]
+    @State private var showingProPopover: Bool = false
+    @State private var proPopoverTitle: String = "Bitz Pro Feature"
+    @State private var proPopoverDescription: String = ""
 
-    public init(paletteStore: AvatarPaletteStore) {
+    private var isCustomThemesUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.customThemes) ?? true
+    }
+
+    public init(
+        paletteStore: AvatarPaletteStore,
+        licensingService: (any LicensingServiceProtocol)? = nil
+    ) {
         self.paletteStore = paletteStore
+        self.licensingService = licensingService
     }
 
     public var body: some View {
@@ -15,15 +27,70 @@ public struct AppearancePaletteSectionView: View {
             Label("Theme & Colors", systemImage: "paintpalette.fill")
                 .font(.headline)
 
-            Picker("Theme Preset", selection: Binding(
-                get: { paletteStore.selectedPreset },
-                set: { paletteStore.selectPreset($0) }
-            )) {
-                ForEach(AvatarThemePreset.allCases) { preset in
-                    Text(preset.title).tag(preset)
+            HStack {
+                Picker("Theme Preset", selection: Binding(
+                    get: { paletteStore.selectedPreset },
+                    set: { newPreset in
+                        if newPreset.isPro && !isCustomThemesUnlocked {
+                            proPopoverTitle = "\(newPreset.title) (Pro)"
+                            proPopoverDescription = "Custom theme palettes are exclusive to Bitz Pro. Upgrade or enter a license key to unlock."
+                            showingProPopover = true
+                        } else {
+                            paletteStore.selectPreset(newPreset)
+                        }
+                    }
+                )) {
+                    ForEach(AvatarThemePreset.allCases) { preset in
+                        if preset.isPro && !isCustomThemesUnlocked {
+                            Text("\(preset.title) (Pro 🔒)").tag(preset)
+                        } else {
+                            Text(preset.title).tag(preset)
+                        }
+                    }
+                }
+                .pickerStyle(.menu)
+
+                if !isCustomThemesUnlocked {
+                    Button {
+                        proPopoverTitle = "Custom Theme Palettes (Pro)"
+                        proPopoverDescription = "Unlock Tokyo Night, Dracula, Matrix, Nord, and more with Bitz Pro."
+                        showingProPopover = true
+                    } label: {
+                        ProBadgeView()
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .pickerStyle(.menu)
+            .popover(isPresented: $showingProPopover) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "lock.fill")
+                            .foregroundColor(.cyan)
+                        Text(proPopoverTitle)
+                            .font(.headline)
+                    }
+
+                    Text(proPopoverDescription)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Divider()
+
+                    HStack {
+                        Spacer()
+                        Button("View Bitz Pro Perks") {
+                            showingProPopover = false
+                            NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.cyan)
+                        .controlSize(.small)
+                    }
+                }
+                .padding(14)
+                .frame(width: 260)
+            }
 
             Divider()
 
@@ -67,9 +134,22 @@ public struct AppearancePaletteSectionView: View {
 
             Divider()
 
-            Text("Per-emotion LED, glow & particle colors")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("Per-emotion LED, glow & particle colors")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if !isCustomThemesUnlocked {
+                    Spacer()
+                    Button {
+                        proPopoverTitle = "Custom Color Overrides (Pro)"
+                        proPopoverDescription = "Custom chassis, trim, and per-emotion LED customization is exclusive to Bitz Pro."
+                        showingProPopover = true
+                    } label: {
+                        ProBadgeView()
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
 
             ForEach(AvatarEmotionColorSlot.allCases) { slot in
                 colorRow(
@@ -128,6 +208,7 @@ public struct AppearancePaletteSectionView: View {
                 set: { apply(AvatarHex.hex(from: $0)) }
             ), supportsOpacity: false)
             .labelsHidden()
+            .disabled(!isCustomThemesUnlocked)
 
             TextField("#RRGGBB", text: Binding(
                 get: { hexDrafts[key] ?? currentHex },
@@ -142,6 +223,7 @@ public struct AppearancePaletteSectionView: View {
             .textFieldStyle(.roundedBorder)
             .font(.caption.monospaced())
             .frame(width: 84)
+            .disabled(!isCustomThemesUnlocked)
 
             if let preview {
                 Button("Preview", action: preview)
