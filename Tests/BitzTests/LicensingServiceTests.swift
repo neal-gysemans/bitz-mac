@@ -213,4 +213,150 @@ final class LicensingServiceTests: XCTestCase {
         XCTAssertEqual(LicensingService.defaultPublicKeyData.count, 32)
         XCTAssertNoThrow(try Curve25519.Signing.PublicKey(rawRepresentation: LicensingService.defaultPublicKeyData))
     }
+
+    // MARK: - Feature Gating Tests
+
+    func testAvatarThemePresetProClassification() {
+        XCTAssertFalse(AvatarThemePreset.cyberpunkClassic.isPro)
+        XCTAssertFalse(AvatarThemePreset.colorblindSafe.isPro)
+        XCTAssertTrue(AvatarThemePreset.tokyoNight.isPro)
+        XCTAssertTrue(AvatarThemePreset.dracula.isPro)
+        XCTAssertTrue(AvatarThemePreset.catppuccinMocha.isPro)
+        XCTAssertTrue(AvatarThemePreset.nord.isPro)
+        XCTAssertTrue(AvatarThemePreset.matrix.isPro)
+        XCTAssertTrue(AvatarThemePreset.stealth.isPro)
+        XCTAssertTrue(AvatarThemePreset.solarized.isPro)
+    }
+
+    @MainActor
+    func testAvatarPaletteStoreGatingWithLicensingService() throws {
+        let suite = "BitzTests.PaletteStoreGating.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let storage = MockLicenseStorage()
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+
+        // Free tier
+        let freeStore = AvatarPaletteStore(userDefaults: defaults, licensingService: service)
+        XCTAssertEqual(freeStore.selectedPreset, .cyberpunkClassic)
+
+        // Attempt Pro theme selection on Free
+        XCTAssertFalse(freeStore.selectPreset(.tokyoNight))
+        XCTAssertEqual(freeStore.selectedPreset, .cyberpunkClassic)
+
+        // Free theme selection allowed
+        XCTAssertTrue(freeStore.selectPreset(.colorblindSafe))
+        XCTAssertEqual(freeStore.selectedPreset, .colorblindSafe)
+
+        // Custom hex overrides rejected on Free
+        XCTAssertFalse(freeStore.setChassisHex("#112233"))
+        XCTAssertNil(freeStore.chassisOverride)
+        XCTAssertFalse(freeStore.setTrimHex("#445566"))
+        XCTAssertNil(freeStore.trimOverride)
+        XCTAssertFalse(freeStore.setEmotionHex("#AABBCC", for: .superCharged))
+
+        // Activate Pro
+        let token = try makeToken()
+        try service.activateLicense(key: token)
+
+        let proStore = AvatarPaletteStore(userDefaults: defaults, licensingService: service)
+        // Pro theme selection allowed
+        XCTAssertTrue(proStore.selectPreset(.tokyoNight))
+        XCTAssertEqual(proStore.selectedPreset, .tokyoNight)
+
+        // Custom hex overrides allowed
+        XCTAssertTrue(proStore.setChassisHex("#112233"))
+        XCTAssertEqual(proStore.chassisOverride, "#112233")
+    }
+
+    @MainActor
+    func testAgentMonitorServiceMultiAgentGating() throws {
+        let suite = "BitzTests.AgentMonitorGating.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let storage = MockLicenseStorage()
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+
+        let monitor = AgentMonitorService(userDefaults: defaults, licensingService: service)
+
+        // Free tier: start Agent A
+        monitor.handleEvent(AgentEvent(agentID: "claude", agentName: "Claude Code", kind: .working))
+        XCTAssertEqual(monitor.activeAgents, ["claude"])
+
+        // Agent B starts on Free tier: replaces Agent A, so count remains 1
+        monitor.handleEvent(AgentEvent(agentID: "antigravity", agentName: "Antigravity", kind: .working))
+        XCTAssertEqual(monitor.activeAgents, ["antigravity"])
+        XCTAssertEqual(monitor.activeAgents.count, 1)
+
+        // Activate Pro
+        let token = try makeToken()
+        try service.activateLicense(key: token)
+
+        // Now start Agent A alongside Agent B: Swarm allows both simultaneously
+        monitor.handleEvent(AgentEvent(agentID: "claude", agentName: "Claude Code", kind: .working))
+        XCTAssertTrue(monitor.activeAgents.contains("claude"))
+        XCTAssertTrue(monitor.activeAgents.contains("antigravity"))
+        XCTAssertEqual(monitor.activeAgents.count, 2)
+    }
+
+    @MainActor
+    func testPersonalitySettingsStoreGatingWithLicensingService() throws {
+        let suite = "BitzTests.PersonalityGating.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let storage = MockLicenseStorage()
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+
+        let store = PersonalitySettingsStore(userDefaults: defaults, licensingService: service)
+        XCTAssertFalse(store.isPersonalityUnlocked)
+        XCTAssertFalse(store.isEnabled)
+
+        // Attempt to enable on Free tier is blocked
+        store.setEnabled(true)
+        XCTAssertFalse(store.isEnabled)
+
+        // Activate Pro
+        let token = try makeToken()
+        try service.activateLicense(key: token)
+        XCTAssertTrue(store.isPersonalityUnlocked)
+
+        // Enable on Pro tier succeeds
+        store.setEnabled(true)
+        XCTAssertTrue(store.isEnabled)
+
+        // Deactivate Pro: validateTierEntitlement reverts to disabled
+        try service.deactivateLicense()
+        store.validateTierEntitlement()
+        XCTAssertFalse(store.isEnabled)
+    }
+
+    @MainActor
+    func testMeetingRecorderServiceGatingWithLicensingService() async throws {
+        let suite = "BitzTests.MeetingRecorderGating.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let storage = MockLicenseStorage()
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+
+        let settings = MeetingSettingsStore(userDefaults: defaults)
+        let recorder = MeetingRecorderService(
+            settingsStore: settings,
+            licensingService: service
+        )
+        XCTAssertFalse(recorder.isMeetingRecorderUnlocked)
+
+        await recorder.startRecording()
+        XCTAssertFalse(recorder.isRecording)
+        XCTAssertEqual(recorder.state, .failed)
+        XCTAssertEqual(recorder.bubble?.text, MeetingBubble.proRequiredText)
+
+        var openedPro = false
+        recorder.onOpenProSettings = { openedPro = true }
+        recorder.perform(.openSettings)
+        XCTAssertTrue(openedPro)
+    }
 }

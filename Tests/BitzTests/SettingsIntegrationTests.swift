@@ -66,6 +66,14 @@ final class SettingsIntegrationTests: XCTestCase {
         XCTAssertEqual(window.title, "Bitz Settings", "Settings window title must match")
         XCTAssertTrue(window.canBecomeKey, "Settings window can become key for user interactions")
 
+        // 3b. Verify Minimum Size Enforcement & Responsive Clamping (#130)
+        XCTAssertEqual(window.contentMinSize, SettingsWindowManager.minimumContentSize)
+        XCTAssertGreaterThanOrEqual(window.minSize.width, SettingsWindowManager.minimumContentSize.width)
+        XCTAssertGreaterThanOrEqual(window.minSize.height, SettingsWindowManager.minimumContentSize.height)
+        let clampedSize = SettingsWindowManager.shared.windowWillResize(window, to: NSSize(width: 300, height: 200))
+        XCTAssertGreaterThanOrEqual(clampedSize.width, window.minSize.width)
+        XCTAssertGreaterThanOrEqual(clampedSize.height, window.minSize.height)
+
         // 4. Invariant Assertion: MascotOverlayPanel invariants are completely unaffected
         XCTAssertTrue(panel.ignoresMouseEvents, "Overlay panel must remain click-through while settings window is open")
         XCTAssertFalse(panel.canBecomeKey, "Overlay panel must never steal key window state")

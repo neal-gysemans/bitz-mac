@@ -9,4 +9,11 @@
 ## 2026-11-02 - Offload Continuous Mascot Motion to CoreAnimation & Detach Closed Windows (#70)
 **Learning:** SwiftUI `TimelineView`, `PhaseAnimator`, and `.animation(.repeatForever(...))` on `.offset(...)` / `.transformEffect(...)` trigger in-process 120Hz `UpdateCycle` passes (`ViewGraphRootValueUpdater` + `-[NSView setFrameOrigin:]`) on ProMotion Macs (~15–42% CPU). Additionally, `NSWindow` with `isReleasedWhenClosed = false` keeps its `NSHostingController` view tree active in the background when closed, and `Canvas` with `GraphicsContext.draw(Text(...))` runs CoreText + Metal `RenderBox` submissions every frame.
 **Action:** Drive continuous animations out-of-process via `CALayer` `CABasicAnimation` / `CAAnimationGroup` (`LiveBitzCharacterView`), set `sizingOptions = []` on fixed-size `NSHostingView`s (never on dynamic `SpeechBubblePanel`), detach `contentViewController = nil` when secondary windows close (`SettingsWindowManager`), isolate polling `@ObservedObject`s to `Equatable` leaf views, and cache active `IOHIDServiceClient` thermal handles + browser session `modificationDate`s.
-## 2026-11-03 - Prevent array reallocations inside loops and high frequency polling\n**Learning:** Initializing array literals inside loops or frequent closures leads to repeated memory allocations on the heap.\n**Action:** Hoist local array literals (like URLResourceKeys or string arrays used for reduction) to `private static let` constants to prevent redundant memory allocations.
+
+## 2026-11-03 - Prevent array reallocations inside loops and high frequency polling
+**Learning:** Initializing array literals inside loops or frequent closures leads to repeated memory allocations on the heap.
+**Action:** Hoist local array literals (like URLResourceKeys or string arrays used for reduction) to `private static let` constants to prevent redundant memory allocations.
+
+## 2024-05-20 - String manipulation in hot paths
+**Learning:** Parsing strings character by character and appending to a dynamically grown character array is slower and causes memory reallocations compared to working with string indices and substrings.
+**Action:** Prefer finding indexes and slicing with substrings rather than allocating and appending arrays.

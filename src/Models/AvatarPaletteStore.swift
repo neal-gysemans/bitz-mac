@@ -11,6 +11,7 @@ public final class AvatarPaletteStore: ObservableObject {
     public static let emotionOverridesKey = "avatarEmotionHexOverrides"
 
     private let userDefaults: UserDefaults
+    private let licensingService: (any LicensingServiceProtocol)?
 
     @Published public private(set) var selectedPreset: AvatarThemePreset
     @Published public private(set) var chassisOverride: String?
@@ -23,11 +24,15 @@ public final class AvatarPaletteStore: ObservableObject {
 
     private var previewTask: Task<Void, Never>?
 
-    public init(userDefaults: UserDefaults = .standard) {
+    public init(
+        userDefaults: UserDefaults = .standard,
+        licensingService: (any LicensingServiceProtocol)? = nil
+    ) {
         self.userDefaults = userDefaults
-        let preset = userDefaults.string(forKey: Self.themeIdKey).flatMap(AvatarThemePreset.init(rawValue:)) ?? .defaultPreset
-        let chassis = userDefaults.string(forKey: Self.chassisKey).flatMap(AvatarHex.normalize)
-        let trim = userDefaults.string(forKey: Self.trimKey).flatMap(AvatarHex.normalize)
+        self.licensingService = licensingService
+        var preset = userDefaults.string(forKey: Self.themeIdKey).flatMap(AvatarThemePreset.init(rawValue:)) ?? .defaultPreset
+        var chassis = userDefaults.string(forKey: Self.chassisKey).flatMap(AvatarHex.normalize)
+        var trim = userDefaults.string(forKey: Self.trimKey).flatMap(AvatarHex.normalize)
         let glow: Double
         if let stored = userDefaults.object(forKey: Self.glowKey) as? Double, stored.isFinite {
             glow = min(max(stored, AvatarResolvedPalette.glowRange.lowerBound), AvatarResolvedPalette.glowRange.upperBound)
@@ -42,6 +47,17 @@ public final class AvatarPaletteStore: ObservableObject {
                 }
             }
         }
+
+        // Gate Pro themes and custom overrides for Free tier
+        if let licensingService, !licensingService.isFeatureUnlocked(.customThemes) {
+            if preset.isPro {
+                preset = .defaultPreset
+            }
+            chassis = nil
+            trim = nil
+            overrides = [:]
+        }
+
         self.selectedPreset = preset
         self.chassisOverride = chassis
         self.trimOverride = trim
@@ -99,18 +115,27 @@ public final class AvatarPaletteStore: ObservableObject {
     // MARK: Mutations
 
     /// Selecting a preset clears all custom overrides so the preset shows exactly as designed.
-    public func selectPreset(_ preset: AvatarThemePreset) {
+    /// Returns false if preset is a Pro theme and the user has not unlocked custom themes.
+    @discardableResult
+    public func selectPreset(_ preset: AvatarThemePreset) -> Bool {
+        if preset.isPro, let licensingService, !licensingService.isFeatureUnlocked(.customThemes) {
+            return false
+        }
         selectedPreset = preset
         chassisOverride = nil
         trimOverride = nil
         emotionOverrides = [:]
         glowIntensity = 1.0
         refresh()
+        return true
     }
 
-    /// Returns false (and changes nothing) when `hex` is not a valid `#RRGGBB` value.
+    /// Returns false (and changes nothing) when `hex` is not a valid `#RRGGBB` value or custom themes are locked.
     @discardableResult
     public func setChassisHex(_ hex: String) -> Bool {
+        if let licensingService, !licensingService.isFeatureUnlocked(.customThemes) {
+            return false
+        }
         guard let normalized = AvatarHex.normalize(hex) else { return false }
         chassisOverride = normalized
         refresh()
@@ -119,6 +144,9 @@ public final class AvatarPaletteStore: ObservableObject {
 
     @discardableResult
     public func setTrimHex(_ hex: String) -> Bool {
+        if let licensingService, !licensingService.isFeatureUnlocked(.customThemes) {
+            return false
+        }
         guard let normalized = AvatarHex.normalize(hex) else { return false }
         trimOverride = normalized
         refresh()
@@ -143,10 +171,25 @@ public final class AvatarPaletteStore: ObservableObject {
 
     @discardableResult
     public func setEmotionHex(_ hex: String, for slot: AvatarEmotionColorSlot) -> Bool {
+        if let licensingService, !licensingService.isFeatureUnlocked(.customThemes) {
+            return false
+        }
         guard let normalized = AvatarHex.normalize(hex) else { return false }
         emotionOverrides[slot] = normalized
         refresh()
         return true
+    }
+
+    /// Re-evaluates tier entitlement (e.g. after license activation or deactivation).
+    public func validateTierEntitlement() {
+        guard let licensingService, !licensingService.isFeatureUnlocked(.customThemes) else { return }
+        if selectedPreset.isPro {
+            selectedPreset = .defaultPreset
+        }
+        chassisOverride = nil
+        trimOverride = nil
+        emotionOverrides = [:]
+        refresh()
     }
 
     /// Row reset: returns the slot to the active preset's color.

@@ -55,6 +55,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
     private var personalityTickCancellable: AnyCancellable?
     private var personalityEnabledCancellable: AnyCancellable?
     private var personalityPresetCancellable: AnyCancellable?
+    private var licensingTierCancellable: AnyCancellable?
     private var screenReconfigTask: Task<Void, Never>?
     private let userDefaults: UserDefaults
 
@@ -98,14 +99,21 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         userDefaults: UserDefaults = .standard
     ) {
         self.userDefaults = userDefaults
-        self.licensingService = licensingService ?? LicensingService()
-        self.meetingRecorder = meetingRecorder ?? MeetingRecorderService(settingsStore: MeetingSettingsStore(userDefaults: userDefaults))
+        let resolvedLicensingService = licensingService ?? LicensingService()
+        self.licensingService = resolvedLicensingService
+        self.meetingRecorder = meetingRecorder ?? MeetingRecorderService(
+            settingsStore: MeetingSettingsStore(userDefaults: userDefaults),
+            licensingService: resolvedLicensingService
+        )
         let resolvedApprovalStore = approvalStore ?? AgentApprovalStore()
         self.approvalStore = resolvedApprovalStore
         self.appActivator = appActivator ?? WorkspaceAppActivator()
         self.diffViewer = diffViewer ?? SystemDiffViewer()
-        self.paletteStore = paletteStore ?? AvatarPaletteStore(userDefaults: userDefaults)
-        let resolvedPersonalitySettings = personalitySettings ?? PersonalitySettingsStore(userDefaults: userDefaults)
+        self.paletteStore = paletteStore ?? AvatarPaletteStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
+        let resolvedPersonalitySettings = personalitySettings ?? PersonalitySettingsStore(
+            userDefaults: userDefaults,
+            licensingService: resolvedLicensingService
+        )
         self.personalitySettings = resolvedPersonalitySettings
         let resolvedPersonalityService = personalityService ?? PersonalityService(
             primaryGenerator: FoundationModelsCommentaryGenerator(),
@@ -146,7 +154,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         let claudeAdapter = ClaudeCodeTranscriptAdapter()
         self.agentMonitor = AgentMonitorService(
             adapters: [processAdapter, dropboxAdapter, antigravityAdapter, claudeAdapter],
-            userDefaults: userDefaults
+            userDefaults: userDefaults,
+            licensingService: resolvedLicensingService
         )
 
         self.audioService.observe(wellnessEngine: self.engine)
@@ -210,6 +219,16 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         self.meetingRecorder.onOpenSettings = { [weak self] in
             self?.showSettings(tab: .audio)
         }
+        self.meetingRecorder.onOpenProSettings = { [weak self] in
+            self?.showSettings(tab: .pro)
+        }
+        self.licensingTierCancellable = self.licensingService.$currentTier
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.paletteStore.validateTierEntitlement()
+                self?.personalitySettings.validateTierEntitlement()
+            }
         self.recordingIndicatorCancellable = self.meetingRecorder.$state
             .map { $0 == .recording }
             .removeDuplicates()
@@ -475,6 +494,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         personalityTickCancellable = nil
         personalityEnabledCancellable = nil
         personalityPresetCancellable = nil
+        licensingTierCancellable = nil
         Task { [personalityService] in
             await personalityService.unloadBackend()
         }
@@ -990,6 +1010,7 @@ struct BitzMenuBarContentView: View {
     let flowShieldService: FlowShieldService
     @ObservedObject var meetingRecorder: MeetingRecorderService
     @ObservedObject var meetingSettings: MeetingSettingsStore
+    public var licensingService: (any LicensingServiceProtocol)?
     var onOpenSettings: () -> Void
 
     public init(
@@ -1006,11 +1027,13 @@ struct BitzMenuBarContentView: View {
         flowShieldService: FlowShieldService? = nil,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         meetingRecorder: MeetingRecorderService,
+        licensingService: (any LicensingServiceProtocol)? = nil,
         onOpenSettings: @escaping () -> Void = {}
     ) {
         self.paletteStore = paletteStore
         self.meetingRecorder = meetingRecorder
         self.meetingSettings = meetingRecorder.settingsStore
+        self.licensingService = licensingService
         self.onOpenSettings = onOpenSettings
         self.engine = engine
         self.activityMonitor = activityMonitor
@@ -1074,7 +1097,14 @@ struct BitzMenuBarContentView: View {
                 Button(busy) {}
                     .disabled(true)
             } else {
-                Button(meetingRecorder.isRecording ? "Stop Meeting Recording" : "Start Meeting Recording") {
+                let isMeetingUnlocked = licensingService?.isFeatureUnlocked(.meetingRecorder) ?? meetingRecorder.isMeetingRecorderUnlocked
+                let startLabel = isMeetingUnlocked ? "Start Meeting Recording" : "Start Meeting Recording (Pro 🔒)"
+                Button(meetingRecorder.isRecording ? "Stop Meeting Recording" : startLabel) {
+                    if !isMeetingUnlocked && !meetingRecorder.isRecording {
+                        onOpenSettings()
+                        NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                        return
+                    }
                     Task {
                         await meetingRecorder.toggleRecording()
                     }
@@ -1124,9 +1154,19 @@ struct BitzMenuBarContentView: View {
 
             Menu("Theme") {
                 ForEach(AvatarThemePreset.allCases) { preset in
-                    Toggle(preset.title, isOn: Binding(
+                    let isUnlocked = licensingService?.isFeatureUnlocked(.customThemes) ?? true
+                    let isLocked = preset.isPro && !isUnlocked
+                    let label = isLocked ? "\(preset.title) (Pro 🔒)" : preset.title
+                    Toggle(label, isOn: Binding(
                         get: { paletteStore.selectedPreset == preset },
-                        set: { if $0 { paletteStore.selectPreset(preset) } }
+                        set: { if $0 {
+                            if isLocked {
+                                onOpenSettings()
+                                NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                            } else {
+                                paletteStore.selectPreset(preset)
+                            }
+                        } }
                     ))
                 }
             }
@@ -1191,6 +1231,7 @@ public struct BitzApp: App {
                 flowShieldService: appDelegate.flowShieldService,
                 paletteStore: appDelegate.paletteStore,
                 meetingRecorder: appDelegate.meetingRecorder,
+                licensingService: appDelegate.licensingService,
                 onOpenSettings: appDelegate.showSettingsWindow
             )
         } label: {

@@ -281,7 +281,14 @@ public struct BitzProSettingsTabView: View {
                     icon: "mic.fill",
                     color: .orange,
                     title: "Meeting Assistant",
-                    description: "Local microphone recording with private on-device Whisper transcription."
+                    description: "Local microphone & system audio recording with private on-device Speech transcription."
+                )
+
+                featureCard(
+                    icon: "sparkles",
+                    color: .mint,
+                    title: "AI Personality",
+                    description: "On-device Apple Foundation Models commentary with Snarky, Supportive, and Cute presets."
                 )
 
                 featureCard(

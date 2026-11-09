@@ -5,6 +5,7 @@ import AppKit
 public struct AgentsSettingsTabView: View {
     @ObservedObject public var agentMonitor: AgentMonitorService
     public var claudeSettingsURL: URL
+    public var licensingService: (any LicensingServiceProtocol)?
 
     /// Agents whose window picker sits on Custom; needed because a preset value would otherwise snap the picker back.
     @State private var customWindowAgentIDs: Set<String> = []
@@ -15,10 +16,12 @@ public struct AgentsSettingsTabView: View {
 
     public init(
         agentMonitor: AgentMonitorService,
-        claudeSettingsURL: URL = AgentHookInstaller.defaultClaudeSettingsURL
+        claudeSettingsURL: URL = AgentHookInstaller.defaultClaudeSettingsURL,
+        licensingService: (any LicensingServiceProtocol)? = nil
     ) {
         self.agentMonitor = agentMonitor
         self.claudeSettingsURL = claudeSettingsURL
+        self.licensingService = licensingService
     }
 
     public var body: some View {
@@ -87,6 +90,26 @@ public struct AgentsSettingsTabView: View {
             // Section 3: Monitored Agents Catalog
             settingsCard(title: "Monitored AI Agents (\(agentMonitor.activeAgents.count) Active)", systemImage: "cpu.fill") {
                 VStack(spacing: 8) {
+                    if !(licensingService?.isFeatureUnlocked(.multiAgentSwarm) ?? true) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.secondary)
+                            Text("Free tier monitors 1 active agent at a time. Monitoring multiple agents concurrently (Multi-Agent Swarm) requires Bitz Pro.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button {
+                                NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                            } label: {
+                                ProBadgeView()
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.vertical, 4)
+
+                        Divider()
+                    }
+
                     ForEach(agentMonitor.catalog) { agent in
                         HStack {
                             Image(systemName: agentIcon(for: agent.displayName))

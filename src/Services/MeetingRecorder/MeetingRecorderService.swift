@@ -19,6 +19,7 @@ public final class MeetingRecorderService: ObservableObject {
     private let captureEngine: any MeetingAudioCapturing
     private let transcriptionService: any MeetingTranscriptionProviding
     private let permissionChecker: any MeetingPermissionChecking
+    private let licensingService: (any LicensingServiceProtocol)?
     private let onRevealURL: (URL) -> Void
     private let nowProvider: () -> Date
     private let freeBytesProvider: (URL) -> Int64?
@@ -29,6 +30,9 @@ public final class MeetingRecorderService: ObservableObject {
     public var onPlaySound: ((CyberSoundEvent) -> Void)?
     /// OPEN SETTINGS on the failure bubble: the delegate opens Settings → Audio.
     public var onOpenSettings: (() -> Void)?
+    /// OPEN SETTINGS on a Bitz Pro lock failure bubble: opens Settings → Bitz Pro.
+    public var onOpenProSettings: (() -> Void)?
+    private var failureOpensProTab = false
     /// First-recording notice (D7): true for Continue. Tests inject one instead of the modal alert.
     var consentPresenter: @MainActor (_ recordingsFolder: URL) -> Bool = MeetingConsentNotice.present
     /// One-shot delay before a bubble hides itself; tests inject one they release by hand.
@@ -74,6 +78,7 @@ public final class MeetingRecorderService: ObservableObject {
         captureEngine: (any MeetingAudioCapturing)? = nil,
         transcriptionService: (any MeetingTranscriptionProviding)? = nil,
         permissionChecker: (any MeetingPermissionChecking)? = nil,
+        licensingService: (any LicensingServiceProtocol)? = nil,
         nowProvider: @escaping () -> Date = { Date() },
         freeBytesProvider: @escaping (URL) -> Int64? = MeetingRecorderService.availableBytes(at:),
         onRevealURL: @escaping (URL) -> Void = { url in
@@ -86,6 +91,7 @@ public final class MeetingRecorderService: ObservableObject {
         let resolvedPermissionChecker = permissionChecker ?? SystemMeetingPermissionChecker(userDefaults: settingsStore.userDefaults)
         self.permissionChecker = resolvedPermissionChecker
         self.permissionState = resolvedPermissionChecker.currentPermissions()
+        self.licensingService = licensingService
         self.nowProvider = nowProvider
         self.freeBytesProvider = freeBytesProvider
         self.onRevealURL = onRevealURL
@@ -104,6 +110,11 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     // MARK: - Derived UI State
+
+    /// Whether the Meeting Recorder & Transcription feature is unlocked under the current license tier.
+    public var isMeetingRecorderUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.meetingRecorder) ?? true
+    }
 
     public var isRecording: Bool { state == .recording }
     /// Between Stop and the end of the mix.
@@ -154,6 +165,17 @@ public final class MeetingRecorderService: ObservableObject {
         }
         isStarting = true
         defer { isStarting = false }
+
+        guard isMeetingRecorderUnlocked else {
+            failureOpensProTab = true
+            showFailure(
+                MeetingBubble.proRequiredText,
+                detail: MeetingBubble.proRequiredDetail,
+                message: "Meeting Recorder requires Bitz Pro."
+            )
+            return
+        }
+        failureOpensProTab = false
 
         let captureMic = settingsStore.captureMicrophone
         let captureSys = settingsStore.captureSystemAudio
@@ -376,6 +398,16 @@ public final class MeetingRecorderService: ObservableObject {
     /// transcript files and updating its metadata. Runs even with auto-transcribe off, since the user asked for it.
     public func transcribeAgain() async {
         guard canTranscribeAgain, let last = lastCompletedResult else { return }
+        guard isMeetingRecorderUnlocked else {
+            failureOpensProTab = true
+            showFailure(
+                MeetingBubble.proRequiredText,
+                detail: MeetingBubble.proRequiredDetail,
+                message: "Meeting Recorder requires Bitz Pro."
+            )
+            return
+        }
+        failureOpensProTab = false
         // Set before the first await, so a double click or a start in between is refused
         state = .transcribing
         let sessionDir = last.sessionDirectoryURL
@@ -838,8 +870,19 @@ public final class MeetingRecorderService: ObservableObject {
         case .openInFinder:
             revealInFinder()
         case .openSettings:
+            let openPro = failureOpensProTab
+            failureOpensProTab = false
             dismissBubble()
-            onOpenSettings?()
+            if openPro {
+                if let onOpenProSettings {
+                    onOpenProSettings()
+                } else {
+                    onOpenSettings?()
+                    NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                }
+            } else {
+                onOpenSettings?()
+            }
         case .dismiss:
             dismissBubble()
         }

@@ -243,6 +243,8 @@ public struct MascotOverlayView: View {
                                     .foregroundStyle(Color.black)
                                 }
                                 .buttonStyle(.plain)
+                                .help("Lock mascot position")
+                                .accessibilityLabel("Lock Position")
                             }
                         }
                         .foregroundStyle(visorColor)

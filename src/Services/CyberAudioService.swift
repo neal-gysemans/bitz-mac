@@ -17,6 +17,12 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
     // Preloaded sound buffers decoded once at launch
     public private(set) var loadedBuffers: [CyberSoundEvent: AVAudioPCMBuffer] = [:]
 
+    private static let candidateBasePaths = [
+        "Resources/Sounds/",
+        "src/Resources/Sounds/",
+        "../Resources/Sounds/"
+    ]
+
     // Audio Engine components
     private let engine: AVAudioEngine
     private let mixerNode: AVAudioMixerNode
@@ -156,13 +162,8 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             return mainSubURL
         }
 
-        let candidatePaths = [
-            "Resources/Sounds/\(fileName)",
-            "src/Resources/Sounds/\(fileName)",
-            "../Resources/Sounds/\(fileName)"
-        ]
-
-        for path in candidatePaths {
+        for basePath in Self.candidateBasePaths {
+            let path = basePath + fileName
             let fileURL = URL(fileURLWithPath: path)
             if FileManager.default.fileExists(atPath: fileURL.path) {
                 return fileURL
@@ -287,6 +288,16 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             return
         }
 
+        // Record cooldowns only for live operational playback (not UI previews)
+        if !bypassCooldown {
+            lastOneShotPlayedAt = now
+            if event == .agentNeedsApproval, let agentId {
+                agentChimeCooldowns[agentId] = now
+            } else if event == .allAgentsDone {
+                lastFanfarePlayedAt = now
+            }
+        }
+
         guard let buffer = loadedBuffers[event] else {
             return
         }
@@ -297,16 +308,6 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
 
         if lastEnvironmentSuppression != nil {
             lastEnvironmentSuppression = nil
-        }
-
-        // Record cooldowns only for live operational playback (not UI previews)
-        if !bypassCooldown {
-            lastOneShotPlayedAt = now
-            if event == .agentNeedsApproval, let agentId {
-                agentChimeCooldowns[agentId] = now
-            } else if event == .allAgentsDone {
-                lastFanfarePlayedAt = now
-            }
         }
 
         let playerIndex = oneShotNodes.firstIndex { !$0.isPlaying } ?? 0
@@ -321,7 +322,7 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             engine.connect(playerNode, to: mixerNode, format: buffer.format)
         }
 
-        playerNode.scheduleBuffer(buffer, at: nil, options: []) { [weak self] in
+        let completion: @Sendable () -> Void = { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if playerIndex < self.oneShotNodes.count {
@@ -330,6 +331,7 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
                 self.evaluateIdlePowerGating()
             }
         }
+        playerNode.scheduleBuffer(buffer, at: nil, options: [], completionHandler: completion)
 
         playerNode.play()
     }
@@ -386,7 +388,7 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
         purrFadeTask?.cancel()
 
         purrNode.volume = 0.50
-        purrNode.scheduleBuffer(buffer, at: nil, options: []) { [weak self] in
+        let purrCompletion: @Sendable () -> Void = { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.purrNode.stop()
@@ -394,6 +396,7 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
                 self.evaluateIdlePowerGating()
             }
         }
+        purrNode.scheduleBuffer(buffer, at: nil, options: [], completionHandler: purrCompletion)
         purrNode.play()
     }
 

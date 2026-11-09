@@ -86,6 +86,8 @@ public struct MeetingBubble: Equatable, Sendable {
     public static let noSourceText = "⚠️ Turn on Microphone or System Audio"
     public static let lowDiskText = "⚠️ Not enough disk space to record"
     public static let couldNotStartText = "⚠️ Recording couldn't start"
+    public static let proRequiredText = "🔒 Meeting Recorder requires Bitz Pro"
+    public static let proRequiredDetail = "Activate a Bitz Pro license in Settings → Bitz Pro to record and transcribe meetings."
 
     public static let stillSavingText = "⏳ Still saving the last meeting — try again in a moment"
     public static let stillTranscribingText = "⏳ Still transcribing the last meeting — try again in a moment"

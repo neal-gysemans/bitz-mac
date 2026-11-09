@@ -53,7 +53,7 @@ public struct SettingsRootView: View {
     @ObservedObject public var licensingService: LicensingService
     @ObservedObject public var meetingRecorder: MeetingRecorderService
 
-    @State private var selectedTab: SettingsTab = .general
+    @State private var selectedTab: SettingsTab
 
     public init(
         engine: WellnessPointEngine,
@@ -112,7 +112,9 @@ public struct SettingsRootView: View {
             ScrollView(.vertical, showsIndicators: true) {
                 activeTabContent
                     .padding(20)
+                    .frame(maxWidth: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
 
@@ -121,9 +123,14 @@ public struct SettingsRootView: View {
         }
         .frame(
             minWidth: SettingsWindowManager.minimumContentSize.width,
-            minHeight: SettingsWindowManager.minimumContentSize.height
+            maxWidth: .infinity,
+            minHeight: SettingsWindowManager.minimumContentSize.height,
+            maxHeight: .infinity
         )
         .background(Color(nsColor: .windowBackgroundColor))
+        .onReceive(NotificationCenter.default.publisher(for: .bitzOpenProSettingsTab)) { _ in
+            selectedTab = .pro
+        }
     }
 
     // MARK: - Bottom Utility Footer Bar
@@ -148,7 +155,7 @@ public struct SettingsRootView: View {
     // MARK: - Tab Header Bar
 
     private var tabHeader: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             ForEach(SettingsTab.allCases) { tab in
                 let isSelected = (selectedTab == tab)
                 Button {
@@ -158,16 +165,19 @@ public struct SettingsRootView: View {
                 } label: {
                     VStack(spacing: 4) {
                         Image(systemName: tab.icon)
-                            .font(.system(size: 17, weight: isSelected ? .semibold : .regular))
+                            .font(.system(size: 16, weight: isSelected ? .semibold : .regular))
                             .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
 
                         Text(tab.rawValue)
                             .font(.system(size: 11, weight: isSelected ? .medium : .regular))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
                             .foregroundStyle(isSelected ? Color.primary : Color.secondary)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 6)
+                    .frame(minHeight: 44)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 4)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
                             .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
@@ -182,7 +192,7 @@ public struct SettingsRootView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
     }
@@ -204,7 +214,8 @@ public struct SettingsRootView: View {
                 scaleStore: scaleStore,
                 opacityStore: opacityStore,
                 engine: engine,
-                paletteStore: paletteStore
+                paletteStore: paletteStore,
+                licensingService: licensingService
             )
         case .behaviors:
             BehaviorSettingsTabView(
@@ -215,17 +226,20 @@ public struct SettingsRootView: View {
             )
         case .agents:
             AgentsSettingsTabView(
-                agentMonitor: agentMonitor
+                agentMonitor: agentMonitor,
+                licensingService: licensingService
             )
         case .personality:
             PersonalitySettingsTabView(
-                settingsStore: personalitySettings
+                settingsStore: personalitySettings,
+                licensingService: licensingService
             )
         case .audio:
             AudioSettingsTabView(
                 settingsStore: audioSettings,
                 audioPlayer: audioPlayer,
-                meetingRecorder: meetingRecorder
+                meetingRecorder: meetingRecorder,
+                licensingService: licensingService
             )
         case .telemetry:
             TelemetrySettingsTabView(
@@ -247,4 +261,8 @@ public struct SettingsRootView: View {
             )
         }
     }
+}
+
+public extension Notification.Name {
+    static let bitzOpenProSettingsTab = Notification.Name("BitzOpenProSettingsTab")
 }

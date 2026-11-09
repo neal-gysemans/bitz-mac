@@ -43,6 +43,7 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
                 existingWindow.contentViewController = makeHostingController(rootView: rootView, size: targetSize)
                 existingWindow.setContentSize(targetSize)
                 existingWindow.contentMinSize = Self.minimumContentSize
+                existingWindow.minSize = existingWindow.frameRect(forContentRect: NSRect(origin: .zero, size: Self.minimumContentSize)).size
             }
             existingWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -63,6 +64,7 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
         window.setContentSize(initialSize)
         // After contentViewController: assigning it resets contentMinSize on macOS 14
         window.contentMinSize = Self.minimumContentSize
+        window.minSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: Self.minimumContentSize)).size
         window.center()
         window.title = "Bitz Settings"
         window.isReleasedWhenClosed = false
@@ -85,6 +87,14 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
     }
 
     // MARK: - NSWindowDelegate
+
+    public func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        let minFrame = sender.frameRect(forContentRect: NSRect(origin: .zero, size: Self.minimumContentSize)).size
+        return NSSize(
+            width: max(frameSize.width, minFrame.width),
+            height: max(frameSize.height, minFrame.height)
+        )
+    }
 
     public func windowWillClose(_ notification: Notification) {
         tearDownHostedContent(notifyIfWasOpen: isWindowOpen)

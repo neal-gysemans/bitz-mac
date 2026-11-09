@@ -7,9 +7,19 @@ import FoundationModels
 /// Settings tab for configuring Bitz's opt-in, on-device AI personality commentary (`FR-001`, `FR-007`, `FR-009`, `FR-012`, `C-003`).
 public struct PersonalitySettingsTabView: View {
     @ObservedObject public var settingsStore: PersonalitySettingsStore
+    public var licensingService: (any LicensingServiceProtocol)?
+    @State private var showingProPopover: Bool = false
 
-    public init(settingsStore: PersonalitySettingsStore) {
+    private var isPersonalityUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.personality) ?? settingsStore.isPersonalityUnlocked
+    }
+
+    public init(
+        settingsStore: PersonalitySettingsStore,
+        licensingService: (any LicensingServiceProtocol)? = nil
+    ) {
         self.settingsStore = settingsStore
+        self.licensingService = licensingService
     }
 
     public var isFoundationModelsAvailable: Bool {
@@ -45,9 +55,65 @@ public struct PersonalitySettingsTabView: View {
     private var masterToggleCard: some View {
         settingsCard(title: "AI Personality Commentary", systemImage: "sparkles") {
             VStack(alignment: .leading, spacing: 12) {
+                if !isPersonalityUnlocked {
+                    HStack(spacing: 8) {
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.cyan)
+                        Text("On-device AI Personality Commentary & warning rephrasing require Bitz Pro.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button {
+                            showingProPopover = true
+                        } label: {
+                            ProBadgeView()
+                        }
+                        .buttonStyle(.plain)
+                        .popover(isPresented: $showingProPopover) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Image(systemName: "lock.fill")
+                                        .foregroundColor(.cyan)
+                                    Text(BitzFeature.personality.title)
+                                        .font(.headline)
+                                }
+
+                                Text(BitzFeature.personality.description)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+
+                                Divider()
+
+                                HStack {
+                                    Spacer()
+                                    Button("View Bitz Pro Perks") {
+                                        showingProPopover = false
+                                        NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.cyan)
+                                    .controlSize(.small)
+                                }
+                            }
+                            .padding(14)
+                            .frame(width: 260)
+                        }
+                    }
+                    .padding(.vertical, 2)
+
+                    Divider()
+                }
+
                 Toggle("Enable Personality Commentary", isOn: Binding(
                     get: { settingsStore.isEnabled },
-                    set: { settingsStore.setEnabled($0) }
+                    set: { enabled in
+                        if enabled && !isPersonalityUnlocked {
+                            showingProPopover = true
+                        } else {
+                            settingsStore.setEnabled(enabled)
+                        }
+                    }
                 ))
                 .font(.subheadline.bold())
 

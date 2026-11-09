@@ -8,21 +8,29 @@ public struct AudioSettingsTabView: View {
     public var audioPlayer: (any CyberAudioPlaying)?
     @ObservedObject public var meetingSettings: MeetingSettingsStore
     @ObservedObject public var meetingRecorder: MeetingRecorderService
+    public var licensingService: (any LicensingServiceProtocol)?
     /// Built once in `.onAppear` (probing recognizers is not free), never in `body`.
     @State private var transcriptionLocaleOptions: [(id: String, label: String)] = []
     /// `syncWarning` reads the file system, so it runs when a folder changes, never in `body`.
     @State private var recordingsFolderWarning: String?
     @State private var exportFolderWarning: String?
+    @State private var showingProPopover = false
 
     public init(
         settingsStore: CyberAudioSettingsStore,
         audioPlayer: (any CyberAudioPlaying)? = nil,
-        meetingRecorder: MeetingRecorderService
+        meetingRecorder: MeetingRecorderService,
+        licensingService: (any LicensingServiceProtocol)? = nil
     ) {
         self.settingsStore = settingsStore
         self.audioPlayer = audioPlayer
         self.meetingSettings = meetingRecorder.settingsStore
         self.meetingRecorder = meetingRecorder
+        self.licensingService = licensingService
+    }
+
+    private var isMeetingRecorderUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.meetingRecorder) ?? meetingRecorder.isMeetingRecorderUnlocked
     }
 
     public var body: some View {
@@ -75,6 +83,16 @@ public struct AudioSettingsTabView: View {
 
                     Spacer()
 
+                    if !isMeetingRecorderUnlocked {
+                        ProBadgeView()
+                            .onTapGesture {
+                                showingProPopover = true
+                            }
+                            .popover(isPresented: $showingProPopover, arrowEdge: .bottom) {
+                                proMeetingPopover
+                            }
+                    }
+
                     Text(meetingStatusBadgeText)
                         .font(.caption.bold())
                         .foregroundStyle(meetingStatusBadgeColor)
@@ -88,6 +106,10 @@ public struct AudioSettingsTabView: View {
 
                 HStack(spacing: 10) {
                     Button {
+                        if !isMeetingRecorderUnlocked && !meetingRecorder.isRecording {
+                            showingProPopover = true
+                            return
+                        }
                         Task {
                             await meetingRecorder.toggleRecording()
                         }
@@ -340,6 +362,9 @@ public struct AudioSettingsTabView: View {
     }
 
     private var meetingStatusBadgeText: String {
+        if !isMeetingRecorderUnlocked && !meetingRecorder.isRecording {
+            return "Bitz Pro"
+        }
         if meetingRecorder.isRecording {
             return "Recording"
         }
@@ -347,6 +372,9 @@ public struct AudioSettingsTabView: View {
     }
 
     private var meetingStatusBadgeColor: Color {
+        if !isMeetingRecorderUnlocked && !meetingRecorder.isRecording {
+            return .orange
+        }
         if meetingRecorder.isRecording {
             return .red
         }
@@ -354,6 +382,35 @@ public struct AudioSettingsTabView: View {
             return .orange
         }
         return .green
+    }
+
+    private var proMeetingPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "crown.fill")
+                    .foregroundStyle(.orange)
+                Text("Bitz Pro Feature")
+                    .font(.headline)
+            }
+            Text("Dual-track meeting audio recording and 100% on-device Speech transcription require Bitz Pro.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                showingProPopover = false
+                NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+            } label: {
+                Label("View Bitz Pro Perks", systemImage: "crown.fill")
+                    .font(.caption.bold())
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+            .controlSize(.small)
+        }
+        .padding(14)
+        .frame(width: 260)
     }
 
     private func permissionPill(label: String, status: MeetingPermissionState.Status) -> some View {

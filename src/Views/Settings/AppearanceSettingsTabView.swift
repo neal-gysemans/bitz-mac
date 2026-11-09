@@ -8,17 +8,20 @@ public struct AppearanceSettingsTabView: View {
     @ObservedObject private var settingsWindowManager: SettingsWindowManager = .shared
     public var engine: WellnessPointEngine?
     @ObservedObject public var paletteStore: AvatarPaletteStore
+    public var licensingService: (any LicensingServiceProtocol)?
 
     public init(
         scaleStore: AvatarScaleStore,
         opacityStore: AvatarOpacityStore,
         engine: WellnessPointEngine? = nil,
-        paletteStore: AvatarPaletteStore = AvatarPaletteStore()
+        paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
+        licensingService: (any LicensingServiceProtocol)? = nil
     ) {
         self.scaleStore = scaleStore
         self.opacityStore = opacityStore
         self.engine = engine
         self.paletteStore = paletteStore
+        self.licensingService = licensingService
     }
 
     public var body: some View {
@@ -139,7 +142,7 @@ public struct AppearanceSettingsTabView: View {
             }
 
             // Section 3: Theme & Colors
-            AppearancePaletteSectionView(paletteStore: paletteStore)
+            AppearancePaletteSectionView(paletteStore: paletteStore, licensingService: licensingService)
         }
     }
 
@@ -165,25 +168,7 @@ public struct AppearanceSettingsTabView: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 14))
 
-            VStack {
-                let currentState = paletteStore.previewSlot?.previewState ?? engine?.currentState ?? .balanced
-                AnimatedBitzCharacterView(
-                    state: currentState,
-                    showParticles: true,
-                    customVisorColor: paletteStore.resolvedPalette.visorColor(for: currentState),
-                    isPaused: !settingsWindowManager.isWindowVisible,
-                    palette: paletteStore.resolvedPalette
-                )
-                    .scaleEffect(0.70 * CGFloat(scaleStore.scaleFactor))
-                    .frame(height: 140)
-                    .opacity(opacityStore.opacityFactor)
-                    .animation(.spring(response: 0.35, dampingFraction: 0.7), value: scaleStore.scaleFactor)
-                    .animation(.easeInOut(duration: 0.2), value: opacityStore.opacityFactor)
-            }
-            .frame(height: 150)
-            .padding(.top, 16)
-
-            VStack {
+            VStack(spacing: 8) {
                 HStack {
                     Label("Live Mascot Preview", systemImage: "sparkles")
                         .font(.caption2.bold())
@@ -204,11 +189,30 @@ public struct AppearanceSettingsTabView: View {
                         .background(.ultraThinMaterial)
                         .cornerRadius(6)
                 }
-                .padding(10)
-                Spacer()
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+
+                ZStack {
+                    let currentState = paletteStore.previewSlot?.previewState ?? engine?.currentState ?? .balanced
+                    let previewScale = 0.65 * CGFloat(scaleStore.scaleFactor)
+                    AnimatedBitzCharacterView(
+                        state: currentState,
+                        showParticles: true,
+                        customVisorColor: paletteStore.resolvedPalette.visorColor(for: currentState),
+                        isPaused: !settingsWindowManager.isWindowVisible,
+                        palette: paletteStore.resolvedPalette
+                    )
+                    .scaleEffect(previewScale)
+                    .opacity(opacityStore.opacityFactor)
+                    .animation(.spring(response: 0.35, dampingFraction: 0.7), value: scaleStore.scaleFactor)
+                    .animation(.easeInOut(duration: 0.2), value: opacityStore.opacityFactor)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.bottom, 6)
             }
         }
-        .frame(height: 175)
+        .frame(height: 185)
+        .clipped()
     }
 
     private func settingsCard<Content: View>(
