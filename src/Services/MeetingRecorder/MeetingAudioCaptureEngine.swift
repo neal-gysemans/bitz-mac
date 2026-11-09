@@ -148,6 +148,8 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
             }
         } catch {
             await stopCapture()
+            // Our own reasons pass through unwrapped, so the bubble shows them as written
+            if let error = error as? MeetingRecorderError { throw error }
             throw MeetingRecorderError.captureStartFailed(error.localizedDescription)
         }
     }
@@ -187,6 +189,10 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
     /// Plain tap at the input's native format. No voice processing: its other-audio ducking cut captured system audio by ~40 dB.
     /// Runs on `micQueue`.
     private func startMicrophone(on engine: AVAudioEngine) throws {
+        // Without an input device (e.g. a Mac Studio with no mic) the engine reports a valid format and start() fails with -10868
+        guard AVCaptureDevice.default(for: .audio) != nil else {
+            throw MeetingRecorderError.captureStartFailed(Self.noMicrophoneReason)
+        }
         let inputNode = engine.inputNode
         // Validity check only: the tap itself takes `format: nil`
         let inputFormat = inputNode.outputFormat(forBus: 0)
@@ -206,6 +212,9 @@ public final class ProductionMeetingAudioCaptureEngine: NSObject, MeetingAudioCa
         }
         try engine.start()
     }
+
+    static let noMicrophoneReason =
+        "No microphone connected. Connect one and select it in System Settings → Sound → Input, or turn off Microphone in Bitz Settings → Audio."
 
     /// `format: nil` taps the hardware format; a format read from `outputFormat(forBus:)` can be stale after a device
     /// change and raise an uncatchable Objective-C exception (D2).
