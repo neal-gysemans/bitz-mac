@@ -229,6 +229,35 @@ final class MascotCharacterTests: XCTestCase {
         XCTAssertTrue(renderedMenu.contains("Companion Character"))
     }
 
+    func testPetReactionBubbleTriggeredViaEngineProvider() {
+        let (characterStore, _, defaults) = makeCharacterStore(initialTier: .pro)
+        defer { defaults.removePersistentDomain(forName: "MascotCharacterTests") }
+        let engine = WellnessPointEngine(riveController: nil, userDefaults: defaults)
+
+        engine.petBubbleTextProvider = {
+            characterStore.selectedCharacter.petReactionBubble
+        }
+
+        for character in MascotCharacter.allCases {
+            characterStore.selectCharacter(character)
+            engine.triggerPetInteraction()
+            XCTAssertEqual(engine.transientBubbleText, character.petReactionBubble)
+            XCTAssertTrue(engine.isPetReactionActive)
+        }
+    }
+
+    func testPetReactionBubbleExplicitOverride() {
+        let (_, _, defaults) = makeCharacterStore(initialTier: .free)
+        defer { defaults.removePersistentDomain(forName: "MascotCharacterTests") }
+        let engine = WellnessPointEngine(riveController: nil, userDefaults: defaults)
+
+        engine.petBubbleTextProvider = { "Default Provider Text" }
+        engine.triggerPetInteraction(bubbleText: "Custom Override Bubble")
+
+        XCTAssertEqual(engine.transientBubbleText, "Custom Override Bubble")
+        XCTAssertTrue(engine.isPetReactionActive)
+    }
+
     // MARK: - Helpers
 
     private func renderCharacter(_ character: MascotCharacter, state: BitzState) throws -> CGImage {

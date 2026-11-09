@@ -224,6 +224,10 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             return await self.personalityService.rephraseWarning(warning, context: context)
         }
 
+        self.engine.petBubbleTextProvider = { [weak self] in
+            self?.characterStore.selectedCharacter.petReactionBubble
+        }
+
         self.personalityTickCancellable = self.telemetryDashboard.$snapshot
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
@@ -424,6 +428,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         telemetryDashboard.stop()
         updateStore.stopPeriodicChecks()
         audioService.stopAll()
+        licensingTierCancellable = nil
         personalityTickCancellable = nil
         personalityEnabledCancellable = nil
         personalityPresetCancellable = nil
@@ -979,7 +984,7 @@ struct BitzMenuBarContentView: View {
             Divider()
 
             // MARK: - 2. Primary Quick Actions
-            Button("Pet Bitz") {
+            Button("Pet \(characterStore.selectedCharacter.name)") {
                 engine.triggerPetInteraction()
             }
             .keyboardShortcut("p", modifiers: [.command])

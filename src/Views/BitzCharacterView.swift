@@ -411,8 +411,9 @@ public struct AmbientParticlesOverlay: View {
     }
 }
 
-/// Deterministic SwiftUI vector renderer for all 5 companions in the Bitz Multi-Mascot Roster (#30):
+/// Deterministic SwiftUI vector renderer for all 6 companions in the Bitz Multi-Mascot Roster (#30):
 /// - `.cyberCat` (Bitz — pointed cyber ears, wrap-around visor, swishing tail)
+/// - `.cyberDragon` (Drako — swept plasma horns, articulated cyber-wings, scale plastron, bladed tail)
 /// - `.cyberDog` (Byte — articulated floppy ears, snout muzzle, diamond collar tag, rapid antenna tail)
 /// - `.hoverDrone` (Aero — dorsal radar beacon, spherical orb dome, 360° cyclops optic, thruster ring)
 /// - `.retroMech` (Pixel — dual antenna status beacons, boxy CRT scanline head, servo clamp hands)

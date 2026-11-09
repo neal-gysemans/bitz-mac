@@ -40,7 +40,7 @@ public struct AppearanceCharacterRosterSectionView: View {
                 if !isMultiMascotUnlocked {
                     Button {
                         proPopoverTitle = "Multi-Mascot Roster (Pro)"
-                        proPopoverDescription = "Unlock Byte the Cyber Dog, Aero the Hover Sentinel, Pixel the Retro Mech, and Volt the Cyber Bunny with Bitz Pro."
+                        proPopoverDescription = "Unlock Drako the Cyber Dragon, Byte the Cyber Hound, Aero the Hover Sentinel, Pixel the Retro Mech, and Volt the Cyber Bunny with Bitz Pro."
                         showingProPopover = true
                     } label: {
                         ProBadgeView()
