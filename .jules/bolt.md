@@ -17,3 +17,7 @@
 ## 2024-05-20 - String manipulation in hot paths
 **Learning:** Parsing strings character by character and appending to a dynamically grown character array is slower and causes memory reallocations compared to working with string indices and substrings.
 **Action:** Prefer finding indexes and slicing with substrings rather than allocating and appending arrays.
+
+## 2026-11-04 - Optimize NSAppleScript compilation in high frequency polling
+**Learning:** `NSAppleScript(source:)` is expensive to compile and evaluate. When invoked in high-frequency polling functions like browser tab telemetry every 5 seconds, it slows down the monitoring tick significantly and blocks the main thread.
+**Action:** Always compile `NSAppleScript` by hoisting the initialization to `private static let` properties so the compiled script representation is cached and reused across tick invocations.

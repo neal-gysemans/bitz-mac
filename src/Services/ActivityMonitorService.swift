@@ -510,19 +510,25 @@ public enum BrowserTabTelemetryReader {
         return (url, nil)
     }
 
+    // ⚡ Bolt: Hoisted AppleScript compilation to a nonisolated(unsafe) static property.
+    // Compiling an NSAppleScript from source is an expensive kernel operation.
+    // Since this is polled frequently (every 5s), compiling it once lazily
+    // saves CPU cycles and prevents blocking the main thread during telemetry ticks.
+    // NSAppleScript is non-Sendable, but safe to share as we only use it serially on the MainActor.
+    nonisolated(unsafe) private static let safariAppleScript = NSAppleScript(source: """
+    tell application "Safari"
+        if (count of windows) > 0 then
+            set currentTab to current tab of front window
+            return {URL of currentTab, name of currentTab}
+        end if
+    end tell
+    return {"", ""}
+    """)
+
     /// Reads the currently active tab URL and title from Safari via AppleScript if permitted,
     /// or returns `(nil, nil)` without throwing or hanging.
     public static func readActiveSafariTab() -> (url: String?, title: String?) {
-        let scriptSource = """
-        tell application "Safari"
-            if (count of windows) > 0 then
-                set currentTab to current tab of front window
-                return {URL of currentTab, name of currentTab}
-            end if
-        end tell
-        return {"", ""}
-        """
-        guard let script = NSAppleScript(source: scriptSource) else {
+        guard let script = safariAppleScript else {
             return (nil, nil)
         }
         var errorInfo: NSDictionary?
