@@ -387,6 +387,7 @@ public struct MascotOverlayView: View {
             } label: {
                 Label("Settings...", systemImage: "gearshape.fill")
             }
+            .accessibilityLabel("Settings")
 
             Button {
                 positionStore.toggleMascotVisibility()
@@ -409,6 +410,7 @@ public struct MascotOverlayView: View {
                 } label: {
                     Label("Unlock Position (Drag)", systemImage: "lock.open.fill")
                 }
+                .accessibilityLabel("Unlock Position")
             }
 
             Button {

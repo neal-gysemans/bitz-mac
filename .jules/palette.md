@@ -12,7 +12,10 @@
 ## 2024-05-19 - Added accessibility labels and help tooltips to icon buttons
 **Learning:** Found small, icon-centric buttons or buttons using heavily abbreviated text in HUD overlays (like "LOCK") and popovers (like `ProBadgeView`) that lacked `.help()` context and standard screen reader `.accessibilityLabel()`.
 **Action:** Always add `.help("Description")` and `.accessibilityLabel("Description")` to any small utility button, especially those using system images, icons, or constrained text in HUDs, ensuring they match existing patterns in `AgentApprovalHUDView` and `SpeechBubbleView`.
-
 ## 2024-05-24 - Accessibility labels for icon-only buttons
 **Learning:** Custom UI elements like icon-only buttons and ProBadgeView buttons were missing `.accessibilityLabel()` modifiers, making them opaque to VoiceOver users. Also, custom buttons using `.help()` should generally also have an `.accessibilityLabel()` if they are icon-only.
 **Action:** When adding new icon-only buttons or custom button views, ensure `.accessibilityLabel()` is applied for screen readers. Use `.help()` alongside it to provide on-hover tooltips for mouse users.
+
+## 2024-11-09 - Avoid Redundant Accessibility Labels on Standard SwiftUI Buttons
+**Learning:** In SwiftUI, `Button` or `Label` components natively use their text content as their accessibility label for VoiceOver. Adding an explicit `.accessibilityLabel()` to standard readable text (e.g., `Label("Quit Bitz")`) is redundant and does not improve the accessibility experience.
+**Action:** Reserve explicit `.accessibilityLabel()` usage strictly for overriding unreadable strings, parenthetical hints (like "(Drag)"), or non-standard ASCII elements. Do not apply them to clean, standard text strings.

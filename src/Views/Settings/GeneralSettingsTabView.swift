@@ -49,6 +49,7 @@ public struct GeneralSettingsTabView: View {
                             } label: {
                                 Label("Unlock Position (Drag to Move)", systemImage: "lock.open.fill")
                             }
+                            .accessibilityLabel("Unlock Position")
                         }
 
                         if positionStore.isFreeform || positionStore.cornerAnchor != .bottomRight {
