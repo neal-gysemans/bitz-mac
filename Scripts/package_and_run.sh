@@ -72,6 +72,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>BitzLocalDevLicenseToken</key>
+    <string>BITZ1.eyJsaWNlbnNlX2lkIjoiQlRaLUxPQ0FMLURFVi1QUk8iLCJ0aWVyIjoicHJvIiwiaXNzdWVkX2F0IjoxNzc1NjAwMDAwLCJwdXJjaGFzZXJfZW1haWwiOiJsb2NhbC1kZXZAYml0ei5hcHAifQ.7O-bo3C8CbTRuI3ZL2iFQ6biivRBy2POB2PZunmOjgQ2zJRu0Abb3dgOlHNkm3APF-g4pbH1xSEjtOaJsHa7DQ</string>
 </dict>
 </plist>
 EOF

@@ -9,7 +9,7 @@ on:
 jobs:
   check-ticket:
     name: Verify Linked Issue / Ticket
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Validate Issue Link
         uses: actions/github-script@v9

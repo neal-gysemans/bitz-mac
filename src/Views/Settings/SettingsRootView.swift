@@ -49,6 +49,7 @@ public struct SettingsRootView: View {
     @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
     public var inboxDirectoryURL: URL
     @ObservedObject public var paletteStore: AvatarPaletteStore
+    @ObservedObject public var characterStore: AvatarCharacterStore
     @ObservedObject public var personalitySettings: PersonalitySettingsStore
     @ObservedObject public var licensingService: LicensingService
 
@@ -72,6 +73,7 @@ public struct SettingsRootView: View {
         interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
         inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
+        characterStore: AvatarCharacterStore = AvatarCharacterStore(),
         personalitySettings: PersonalitySettingsStore? = nil,
         licensingService: LicensingService? = nil,
         initialTab: SettingsTab = .general
@@ -80,6 +82,7 @@ public struct SettingsRootView: View {
         self.interactionSettings = interactionSettings
         self.inboxDirectoryURL = inboxDirectoryURL
         self.paletteStore = paletteStore
+        self.characterStore = characterStore
         self.personalitySettings = personalitySettings ?? PersonalitySettingsStore()
         self.licensingService = licensingService ?? LicensingService()
         self.engine = engine
@@ -212,6 +215,7 @@ public struct SettingsRootView: View {
                 opacityStore: opacityStore,
                 engine: engine,
                 paletteStore: paletteStore,
+                characterStore: characterStore,
                 licensingService: licensingService
             )
         case .behaviors:

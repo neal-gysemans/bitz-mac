@@ -27,6 +27,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     public let interactionSettings: MascotInteractionSettingsStore
     public let fileDropService: FileDropInboxService
     public let paletteStore: AvatarPaletteStore
+    public let characterStore: AvatarCharacterStore
     public let personalitySettings: PersonalitySettingsStore
     public let personalityService: PersonalityService
     public let gitActivityProvider: any GitActivityProviding
@@ -49,6 +50,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     private var personalityTickCancellable: AnyCancellable?
     private var personalityEnabledCancellable: AnyCancellable?
     private var personalityPresetCancellable: AnyCancellable?
+    private var licensingTierCancellable: AnyCancellable?
     private var screenReconfigTask: Task<Void, Never>?
     private let userDefaults: UserDefaults
 
@@ -81,6 +83,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         interactionSettings: MascotInteractionSettingsStore? = nil,
         fileDropService: FileDropInboxService? = nil,
         paletteStore: AvatarPaletteStore? = nil,
+        characterStore: AvatarCharacterStore? = nil,
         personalitySettings: PersonalitySettingsStore? = nil,
         personalityService: PersonalityService? = nil,
         gitActivityProvider: (any GitActivityProviding)? = nil,
@@ -98,6 +101,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         self.appActivator = appActivator ?? WorkspaceAppActivator()
         self.diffViewer = diffViewer ?? SystemDiffViewer()
         self.paletteStore = paletteStore ?? AvatarPaletteStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
+        self.characterStore = characterStore ?? AvatarCharacterStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
         let resolvedPersonalitySettings = personalitySettings ?? PersonalitySettingsStore(userDefaults: userDefaults)
         self.personalitySettings = resolvedPersonalitySettings
         let resolvedPersonalityService = personalityService ?? PersonalityService(
@@ -248,6 +252,14 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         self.displayStore.onDisplayPreferenceChanged = { [weak self] in
             self?.syncOverlayPanels()
         }
+
+        self.licensingTierCancellable = self.licensingService.$currentTier
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.paletteStore.validateTierEntitlement()
+                self?.characterStore.validateTierEntitlement()
+            }
 
         self.screenParametersObserverToken = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -530,6 +542,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
                 interactionSettings: interactionSettings,
                 inboxDirectoryURL: fileDropService.inboxDirectoryURL,
                 paletteStore: paletteStore,
+                characterStore: characterStore,
                 personalitySettings: personalitySettings,
                 licensingService: licensingService
             )
@@ -760,6 +773,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             telemetrySettings: telemetrySettings,
             interactionSettings: interactionSettings,
             paletteStore: paletteStore,
+            characterStore: characterStore,
             onFilesDropped: { [weak self] urls in
                 guard let self else { return }
                 do {
@@ -884,6 +898,7 @@ struct BitzMenuBarContentView: View {
     let telemetrySettings: TelemetrySettingsStore
     @ObservedObject var audioSettings: CyberAudioSettingsStore
     @ObservedObject var paletteStore: AvatarPaletteStore
+    @ObservedObject var characterStore: AvatarCharacterStore
     var audioService: CyberAudioService? = nil
     @ObservedObject var flowShieldSettings: FlowShieldSettingsStore
     let flowShieldService: FlowShieldService
@@ -903,10 +918,12 @@ struct BitzMenuBarContentView: View {
         flowShieldSettings: FlowShieldSettingsStore? = nil,
         flowShieldService: FlowShieldService? = nil,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
+        characterStore: AvatarCharacterStore = AvatarCharacterStore(),
         licensingService: (any LicensingServiceProtocol)? = nil,
         onOpenSettings: @escaping () -> Void = {}
     ) {
         self.paletteStore = paletteStore
+        self.characterStore = characterStore
         self.licensingService = licensingService
         self.onOpenSettings = onOpenSettings
         self.engine = engine
@@ -993,6 +1010,25 @@ struct BitzMenuBarContentView: View {
                 AudioSuppressionNotice(audioService: audioService)
             }
 
+            Menu("Companion Character") {
+                ForEach(MascotCharacter.allCases) { character in
+                    let isUnlocked = licensingService?.isFeatureUnlocked(.multiMascot) ?? true
+                    let isLocked = character.isPro && !isUnlocked
+                    let label = isLocked ? "\(character.title) (Pro 🔒)" : character.title
+                    Toggle(label, isOn: Binding(
+                        get: { characterStore.selectedCharacter == character },
+                        set: { if $0 {
+                            if isLocked {
+                                onOpenSettings()
+                                NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                            } else {
+                                characterStore.selectCharacter(character)
+                            }
+                        } }
+                    ))
+                }
+            }
+
             Menu("Theme") {
                 ForEach(AvatarThemePreset.allCases) { preset in
                     let isUnlocked = licensingService?.isFeatureUnlocked(.customThemes) ?? true
@@ -1071,26 +1107,29 @@ public struct BitzApp: App {
                 flowShieldSettings: appDelegate.flowShieldSettings,
                 flowShieldService: appDelegate.flowShieldService,
                 paletteStore: appDelegate.paletteStore,
+                characterStore: appDelegate.characterStore,
                 licensingService: appDelegate.licensingService,
                 onOpenSettings: appDelegate.showSettingsWindow
             )
         } label: {
-            BitzMenuBarLabel(appDelegate: appDelegate)
+            BitzMenuBarLabel(appDelegate: appDelegate, characterStore: appDelegate.characterStore)
         }
     }
 }
 
-/// Status item label. Observes only the delegate, which publishes on title changes, not on every telemetry tick.
+/// Status item label. Observes only the delegate and character store, which publish on title or companion changes, not on every telemetry tick.
 struct BitzMenuBarLabel: View {
     @ObservedObject var appDelegate: BitzAppDelegate
+    @ObservedObject var characterStore: AvatarCharacterStore
 
     var body: some View {
+        let symbol = characterStore.selectedCharacter.menuBarSymbolName
         if appDelegate.menuBarTitle == "Bitz" {
-            Image(systemName: "cat.fill")
+            Image(systemName: symbol)
                 .accessibilityLabel("Bitz")
         } else {
             HStack {
-                Image(systemName: "cat.fill")
+                Image(systemName: symbol)
                 Text(appDelegate.menuBarTitle)
             }
         }

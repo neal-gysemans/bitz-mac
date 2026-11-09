@@ -18,6 +18,7 @@ public struct MascotOverlayView: View {
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
     @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
     @ObservedObject public var paletteStore: AvatarPaletteStore
+    @ObservedObject public var characterStore: AvatarCharacterStore
     @ObservedObject public var agentMonitor: AgentMonitorService
 
     private let explicitAttentionCue: Bool?
@@ -50,6 +51,7 @@ public struct MascotOverlayView: View {
         telemetrySettings: TelemetrySettingsStore = TelemetrySettingsStore(),
         interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
+        characterStore: AvatarCharacterStore = AvatarCharacterStore(),
         agentMonitor: AgentMonitorService = AgentMonitorService(),
         isAttentionCueActive: Bool? = nil,
         onFilesDropped: (([URL]) -> Void)? = nil,
@@ -68,6 +70,7 @@ public struct MascotOverlayView: View {
         self.telemetrySettings = telemetrySettings
         self.interactionSettings = interactionSettings
         self.paletteStore = paletteStore
+        self.characterStore = characterStore
         self.agentMonitor = agentMonitor
         self.explicitAttentionCue = isAttentionCueActive
         self.onFilesDropped = onFilesDropped
@@ -164,14 +167,15 @@ public struct MascotOverlayView: View {
     public var body: some View {
         // Read on the main actor: the geometry transform below is a Sendable closure
         let canvasSpace = Self.canvasSpace
-        let earOverflow = BitzCharacterView.earOverflow(isLoafPosture: isLoafPosture)
+        let activeCharacter = characterStore.selectedCharacter
+        let earOverflow = BitzCharacterView.earOverflow(for: activeCharacter, isLoafPosture: isLoafPosture)
         let isAnimationPaused = !positionStore.isMascotVisible
 
         VStack(spacing: 6) {
             Spacer(minLength: 0)
 
             // Offload continuous mascot motion to CoreAnimation (`LiveBitzCharacterView`), keeping the main thread
-            // and Cyber HUD quiescent at idle (#70).
+            // and Cyber HUD quiescent at idle (#70, #30).
             LiveBitzCharacterView(
                 state: displayedState,
                 isPetReactionActive: displayedPetReaction,
@@ -180,11 +184,12 @@ public struct MascotOverlayView: View {
                 customVisorColor: visorColor,
                 isPaused: isAnimationPaused,
                 palette: paletteStore.resolvedPalette,
-                isAttentionCueActive: isAttentionCueActive
+                isAttentionCueActive: isAttentionCueActive,
+                character: activeCharacter
             )
             .frame(width: 180, height: 140)
             .opacity(opacityStore.opacityFactor)
-            // Layout frame excludes the breathing offset, so this only fires when the HUD or posture changes
+            // Layout frame excludes the breathing offset, so this only fires when the HUD, character, or posture changes
             .onGeometryChange(for: CGFloat.self) { proxy in
                 proxy.frame(in: .named(canvasSpace)).minY - earOverflow
             } action: { earTop in
