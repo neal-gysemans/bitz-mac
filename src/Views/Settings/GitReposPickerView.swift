@@ -67,6 +67,7 @@ public struct GitReposPickerView: View {
                             }
                             .buttonStyle(.borderless)
                             .help("Stop monitoring this repository")
+                            .accessibilityLabel("Remove repository")
                         }
                         .padding(8)
                         .background(Color(nsColor: .controlBackgroundColor))
