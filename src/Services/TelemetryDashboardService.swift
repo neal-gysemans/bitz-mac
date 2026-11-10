@@ -75,31 +75,75 @@ extension TelemetryDataProviding {
 
 /// Production implementation reading real macOS disk, Mach kernel RAM, network interfaces, and IOKit battery state.
 public final class SystemTelemetryDataProvider: TelemetryDataProviding, @unchecked Sendable {
+    public static let defaultDiskCacheTTL: TimeInterval = 60.0
+
     private let lock = NSLock()
     private var previousNetworkSample: (bytesIn: UInt64, bytesOut: UInt64, timestamp: TimeInterval)?
+    private var cachedDiskSample: (freeBytes: UInt64, totalBytes: UInt64, timestamp: TimeInterval)?
+    private let homePath = NSHomeDirectory()
+    public let diskCacheTTL: TimeInterval
+    private let uptime: @Sendable () -> TimeInterval
 
-    public init() {}
+    public init(
+        diskCacheTTL: TimeInterval = SystemTelemetryDataProvider.defaultDiskCacheTTL,
+        uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) {
+        self.diskCacheTTL = max(0, diskCacheTTL)
+        self.uptime = uptime
+    }
 
+    public func invalidateDiskCache() {
+        lock.lock()
+        cachedDiskSample = nil
+        lock.unlock()
+    }
+
+    /// Queries disk capacity using kernel `statfs` (with `volumeAvailableCapacityKey` fallback) and caches the result
+    /// for `diskCacheTTL` seconds so background ticks never trigger `cache_delete` purgeable-space XPC scans (#126).
     public func fetchDiskTelemetry(lowDiskThresholdPercent: Double) -> DiskTelemetry {
-        let homeURL = URL(fileURLWithPath: NSHomeDirectory())
-        if let values = try? homeURL.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey]),
-           let freeBytes = values.volumeAvailableCapacityForImportantUsage,
-           let totalBytes = values.volumeTotalCapacity,
-           totalBytes > 0 {
+        let now = uptime()
+        lock.lock()
+        if let cached = cachedDiskSample,
+           diskCacheTTL > 0,
+           now >= cached.timestamp,
+           (now - cached.timestamp) < diskCacheTTL {
+            lock.unlock()
             return DiskTelemetry(
-                freeBytes: UInt64(max(0, freeBytes)),
-                totalBytes: UInt64(totalBytes),
+                freeBytes: cached.freeBytes,
+                totalBytes: cached.totalBytes,
                 lowDiskThresholdPercent: lowDiskThresholdPercent
             )
         }
+        lock.unlock()
 
-        // Fallback to statfs
         var stats = statfs()
-        if statfs(NSHomeDirectory(), &stats) == 0 {
+        if statfs(homePath, &stats) == 0 {
             let blockSize = UInt64(stats.f_bsize)
-            let free = stats.f_bavail * blockSize
-            let total = stats.f_blocks * blockSize
-            return DiskTelemetry(freeBytes: free, totalBytes: total, lowDiskThresholdPercent: lowDiskThresholdPercent)
+            let free = UInt64(stats.f_bavail) * blockSize
+            let total = UInt64(stats.f_blocks) * blockSize
+            if total > 0 {
+                lock.lock()
+                cachedDiskSample = (freeBytes: free, totalBytes: total, timestamp: now)
+                lock.unlock()
+                return DiskTelemetry(freeBytes: free, totalBytes: total, lowDiskThresholdPercent: lowDiskThresholdPercent)
+            }
+        }
+
+        let homeURL = URL(fileURLWithPath: homePath)
+        if let values = try? homeURL.resourceValues(forKeys: [.volumeAvailableCapacityKey, .volumeTotalCapacityKey]),
+           let freeBytes = values.volumeAvailableCapacity,
+           let totalBytes = values.volumeTotalCapacity,
+           totalBytes > 0 {
+            let free = UInt64(max(0, freeBytes))
+            let total = UInt64(totalBytes)
+            lock.lock()
+            cachedDiskSample = (freeBytes: free, totalBytes: total, timestamp: now)
+            lock.unlock()
+            return DiskTelemetry(
+                freeBytes: free,
+                totalBytes: total,
+                lowDiskThresholdPercent: lowDiskThresholdPercent
+            )
         }
 
         return DiskTelemetry(freeBytes: 0, totalBytes: 0, lowDiskThresholdPercent: lowDiskThresholdPercent)
@@ -338,6 +382,8 @@ public final class TelemetrySettingsStore: ObservableObject {
 @MainActor
 public final class TelemetryDashboardService: ObservableObject {
     public static var isMenuTracking: Bool = false
+    public static let visibleDiskSampleInterval: TimeInterval = 30.0
+    public static let hiddenDiskSampleInterval: TimeInterval = 120.0
     public var onTitleChanged: ((String) -> Void)?
 
     @Published public private(set) var snapshot: TelemetrySnapshot = TelemetrySnapshot()
@@ -357,6 +403,7 @@ public final class TelemetryDashboardService: ObservableObject {
     private var carouselTask: Task<Void, Never>?
     private var carouselIndex: Int = 0
     private var pendingSnapshot: TelemetrySnapshot?
+    private var lastDiskSampleUptime: TimeInterval?
     nonisolated(unsafe) private var menuBeginTrackingObserver: (any NSObjectProtocol)?
     nonisolated(unsafe) private var menuEndTrackingObserver: (any NSObjectProtocol)?
 
@@ -492,27 +539,60 @@ public final class TelemetryDashboardService: ObservableObject {
         currentCarouselMessage = messages[carouselIndex]
     }
 
+    /// Whether any telemetry surface that displays disk capacity is currently visible (#126).
+    public var isDiskSurfaceVisible: Bool {
+        guard settingsStore.isMetricEnabled(.disk) else { return false }
+        return settingsStore.displayInMascotCyberHUD
+            || settingsStore.displayInMenuBarTitle
+            || settingsStore.displayInSpeechBubbleCycle
+            || Self.isMenuTracking
+            || SettingsWindowManager.shared.isWindowVisible
+    }
+
+    private func shouldSampleDisk(at nowUptime: TimeInterval, force: Bool) -> Bool {
+        if force || snapshot.disk.totalBytes == 0 {
+            return true
+        }
+        guard let lastUptime = lastDiskSampleUptime else {
+            return true
+        }
+        let interval = isDiskSurfaceVisible ? Self.visibleDiskSampleInterval : Self.hiddenDiskSampleInterval
+        return nowUptime < lastUptime || (nowUptime - lastUptime) >= interval
+    }
+
     /// Performs an asynchronous telemetry collection tick off the main thread.
-    public func performSampleTick() async {
+    public func performSampleTick(
+        forceDiskRefresh: Bool = false,
+        nowUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) async {
         let lowDiskThreshold = settingsStore.lowDiskWarningThresholdPercent
         let elapsed = settingsStore.pollingIntervalSeconds
+        let sampleDisk = shouldSampleDisk(at: nowUptime, force: forceDiskRefresh)
+        let previousDisk = snapshot.disk
 
-        // Sample raw hardware metrics asynchronously
-        let disk = await Task.detached(priority: .utility) { [provider] in
-            provider.fetchDiskTelemetry(lowDiskThresholdPercent: lowDiskThreshold)
+        // Coalesce raw hardware metric collection into a single background task (#126)
+        let (disk, ram, net, bat) = await Task.detached(priority: .utility) { [provider] in
+            autoreleasepool {
+                let d: DiskTelemetry
+                if sampleDisk {
+                    d = provider.fetchDiskTelemetry(lowDiskThresholdPercent: lowDiskThreshold)
+                } else {
+                    d = DiskTelemetry(
+                        freeBytes: previousDisk.freeBytes,
+                        totalBytes: previousDisk.totalBytes,
+                        lowDiskThresholdPercent: lowDiskThreshold
+                    )
+                }
+                let r = provider.fetchRAMTelemetry()
+                let n = provider.fetchNetworkTelemetry(elapsedSeconds: elapsed)
+                let b = provider.fetchBatteryTelemetry()
+                return (d, r, n, b)
+            }
         }.value
 
-        let ram = await Task.detached(priority: .utility) { [provider] in
-            provider.fetchRAMTelemetry()
-        }.value
-
-        let net = await Task.detached(priority: .utility) { [provider] in
-            provider.fetchNetworkTelemetry(elapsedSeconds: elapsed)
-        }.value
-
-        let bat = await Task.detached(priority: .utility) { [provider] in
-            provider.fetchBatteryTelemetry()
-        }.value
+        if sampleDisk {
+            lastDiskSampleUptime = nowUptime
+        }
 
         let currentScreen = displayStore?.resolveScreen() ?? NSScreen.main
         let disp = provider.fetchDisplayTelemetry()

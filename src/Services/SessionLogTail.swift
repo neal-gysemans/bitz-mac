@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Incremental reader for an append-only JSONL session log (NFR-001, NFR-002).
@@ -62,7 +63,7 @@ public struct SessionLogTail: Sendable {
 
     /// The followed file was modified within `idleSwitchDelay`, so `pickSession` would keep it (one stat, no directory scan).
     public func isCurrentFresh(at now: Date) -> Bool {
-        guard let url, let modified = Self.attributes(url)?[.modificationDate] as? Date else { return false }
+        guard let url, let modified = Self.modificationDate(url) else { return false }
         return now.timeIntervalSince(modified) <= Self.idleSwitchDelay
     }
 
@@ -87,13 +88,29 @@ public struct SessionLogTail: Sendable {
         }
     }
 
-    private static func attributes(_ url: URL) -> [FileAttributeKey: Any]? {
-        try? FileManager.default.attributesOfItem(atPath: url.path)
+    /// Fast POSIX `stat` query returning file byte size and modification date without Foundation dictionary allocations (#126).
+    public static func fileMetadata(_ url: URL) -> (size: UInt64, modified: Date)? {
+        var st = stat()
+        let ok = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return false }
+            return stat(path, &st) == 0
+        }
+        guard ok else { return nil }
+        let modified = Date(
+            timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec)
+                + TimeInterval(st.st_mtimespec.tv_nsec) / 1_000_000_000
+        )
+        return (size: UInt64(max(0, st.st_size)), modified: modified)
+    }
+
+    /// nil when the file or directory cannot be stat'ed.
+    public static func modificationDate(_ url: URL) -> Date? {
+        fileMetadata(url)?.modified
     }
 
     /// nil when the file cannot be stat'ed.
     private static func fileSize(_ url: URL) -> UInt64? {
-        attributes(url)?[.size] as? UInt64
+        fileMetadata(url)?.size
     }
 
     private static func read(_ url: URL, from start: UInt64, to end: UInt64) -> Data {

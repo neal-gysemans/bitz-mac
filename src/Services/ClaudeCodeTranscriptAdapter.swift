@@ -11,6 +11,7 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
 
     public let projectsURL: URL
     private let pollInterval: TimeInterval
+    private let maxIdleScanInterval: TimeInterval
     private let clock: @Sendable () -> Date
     private let lock = NSLock()
     private var eventHandler: (@Sendable (AgentEvent) -> Void)?
@@ -18,10 +19,20 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
     private var tail = SessionLogTail()
     private var tracker = AgentSessionTracker(agentID: "claude", agentName: "Claude", startsTurnOnPrompt: false)
 
+    private struct CachedProjectEntry {
+        let projectURL: URL
+        var projectModified: Date?
+        var sessionModifiedByURL: [URL: Date] = [:]
+    }
+
+    private var cachedProjectsDirModified: Date?
+    private var cachedProjects: [URL: CachedProjectEntry] = [:]
+    private var cachedCandidates: [(url: URL, modified: Date)] = []
+    private var lastCandidateScanTime: Date?
+    public private(set) var currentScanInterval: TimeInterval
+
     private static let interruptMarker = "[Request interrupted"
     private static let usageTokenKeys = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
-    private static let contentModDateKeyArray: [URLResourceKey] = [.contentModificationDateKey]
-    private static let contentModDateKeySet: Set<URLResourceKey> = [.contentModificationDateKey]
 
     public static var defaultProjectsURL: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
@@ -30,10 +41,13 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
     public init(
         projectsURL: URL = ClaudeCodeTranscriptAdapter.defaultProjectsURL,
         pollInterval: TimeInterval = 1.5,
+        maxIdleScanInterval: TimeInterval = 30.0,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.projectsURL = projectsURL
         self.pollInterval = pollInterval
+        self.maxIdleScanInterval = max(pollInterval, maxIdleScanInterval)
+        self.currentScanInterval = pollInterval
         self.clock = clock
     }
 
@@ -50,7 +64,9 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
             // Task.sleep throws once cancelled, which ends the loop.
             while (try? await Task.sleep(nanoseconds: nanoseconds)) != nil {
                 guard let self else { return }
-                self.checkForUpdates()
+                autoreleasepool {
+                    self.checkForUpdates()
+                }
             }
         }
         lock.withLock {
@@ -66,19 +82,105 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
             eventHandler = nil
             tail = SessionLogTail()
             tracker.reset()
+            cachedProjectsDirModified = nil
+            cachedProjects.removeAll()
+            cachedCandidates.removeAll()
+            lastCandidateScanTime = nil
+            currentScanInterval = pollInterval
         }
     }
 
     /// Top-level session logs only (`<project>/<session>.jsonl`); subagent logs nested deeper are never followed.
     public func sessionCandidates() -> [(url: URL, modified: Date)] {
+        lock.withLock {
+            refreshCandidates().candidates
+        }
+    }
+
+    private func refreshCandidates() -> (candidates: [(url: URL, modified: Date)], changed: Bool) {
+        guard let projectsModified = SessionLogTail.modificationDate(projectsURL) else {
+            let hadCandidates = !cachedCandidates.isEmpty
+            cachedProjectsDirModified = nil
+            cachedProjects.removeAll()
+            cachedCandidates.removeAll()
+            return ([], hadCandidates)
+        }
+
         let fileManager = FileManager.default
-        let projects = (try? fileManager.contentsOfDirectory(at: projectsURL, includingPropertiesForKeys: nil)) ?? []
-        return projects.flatMap { project -> [(url: URL, modified: Date)] in
-            let files = (try? fileManager.contentsOfDirectory(at: project, includingPropertiesForKeys: Self.contentModDateKeyArray)) ?? []
-            return files.filter { $0.pathExtension == "jsonl" }.compactMap { url in
-                (try? url.resourceValues(forKeys: Self.contentModDateKeySet).contentModificationDate).map { (url, $0) }
+        var changed = false
+
+        if cachedProjectsDirModified != projectsModified || cachedProjects.isEmpty {
+            let projects = (try? fileManager.contentsOfDirectory(at: projectsURL, includingPropertiesForKeys: nil)) ?? []
+            var updatedProjects: [URL: CachedProjectEntry] = [:]
+            updatedProjects.reserveCapacity(projects.count)
+            for project in projects {
+                let key = project.standardizedFileURL
+                if let existing = cachedProjects[key] {
+                    updatedProjects[key] = existing
+                } else {
+                    changed = true
+                    updatedProjects[key] = CachedProjectEntry(projectURL: project)
+                }
+            }
+            if updatedProjects.count != cachedProjects.count {
+                changed = true
+            }
+            cachedProjects = updatedProjects
+            cachedProjectsDirModified = projectsModified
+        }
+
+        var updatedCandidates: [(url: URL, modified: Date)] = []
+
+        for (key, var entry) in cachedProjects {
+            let currentProjMod = SessionLogTail.modificationDate(entry.projectURL)
+            if currentProjMod != entry.projectModified || entry.sessionModifiedByURL.isEmpty {
+                let files = (try? fileManager.contentsOfDirectory(at: entry.projectURL, includingPropertiesForKeys: nil)) ?? []
+                let jsonlFiles = files.filter { $0.pathExtension == "jsonl" }
+                var nextMap: [URL: Date] = [:]
+                nextMap.reserveCapacity(jsonlFiles.count)
+                for file in jsonlFiles {
+                    if let mod = SessionLogTail.modificationDate(file) {
+                        if entry.sessionModifiedByURL[file] != mod {
+                            changed = true
+                        }
+                        nextMap[file] = mod
+                    }
+                }
+                if nextMap.count != entry.sessionModifiedByURL.count {
+                    changed = true
+                }
+                entry.sessionModifiedByURL = nextMap
+                entry.projectModified = currentProjMod
+            } else {
+                for (fileURL, prevMod) in entry.sessionModifiedByURL {
+                    if let currentMod = SessionLogTail.modificationDate(fileURL) {
+                        if currentMod != prevMod {
+                            changed = true
+                            entry.sessionModifiedByURL[fileURL] = currentMod
+                        }
+                    } else {
+                        changed = true
+                        entry.sessionModifiedByURL.removeValue(forKey: fileURL)
+                    }
+                }
+            }
+            cachedProjects[key] = entry
+            for (fileURL, mod) in entry.sessionModifiedByURL {
+                updatedCandidates.append((url: fileURL, modified: mod))
             }
         }
+
+        cachedCandidates = updatedCandidates
+        return (updatedCandidates, changed)
+    }
+
+    private func shouldScanCandidates(at now: Date) -> Bool {
+        guard let lastScan = lastCandidateScanTime else { return true }
+        if SessionLogTail.modificationDate(projectsURL) != cachedProjectsDirModified {
+            return true
+        }
+        let elapsed = now.timeIntervalSince(lastScan)
+        return elapsed < 0 || elapsed >= currentScanInterval
     }
 
     /// One poll: follow the right session, then turn appended lines into events.
@@ -89,20 +191,37 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
         let now = clock()
 
         // While the current log is fresh pickSession keeps it, so the directory scan is skipped.
-        if !tail.isCurrentFresh(at: now),
-           let chosen = SessionLogTail.pickSession(current: tail.url, candidates: sessionCandidates(), now: now),
-           chosen != tail.url {
-            let seed = tail.attach(to: chosen)
-            // Seed lines silently restore turn state, so a turn already in progress is tracked;
-            // the loop streak starts fresh (FR-014, R7). The seed reading always goes out to clear any stale turn.
-            tracker.reset()
-            tracker.prime(fromSeed: seed.lines.flatMap(Self.entries(fromLine:)))
-            handler(tracker.usageEvent(at: now, seed: true))
-            return
+        if !tail.isCurrentFresh(at: now) {
+            let candidates: [(url: URL, modified: Date)]
+            if shouldScanCandidates(at: now) {
+                let scan = refreshCandidates()
+                lastCandidateScanTime = now
+                candidates = scan.candidates
+                if scan.changed {
+                    currentScanInterval = pollInterval
+                } else {
+                    currentScanInterval = min(currentScanInterval * 2.0, maxIdleScanInterval)
+                }
+            } else {
+                candidates = cachedCandidates
+            }
+
+            if let chosen = SessionLogTail.pickSession(current: tail.url, candidates: candidates, now: now),
+               chosen != tail.url {
+                currentScanInterval = pollInterval
+                let seed = tail.attach(to: chosen)
+                // Seed lines silently restore turn state, so a turn already in progress is tracked;
+                // the loop streak starts fresh (FR-014, R7). The seed reading always goes out to clear any stale turn.
+                tracker.reset()
+                tracker.prime(fromSeed: seed.lines.flatMap(Self.entries(fromLine:)))
+                handler(tracker.usageEvent(at: now, seed: true))
+                return
+            }
         }
 
         let read = tail.readNew()
         guard read.grew || !read.lines.isEmpty else { return }
+        currentScanInterval = pollInterval
         tracker.ingest(read.lines.flatMap(Self.entries(fromLine:)), at: now).forEach(handler)
         // Any appended bytes count as activity, even a partial line (R4).
         if read.grew { handler(tracker.usageEvent(at: now, seed: false)) }

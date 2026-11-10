@@ -207,4 +207,81 @@ final class AntigravityTranscriptAdapterTests: XCTestCase {
             .toolCall(id: nil, name: "list_dir", fingerprint: AgentSessionTracker.fingerprint(name: "list_dir", input: nil)),
         ])
     }
+
+    func testIdleScanBacksOffWhenUnchangedAndResetsOnNewSessionOrGrowth() throws {
+        final class TestClock: @unchecked Sendable {
+            var now: Date
+            init(_ now: Date) { self.now = now }
+        }
+
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes([.modificationDate: t0.addingTimeInterval(-60)], ofItemAtPath: transcriptFile.path)
+
+        let clock = TestClock(t0)
+        let collector = Collector()
+        let adapter = AntigravityTranscriptAdapter(
+            baseBrainURL: tempBrainDir,
+            pollInterval: 1.5,
+            maxIdleScanInterval: 12.0,
+            clock: { clock.now }
+        )
+        adapter.setHandlerForTesting { collector.append($0) }
+
+        // First poll discovers session-1 (changed == true -> interval stays at base 1.5s)
+        adapter.checkForUpdates()
+        XCTAssertEqual(adapter.currentScanInterval, 1.5)
+        XCTAssertEqual(collector.usages.count, 1)
+
+        // Advance clock by 1.5s with no filesystem changes -> backs off to 3.0s
+        clock.now = t0.addingTimeInterval(1.5)
+        adapter.checkForUpdates()
+        XCTAssertEqual(adapter.currentScanInterval, 3.0)
+
+        // Poll within the 3.0s backoff window (at +3.0s total, only 1.5s since last scan) -> skipped, interval stays 3.0s
+        clock.now = t0.addingTimeInterval(3.0)
+        adapter.checkForUpdates()
+        XCTAssertEqual(adapter.currentScanInterval, 3.0)
+
+        // Poll at +4.5s total (3.0s since last scan) with no changes -> backs off to 6.0s
+        clock.now = t0.addingTimeInterval(4.5)
+        adapter.checkForUpdates()
+        XCTAssertEqual(adapter.currentScanInterval, 6.0)
+
+        // Poll at +10.5s total (6.0s since last scan) with no changes -> backs off to max 12.0s
+        clock.now = t0.addingTimeInterval(10.5)
+        adapter.checkForUpdates()
+        XCTAssertEqual(adapter.currentScanInterval, 12.0)
+
+        // Creating a brand-new session updates baseBrainURL mtime, bypassing the 12s backoff immediately!
+        let session2Logs = tempBrainDir.appendingPathComponent("session-2/.system_generated/logs")
+        try FileManager.default.createDirectory(at: session2Logs, withIntermediateDirectories: true)
+        let transcript2 = session2Logs.appendingPathComponent("transcript.jsonl")
+        let s2Line = #"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","input_tokens":3000,"cache_read_tokens":500}"# + "\n"
+        try Data(s2Line.utf8).write(to: transcript2)
+        try FileManager.default.setAttributes([.modificationDate: clock.now], ofItemAtPath: transcript2.path)
+
+        clock.now = t0.addingTimeInterval(11.0) // Only 0.5s after last scan (well inside 12s backoff)
+        adapter.checkForUpdates()
+        XCTAssertEqual(adapter.currentScanInterval, 1.5, "New session directory resets scan interval to base pollInterval")
+        XCTAssertEqual(collector.usages.last?.contextTokens, 3500)
+    }
+
+    func testIncrementalScanHandlesEmptySubdirectoriesThenLateTranscriptCreation() throws {
+        let emptySubdir = tempBrainDir.appendingPathComponent("empty-session")
+        try FileManager.default.createDirectory(at: emptySubdir, withIntermediateDirectories: true)
+
+        let adapter = AntigravityTranscriptAdapter(baseBrainURL: tempBrainDir)
+        XCTAssertEqual(adapter.sessionCandidates().count, 1)
+
+        // Repeat scan with unchanged emptySubdir mtime still returns 1 candidate
+        XCTAssertEqual(adapter.sessionCandidates().count, 1)
+
+        // Later, .system_generated/logs/transcript.jsonl is created inside empty-session
+        let lateLogsDir = emptySubdir.appendingPathComponent(".system_generated/logs")
+        try FileManager.default.createDirectory(at: lateLogsDir, withIntermediateDirectories: true)
+        let lateTranscript = lateLogsDir.appendingPathComponent("transcript.jsonl")
+        try Data().write(to: lateTranscript)
+
+        XCTAssertEqual(adapter.sessionCandidates().count, 2)
+    }
 }

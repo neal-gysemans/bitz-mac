@@ -97,7 +97,7 @@ public struct TelemetrySettingsTabView: View {
 
                     Button {
                         Task {
-                            await telemetryDashboard.performSampleTick()
+                            await telemetryDashboard.performSampleTick(forceDiskRefresh: true)
                         }
                     } label: {
                         Label("Sample Telemetry Now", systemImage: "arrow.clockwise")

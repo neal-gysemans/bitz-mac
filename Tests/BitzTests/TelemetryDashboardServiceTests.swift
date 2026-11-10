@@ -11,11 +11,17 @@ final class MockTelemetryDataProvider: TelemetryDataProviding, @unchecked Sendab
     var batteryToReturn: BatteryTelemetry? = BatteryTelemetry(percentage: 85, isCharging: false, powerSource: "Battery")
     var displayToReturn: DisplayTelemetry? = DisplayTelemetry(name: "Studio Display", resolution: "2560×1440", refreshRate: 60.0)
     var fpsToReturn = FPSTelemetry(currentFPS: 120.0, targetFPS: 120.0, screenName: "Built-in Retina Display")
+    private let lock = NSLock()
+    private(set) var diskFetchCount: Int = 0
 
     func fetchDiskTelemetry(lowDiskThresholdPercent: Double) -> DiskTelemetry {
-        DiskTelemetry(
-            freeBytes: diskToReturn.freeBytes,
-            totalBytes: diskToReturn.totalBytes,
+        lock.lock()
+        diskFetchCount += 1
+        let currentDisk = diskToReturn
+        lock.unlock()
+        return DiskTelemetry(
+            freeBytes: currentDisk.freeBytes,
+            totalBytes: currentDisk.totalBytes,
             lowDiskThresholdPercent: lowDiskThresholdPercent
         )
     }
@@ -437,5 +443,72 @@ final class TelemetryDashboardServiceTests: XCTestCase {
         XCTAssertEqual(service.snapshot.agents.activeCount, 0)
         XCTAssertEqual(service.snapshot.agents.context, claudeContext)
         XCTAssertEqual(service.snapshot.agents.compactBadge, "CTX 74%")
+    }
+
+    // MARK: - 7. Disk Telemetry Throttling & Caching (#126)
+
+    func testDiskTelemetryThrottledWhenVisibleAndBackedOffFurtherWhenHidden() async {
+        let suiteName = "TelemetryDiskThrottle.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let settings = TelemetrySettingsStore(userDefaults: defaults)
+        let mockProvider = MockTelemetryDataProvider()
+        // 15% free (75 GB of 500 GB)
+        mockProvider.diskToReturn = DiskTelemetry(freeBytes: 75_000_000_000, totalBytes: 500_000_000_000)
+        let service = TelemetryDashboardService(settingsStore: settings, provider: mockProvider)
+
+        // Initial tick at t=100 always samples disk
+        await service.performSampleTick(nowUptime: 100.0)
+        XCTAssertEqual(mockProvider.diskFetchCount, 1)
+        XCTAssertFalse(service.snapshot.disk.isLowSpace)
+
+        // Subsequent 3s ticks while HUD is visible (< 30s) reuse cached disk capacity
+        // while still applying updated lowDiskWarningThresholdPercent
+        settings.lowDiskWarningThresholdPercent = 20.0
+        await service.performSampleTick(nowUptime: 103.0)
+        await service.performSampleTick(nowUptime: 115.0)
+        XCTAssertEqual(mockProvider.diskFetchCount, 1)
+        XCTAssertTrue(service.snapshot.disk.isLowSpace, "Threshold change must apply to cached disk reading immediately")
+
+        // At t=130.0 (30s elapsed with HUD visible), disk is sampled again
+        await service.performSampleTick(nowUptime: 130.0)
+        XCTAssertEqual(mockProvider.diskFetchCount, 2)
+
+        // Hide all disk surfaces: interval increases to 120s
+        settings.displayInMascotCyberHUD = false
+        settings.displayInMenuBarTitle = false
+        settings.displayInSpeechBubbleCycle = false
+        TelemetryDashboardService.isMenuTracking = false
+        SettingsWindowManager.shared.closeSettingsWindow()
+        XCTAssertFalse(service.isDiskSurfaceVisible)
+
+        await service.performSampleTick(nowUptime: 170.0) // +40s (< 120s hidden interval)
+        XCTAssertEqual(mockProvider.diskFetchCount, 2)
+
+        await service.performSampleTick(nowUptime: 250.0) // +120s (>= 120s hidden interval)
+        XCTAssertEqual(mockProvider.diskFetchCount, 3)
+
+        // Explicit force refresh bypasses interval
+        await service.performSampleTick(forceDiskRefresh: true, nowUptime: 252.0)
+        XCTAssertEqual(mockProvider.diskFetchCount, 4)
+    }
+
+    func testSystemTelemetryDataProviderCachesDiskQueryAndAvoidsZeroCapacity() {
+        final class UptimeBox: @unchecked Sendable {
+            var now: TimeInterval = 500.0
+        }
+        let clock = UptimeBox()
+        let provider = SystemTelemetryDataProvider(diskCacheTTL: 60.0, uptime: { clock.now })
+
+        let first = provider.fetchDiskTelemetry(lowDiskThresholdPercent: 10.0)
+        XCTAssertGreaterThan(first.totalBytes, 0)
+        XCTAssertGreaterThan(first.freeBytes, 0)
+
+        clock.now = 510.0
+        let cached = provider.fetchDiskTelemetry(lowDiskThresholdPercent: 99.0)
+        XCTAssertEqual(cached.totalBytes, first.totalBytes)
+        XCTAssertEqual(cached.freeBytes, first.freeBytes)
+        XCTAssertEqual(cached.lowDiskThresholdPercent, 99.0)
     }
 }
