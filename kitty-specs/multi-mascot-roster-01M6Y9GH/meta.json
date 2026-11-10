@@ -1,0 +1,32 @@
+{
+  "accept_commit": "4d391ee4973182ffdbf2f9a5f668974b8527095c",
+  "acceptance_history": [
+    {
+      "accept_commit": "4d391ee4973182ffdbf2f9a5f668974b8527095c",
+      "acceptance_mode": "pr",
+      "accepted_at": "2026-11-08T19:37:43.453045+00:00",
+      "accepted_by": "akram",
+      "accepted_from_commit": "59726d18a317dab81d6bf7bd333058bfcb17f3a4"
+    }
+  ],
+  "acceptance_mode": "pr",
+  "accepted_at": "2026-11-08T19:37:43.453045+00:00",
+  "accepted_by": "akram",
+  "accepted_from_commit": "59726d18a317dab81d6bf7bd333058bfcb17f3a4",
+  "baseline_merge_commit": "c09d2d72a076375befe3bc2d5f4fd5106865aeaa",
+  "created_at": "2026-11-08T19:17:38.544673+00:00",
+  "flattened": false,
+  "friendly_name": "Multi-Mascot Character Roster & Selection",
+  "mission_id": "01M6Y9GHJ44PBC158EBHTWX3NT",
+  "mission_number": null,
+  "mission_slug": "multi-mascot-roster-01M6Y9GH",
+  "mission_type": "software-dev",
+  "purpose_context": "This mission delivers GitHub Issue #30 by decoupling mascot rendering into modular procedural vector rigs with CoreAnimation offloading, persisting character selection in UserDefaults, integrating with custom color palettes and Bitz Pro licensing, and exposing selection in the Menu Bar and Settings Appearance gallery.",
+  "purpose_tldr": "Modular multi-mascot character roster (Bitz Cyber Cat, Byte Cyber Dog, Aero Hover Drone, Pixel Retro Mech, Volt Cyber Bunny) with Menu Bar & Settings selection",
+  "slug": "multi-mascot-roster-01M6Y9GH",
+  "status_phase": "1",
+  "target_branch": "feat/issue-30-multi-mascot-roster",
+  "topology": "single_branch",
+  "vcs": "git",
+  "vcs_locked_at": "2026-11-08T19:21:55.911635+00:00"
+}

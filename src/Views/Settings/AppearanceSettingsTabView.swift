@@ -1,13 +1,14 @@
 import SwiftUI
 import AppKit
 
-/// Settings tab for customizing mascot appearance: live preview, size, opacity, theme presets, and custom colors (#94 C3).
+/// Settings tab for customizing mascot appearance: live preview, companion character roster, size, opacity, theme presets, and custom colors (#94 C3, #30).
 public struct AppearanceSettingsTabView: View {
     @ObservedObject public var scaleStore: AvatarScaleStore
     @ObservedObject public var opacityStore: AvatarOpacityStore
     @ObservedObject private var settingsWindowManager: SettingsWindowManager = .shared
     public var engine: WellnessPointEngine?
     @ObservedObject public var paletteStore: AvatarPaletteStore
+    @ObservedObject public var characterStore: AvatarCharacterStore
     public var licensingService: (any LicensingServiceProtocol)?
 
     public init(
@@ -15,12 +16,14 @@ public struct AppearanceSettingsTabView: View {
         opacityStore: AvatarOpacityStore,
         engine: WellnessPointEngine? = nil,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
+        characterStore: AvatarCharacterStore = AvatarCharacterStore(),
         licensingService: (any LicensingServiceProtocol)? = nil
     ) {
         self.scaleStore = scaleStore
         self.opacityStore = opacityStore
         self.engine = engine
         self.paletteStore = paletteStore
+        self.characterStore = characterStore
         self.licensingService = licensingService
     }
 
@@ -28,6 +31,14 @@ public struct AppearanceSettingsTabView: View {
         VStack(alignment: .leading, spacing: 18) {
             // Live Interactive Avatar Preview Card
             liveAvatarPreviewCard
+
+            // Section 0: Companion Character Roster (#30)
+            AppearanceCharacterRosterSectionView(
+                characterStore: characterStore,
+                paletteStore: paletteStore,
+                engine: engine,
+                licensingService: licensingService
+            )
 
             // Section 1: Avatar Size & Scale
             settingsCard(title: "Avatar Size & Scale", systemImage: "arrow.up.left.and.arrow.down.right") {
@@ -88,7 +99,7 @@ public struct AppearanceSettingsTabView: View {
                 }
             }
 
-            // Section 2:Mascot Opacity & Transparency
+            // Section 2: Mascot Opacity & Transparency
             settingsCard(title: "Mascot Opacity & Transparency", systemImage: "circle.lefthalf.filled") {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
@@ -170,7 +181,7 @@ public struct AppearanceSettingsTabView: View {
 
             VStack(spacing: 8) {
                 HStack {
-                    Label("Live Mascot Preview", systemImage: "sparkles")
+                    Label("Live Mascot Preview • \(characterStore.selectedCharacter.name)", systemImage: characterStore.selectedCharacter.menuBarSymbolName)
                         .font(.caption2.bold())
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8)
@@ -200,7 +211,8 @@ public struct AppearanceSettingsTabView: View {
                         showParticles: true,
                         customVisorColor: paletteStore.resolvedPalette.visorColor(for: currentState),
                         isPaused: !settingsWindowManager.isWindowVisible,
-                        palette: paletteStore.resolvedPalette
+                        palette: paletteStore.resolvedPalette,
+                        character: characterStore.selectedCharacter
                     )
                     .scaleEffect(previewScale)
                     .opacity(opacityStore.opacityFactor)

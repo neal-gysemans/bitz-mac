@@ -59,6 +59,8 @@ public struct AppearancePaletteSectionView: View {
                         ProBadgeView()
                     }
                     .buttonStyle(.plain)
+                    .help("View Pro features")
+                    .accessibilityLabel("View Pro Features")
                 }
             }
             .popover(isPresented: $showingProPopover) {
@@ -148,6 +150,8 @@ public struct AppearancePaletteSectionView: View {
                         ProBadgeView()
                     }
                     .buttonStyle(.plain)
+                    .help("View Pro features")
+                    .accessibilityLabel("View Pro Features")
                 }
             }
 
@@ -238,6 +242,7 @@ public struct AppearancePaletteSectionView: View {
             }
             .buttonStyle(.borderless)
             .help("Reset to theme default")
+            .accessibilityLabel("Reset to theme default")
             .disabled(!isCustom)
         }
     }

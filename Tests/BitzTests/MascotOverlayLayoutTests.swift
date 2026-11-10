@@ -92,23 +92,49 @@ final class MascotOverlayLayoutTests: XCTestCase {
         try assertNothingDrawnOutside(view, size: MascotOverlayPanel.defaultPanelSize)
     }
 
-    /// The bubble is anchored to `earOverflow`, so it must match where the ears are actually drawn.
+    /// The bubble is anchored to `earOverflow`, so it must match where the ears/antennas are actually drawn across all 5 characters (#30).
     func testEarOverflowMatchesDrawnEarTips() throws {
-        for isLoafPosture in [false, true] {
-            // time 0 puts the breathing offset at rest; particles would float above the ears
-            let character = BitzCharacterView(state: .balanced, time: 0, isLoafPosture: isLoafPosture, showParticles: false)
-            let renderer = ImageRenderer(content: character.padding(margin))
-            renderer.scale = renderScale
-            let image = try XCTUnwrap(renderer.cgImage)
-            let topRow = try XCTUnwrap(topmostVisibleRow(in: image), "Character must draw something")
+        for character in MascotCharacter.allCases {
+            for isLoafPosture in [false, true] {
+                // time 0 puts the breathing offset at rest; particles would float above the ears
+                let characterView = BitzCharacterView(
+                    state: .balanced,
+                    time: 0,
+                    isLoafPosture: isLoafPosture,
+                    showParticles: false,
+                    character: character
+                )
+                let renderer = ImageRenderer(content: characterView.padding(margin))
+                renderer.scale = renderScale
+                let image = try XCTUnwrap(renderer.cgImage)
+                let topRow = try XCTUnwrap(topmostVisibleRow(in: image), "Character \(character.rawValue) must draw something")
 
-            let earTipAboveFrame = margin - CGFloat(topRow) / renderScale
-            XCTAssertEqual(
-                earTipAboveFrame,
-                BitzCharacterView.earOverflow(isLoafPosture: isLoafPosture),
-                accuracy: 1.5,
-                "Ear tips must rise earOverflow above the frame (loaf: \(isLoafPosture))"
+                let earTipAboveFrame = margin - CGFloat(topRow) / renderScale
+                XCTAssertEqual(
+                    earTipAboveFrame,
+                    BitzCharacterView.earOverflow(for: character, isLoafPosture: isLoafPosture),
+                    accuracy: 1.5,
+                    "Ear/antenna tips for \(character.rawValue) must rise earOverflow above the frame (loaf: \(isLoafPosture))"
+                )
+            }
+        }
+    }
+
+    func testAllMascotCharactersStayInsidePanel() throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        let characterStore = AvatarCharacterStore(userDefaults: defaults)
+        for character in MascotCharacter.allCases {
+            characterStore.selectCharacter(character)
+            let view = MascotOverlayView(
+                engine: fixture.engine,
+                scaleStore: fixture.scaleStore,
+                opacityStore: fixture.opacityStore,
+                positionStore: fixture.positionStore,
+                telemetryDashboard: fixture.telemetryDashboard,
+                telemetrySettings: fixture.telemetrySettings,
+                characterStore: characterStore
             )
+            try assertNothingDrawnOutside(view, size: MascotOverlayPanel.defaultPanelSize)
         }
     }
 

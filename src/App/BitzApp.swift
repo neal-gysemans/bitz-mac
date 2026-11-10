@@ -27,6 +27,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
     public let interactionSettings: MascotInteractionSettingsStore
     public let fileDropService: FileDropInboxService
     public let paletteStore: AvatarPaletteStore
+    public let characterStore: AvatarCharacterStore
     public let personalitySettings: PersonalitySettingsStore
     public let personalityService: PersonalityService
     public let gitActivityProvider: any GitActivityProviding
@@ -88,6 +89,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         interactionSettings: MascotInteractionSettingsStore? = nil,
         fileDropService: FileDropInboxService? = nil,
         paletteStore: AvatarPaletteStore? = nil,
+        characterStore: AvatarCharacterStore? = nil,
         personalitySettings: PersonalitySettingsStore? = nil,
         personalityService: PersonalityService? = nil,
         gitActivityProvider: (any GitActivityProviding)? = nil,
@@ -110,6 +112,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         self.appActivator = appActivator ?? WorkspaceAppActivator()
         self.diffViewer = diffViewer ?? SystemDiffViewer()
         self.paletteStore = paletteStore ?? AvatarPaletteStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
+        self.characterStore = characterStore ?? AvatarCharacterStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
         let resolvedPersonalitySettings = personalitySettings ?? PersonalitySettingsStore(
             userDefaults: userDefaults,
             licensingService: resolvedLicensingService
@@ -227,6 +230,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.paletteStore.validateTierEntitlement()
+                self?.characterStore.validateTierEntitlement()
                 self?.personalitySettings.validateTierEntitlement()
             }
         self.recordingIndicatorCancellable = self.meetingRecorder.$state
@@ -262,6 +266,10 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
                 recentCommitCount: commits
             )
             return await self.personalityService.rephraseWarning(warning, context: context)
+        }
+
+        self.engine.petBubbleTextProvider = { [weak self] in
+            self?.characterStore.selectedCharacter.petReactionBubble
         }
 
         self.personalityTickCancellable = self.telemetryDashboard.$snapshot
@@ -625,6 +633,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
                 interactionSettings: interactionSettings,
                 inboxDirectoryURL: fileDropService.inboxDirectoryURL,
                 paletteStore: paletteStore,
+                characterStore: characterStore,
                 personalitySettings: personalitySettings,
                 licensingService: licensingService,
                 meetingRecorder: meetingRecorder,
@@ -879,6 +888,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             telemetrySettings: telemetrySettings,
             interactionSettings: interactionSettings,
             paletteStore: paletteStore,
+            characterStore: characterStore,
             agentMonitor: agentMonitor,
             isRecordingMeeting: meetingRecorder.isRecording,
             onFilesDropped: { [weak self] urls in
@@ -1005,6 +1015,7 @@ struct BitzMenuBarContentView: View {
     let telemetrySettings: TelemetrySettingsStore
     @ObservedObject var audioSettings: CyberAudioSettingsStore
     @ObservedObject var paletteStore: AvatarPaletteStore
+    @ObservedObject var characterStore: AvatarCharacterStore
     var audioService: CyberAudioService? = nil
     @ObservedObject var flowShieldSettings: FlowShieldSettingsStore
     let flowShieldService: FlowShieldService
@@ -1026,11 +1037,13 @@ struct BitzMenuBarContentView: View {
         flowShieldSettings: FlowShieldSettingsStore? = nil,
         flowShieldService: FlowShieldService? = nil,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
-        meetingRecorder: MeetingRecorderService,
+        characterStore: AvatarCharacterStore = AvatarCharacterStore(),
+        meetingRecorder: MeetingRecorderService = MeetingRecorderService(),
         licensingService: (any LicensingServiceProtocol)? = nil,
         onOpenSettings: @escaping () -> Void = {}
     ) {
         self.paletteStore = paletteStore
+        self.characterStore = characterStore
         self.meetingRecorder = meetingRecorder
         self.meetingSettings = meetingRecorder.settingsStore
         self.licensingService = licensingService
@@ -1088,7 +1101,7 @@ struct BitzMenuBarContentView: View {
             Divider()
 
             // MARK: - 2. Primary Quick Actions
-            Button("Pet Bitz") {
+            Button("Pet \(characterStore.selectedCharacter.name)") {
                 engine.triggerPetInteraction()
             }
             .keyboardShortcut("p", modifiers: [.command])
@@ -1150,6 +1163,25 @@ struct BitzMenuBarContentView: View {
             ))
             if let audioService {
                 AudioSuppressionNotice(audioService: audioService)
+            }
+
+            Menu("Companion Character") {
+                ForEach(MascotCharacter.allCases) { character in
+                    let isUnlocked = licensingService?.isFeatureUnlocked(.multiMascot) ?? true
+                    let isLocked = character.isPro && !isUnlocked
+                    let label = isLocked ? "\(character.title) (Pro 🔒)" : character.title
+                    Toggle(label, isOn: Binding(
+                        get: { characterStore.selectedCharacter == character },
+                        set: { if $0 {
+                            if isLocked {
+                                onOpenSettings()
+                                NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                            } else {
+                                characterStore.selectCharacter(character)
+                            }
+                        } }
+                    ))
+                }
             }
 
             Menu("Theme") {
@@ -1230,19 +1262,21 @@ public struct BitzApp: App {
                 flowShieldSettings: appDelegate.flowShieldSettings,
                 flowShieldService: appDelegate.flowShieldService,
                 paletteStore: appDelegate.paletteStore,
+                characterStore: appDelegate.characterStore,
                 meetingRecorder: appDelegate.meetingRecorder,
                 licensingService: appDelegate.licensingService,
                 onOpenSettings: appDelegate.showSettingsWindow
             )
         } label: {
-            BitzMenuBarLabel(appDelegate: appDelegate)
+            BitzMenuBarLabel(appDelegate: appDelegate, characterStore: appDelegate.characterStore)
         }
     }
 }
 
-/// Status item label. Observes only the delegate, which publishes on title changes, not on every telemetry tick.
+/// Status item label. Observes only the delegate and character store, which publish on title or companion changes, not on every telemetry tick.
 struct BitzMenuBarLabel: View {
     @ObservedObject var appDelegate: BitzAppDelegate
+    @ObservedObject var characterStore: AvatarCharacterStore
 
     /// Non-template so the status item keeps it red (a SwiftUI `foregroundStyle` is dropped from menu bar labels).
     private static let recordGlyph: NSImage = {
@@ -1253,6 +1287,7 @@ struct BitzMenuBarLabel: View {
     }()
 
     var body: some View {
+        let symbol = characterStore.selectedCharacter.menuBarSymbolName
         if appDelegate.isRecordingIndicatorVisible {
             HStack {
                 Image(nsImage: Self.recordGlyph)
@@ -1260,11 +1295,11 @@ struct BitzMenuBarLabel: View {
             }
             .accessibilityLabel("Bitz is recording a meeting")
         } else if appDelegate.menuBarTitle == "Bitz" {
-            Image(systemName: "cat.fill")
+            Image(systemName: symbol)
                 .accessibilityLabel("Bitz")
         } else {
             HStack {
-                Image(systemName: "cat.fill")
+                Image(systemName: symbol)
                 Text(appDelegate.menuBarTitle)
             }
         }

@@ -362,9 +362,9 @@ public final class WellnessPointEngine: ObservableObject {
         }
     }
 
-    /// Fires the Rive `"triggerPet"` interaction input, activates a brief `<3` visor reaction and
-    /// applies the capped wellness boost (`applyPetBoost`).
-    public func triggerPetInteraction(now: Date = Date()) {
+    /// Fires the Rive `"triggerPet"` interaction input, activates a brief `<3` visor reaction,
+    /// applies the capped wellness boost (`applyPetBoost`), and optionally displays a transient reaction bubble.
+    public func triggerPetInteraction(now: Date = Date(), bubbleText: String? = nil) {
         riveController?.triggerInput(BitzRiveInputName.triggerPet)
         isPetReactionActive = true
         petReactionTask?.cancel()
@@ -374,6 +374,10 @@ public final class WellnessPointEngine: ObservableObject {
             self?.isPetReactionActive = false
         }
         applyPetBoost(now: now)
+        let resolvedBubble = bubbleText ?? petBubbleTextProvider?()
+        if let resolvedBubble, !resolvedBubble.isEmpty {
+            showTransientBubble(resolvedBubble)
+        }
     }
 
     /// Grants a small Focus Point boost for petting, limited by a per-boost cooldown and a daily cap.
@@ -424,6 +428,9 @@ public final class WellnessPointEngine: ObservableObject {
     /// Optional closure allowing personality commentary to rephrase static critical warnings in the active preset voice.
     /// The static warning is ALWAYS set synchronously first to guarantee prompt and deterministic warning delivery.
     public var warningRephraser: ((_ warning: String, _ state: BitzState) async -> String)?
+
+    /// Optional closure providing companion-specific speech bubble reaction text when petted (`#139`).
+    public var petBubbleTextProvider: (@MainActor () -> String?)?
 
     /// Wellness/thermal text first, then idle commentary, then any transient confirmation.
     public var displayedSpeechBubbleText: String? {

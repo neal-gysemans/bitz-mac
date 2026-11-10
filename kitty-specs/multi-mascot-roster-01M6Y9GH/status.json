@@ -1,0 +1,138 @@
+{
+  "event_count": 28,
+  "last_event_id": "01M6YAJNY4HM210VVERNQXKKEM",
+  "materialized_at": "2026-11-08T19:36:17.092772+00:00",
+  "mission_number": "",
+  "mission_slug": "multi-mascot-roster-01M6Y9GH",
+  "mission_type": "software-dev",
+  "summary": {
+    "approved": 0,
+    "blocked": 0,
+    "canceled": 0,
+    "claimed": 0,
+    "done": 4,
+    "for_review": 0,
+    "in_progress": 0,
+    "in_review": 0,
+    "planned": 0
+  },
+  "work_packages": {
+    "WP01": {
+      "actor": "user",
+      "agent": "antigravity",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6Y9XNNEPYCC8DK1KXD3FECR",
+      "last_transition_at": "2026-11-08T19:24:48.687008+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "Ready for review: MascotCharacter models and AvatarCharacterStore implemented",
+        "Review passed: MascotCharacter models and AvatarCharacterStore verified",
+        "Done override: Reviewed and verified in lane-a"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "reference": "review-cycle://multi-mascot-roster-01M6Y9GH/WP01-mascot-character-models-and-store/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "shell_pid": 75079,
+      "shell_pid_created_at": "1793970193.283343",
+      "subtasks": {
+        "T001": "done",
+        "T002": "done"
+      }
+    },
+    "WP02": {
+      "actor": "user",
+      "agent": "antigravity",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6YA6EGV46HVNWEYGW9MQ05M",
+      "last_transition_at": "2026-11-08T19:29:36.283158+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "Ready for review: 5 modular mascot character rigs implemented",
+        "Review passed: deterministic SwiftUI and CoreAnimation rigs verified",
+        "Done override: Reviewed and verified in lane-b"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "reference": "review-cycle://multi-mascot-roster-01M6Y9GH/WP02-modular-character-rigs-and-rendering/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "shell_pid": 75079,
+      "shell_pid_created_at": "1793970193.283343",
+      "subtasks": {
+        "T003": "done",
+        "T004": "done"
+      }
+    },
+    "WP03": {
+      "actor": "user",
+      "agent": "antigravity",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6YAA6SJ88X933NHY1V379XX",
+      "last_transition_at": "2026-11-08T19:31:39.442436+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "Ready for review: Settings Character Roster gallery implemented",
+        "Review passed: Settings gallery and live previews verified",
+        "Done override: Reviewed and verified in lane-c"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "reference": "review-cycle://multi-mascot-roster-01M6Y9GH/WP03-settings-gallery-and-menubar-switcher/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "shell_pid": 75079,
+      "shell_pid_created_at": "1793970193.283343",
+      "subtasks": {
+        "T005": "done",
+        "T006": "done"
+      }
+    },
+    "WP04": {
+      "actor": "user",
+      "agent": "antigravity",
+      "agent_profile": "__resolved_profile_absent__",
+      "agent_profile_version": "__resolved_profile_version_absent__",
+      "force_count": 0,
+      "lane": "done",
+      "last_event_id": "01M6YAJNY4HM210VVERNQXKKEM",
+      "last_transition_at": "2026-11-08T19:36:17.092772+00:00",
+      "model": "__resolved_model_absent__",
+      "notes": [
+        "Ready for review: BitzApp wiring, Menu Bar switcher, and MascotCharacterTests verified",
+        "Review passed: all 5 character rigs and tests verified",
+        "Done override: Reviewed and verified in lane-d"
+      ],
+      "provider": "__resolved_provider_absent__",
+      "review_result": {
+        "reference": "review-cycle://multi-mascot-roster-01M6Y9GH/WP04-app-wiring-tests-and-verification/review-cycle-1.md",
+        "reviewer": "user",
+        "verdict": "approved"
+      },
+      "role": "reviewer",
+      "shell_pid": 75079,
+      "shell_pid_created_at": "1793970193.283343",
+      "subtasks": {
+        "T007": "done",
+        "T008": "done",
+        "T009": "done"
+      }
+    }
+  }
+}
