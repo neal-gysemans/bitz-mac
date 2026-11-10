@@ -300,4 +300,63 @@ final class LicensingServiceTests: XCTestCase {
         XCTAssertTrue(monitor.activeAgents.contains("antigravity"))
         XCTAssertEqual(monitor.activeAgents.count, 2)
     }
+
+    @MainActor
+    func testPersonalitySettingsStoreGatingWithLicensingService() throws {
+        let suite = "BitzTests.PersonalityGating.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let storage = MockLicenseStorage()
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+
+        let store = PersonalitySettingsStore(userDefaults: defaults, licensingService: service)
+        XCTAssertFalse(store.isPersonalityUnlocked)
+        XCTAssertFalse(store.isEnabled)
+
+        // Attempt to enable on Free tier is blocked
+        store.setEnabled(true)
+        XCTAssertFalse(store.isEnabled)
+
+        // Activate Pro
+        let token = try makeToken()
+        try service.activateLicense(key: token)
+        XCTAssertTrue(store.isPersonalityUnlocked)
+
+        // Enable on Pro tier succeeds
+        store.setEnabled(true)
+        XCTAssertTrue(store.isEnabled)
+
+        // Deactivate Pro: validateTierEntitlement reverts to disabled
+        try service.deactivateLicense()
+        store.validateTierEntitlement()
+        XCTAssertFalse(store.isEnabled)
+    }
+
+    @MainActor
+    func testMeetingRecorderServiceGatingWithLicensingService() async throws {
+        let suite = "BitzTests.MeetingRecorderGating.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let storage = MockLicenseStorage()
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+
+        let settings = MeetingSettingsStore(userDefaults: defaults)
+        let recorder = MeetingRecorderService(
+            settingsStore: settings,
+            licensingService: service
+        )
+        XCTAssertFalse(recorder.isMeetingRecorderUnlocked)
+
+        await recorder.startRecording()
+        XCTAssertFalse(recorder.isRecording)
+        XCTAssertEqual(recorder.state, .failed)
+        XCTAssertEqual(recorder.bubble?.text, MeetingBubble.proRequiredText)
+
+        var openedPro = false
+        recorder.onOpenProSettings = { openedPro = true }
+        recorder.perform(.openSettings)
+        XCTAssertTrue(openedPro)
+    }
 }

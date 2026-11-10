@@ -8,6 +8,8 @@ public enum CyberSoundEvent: String, CaseIterable, Identifiable, Codable, Sendab
     case charging = "charging"
     case agentNeedsApproval = "agentNeedsApproval"
     case allAgentsDone = "allAgentsDone"
+    case meetingRecordingStarted = "meetingRecordingStarted"
+    case meetingRecordingSaved = "meetingRecordingSaved"
 
     public var id: String { rawValue }
 
@@ -25,6 +27,10 @@ public enum CyberSoundEvent: String, CaseIterable, Identifiable, Codable, Sendab
             return "Agent Attention Chime"
         case .allAgentsDone:
             return "All Agents Done Fanfare"
+        case .meetingRecordingStarted:
+            return "Meeting Recording Started"
+        case .meetingRecordingSaved:
+            return "Meeting Recording Saved"
         }
     }
 
@@ -42,6 +48,11 @@ public enum CyberSoundEvent: String, CaseIterable, Identifiable, Codable, Sendab
             return "agent_chime.wav"
         case .allAgentsDone:
             return "all_done_fanfare.wav"
+        // Reuses the bundled blip and fanfare; their own events give them their own toggles and gating
+        case .meetingRecordingStarted:
+            return "charging_blip.wav"
+        case .meetingRecordingSaved:
+            return "all_done_fanfare.wav"
         }
     }
 
@@ -55,9 +66,19 @@ public enum CyberSoundEvent: String, CaseIterable, Identifiable, Codable, Sendab
             return 10.0 // Minimum 10 seconds between chimes for an agent
         case .allAgentsDone:
             return 60.0 // Minimum 60 seconds between all-done fanfares
-        case .purr, .burnout, .overheating, .charging:
-            return 0.0  // Governed by state transitions or continuous looping
+        case .purr, .burnout, .overheating, .charging, .meetingRecordingStarted, .meetingRecordingSaved:
+            return 0.0  // Governed by state transitions, continuous looping, or one recording
         }
+    }
+
+    /// Meeting recorder chimes confirm the user's own action, and the user is by definition in a call (#43 D5).
+    public var ignoresCallSuppression: Bool {
+        self == .meetingRecordingStarted || self == .meetingRecordingSaved
+    }
+
+    /// The start chime tells the user Bitz is listening, so only its own toggle and a muted Mac silence it (#43 D5, A2).
+    public var ignoresMasterAndFocus: Bool {
+        self == .meetingRecordingStarted
     }
 }
 

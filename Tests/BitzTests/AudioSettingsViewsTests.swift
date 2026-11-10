@@ -13,7 +13,7 @@ final class AudioSettingsViewsTests: XCTestCase {
         let store = CyberAudioSettingsStore(userDefaults: defaults)
         let spyPlayer = SpyCyberAudioPlayer()
 
-        let view = AudioSettingsTabView(settingsStore: store, audioPlayer: spyPlayer)
+        let view = AudioSettingsTabView(settingsStore: store, audioPlayer: spyPlayer, meetingRecorder: .stub(defaults: defaults))
         _ = view.body
 
         // Verify default state
@@ -91,7 +91,8 @@ final class AudioSettingsViewsTests: XCTestCase {
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
             audioSettings: audioSettings,
-            audioPlayer: spyPlayer
+            audioPlayer: spyPlayer,
+            meetingRecorder: .stub(defaults: defaults)
         )
 
         _ = rootView.body
@@ -122,7 +123,8 @@ final class AudioSettingsViewsTests: XCTestCase {
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
-            audioSettings: audioSettings
+            audioSettings: audioSettings,
+            meetingRecorder: .stub(defaults: defaults)
         )
 
         _ = menuView.body

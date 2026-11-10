@@ -5,7 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 APP_NAME="Bitz"
-BUNDLE_ID="com.bitz.cybercat"
+# Local builds use their own bundle ID so their TCC grants (mic, screen audio, speech) and UserDefaults stay
+# separate from the installed release, and macOS "Quit & Reopen" relaunches this copy, not /Applications/Bitz.app.
+# Override with BITZ_BUNDLE_ID=com.bitz.cybercat to test against the release identity.
+BUNDLE_ID="${BITZ_BUNDLE_ID:-com.bitz.cybercat.dev}"
 APP_BUNDLE="$ROOT_DIR/build/${APP_NAME}.app"
 CONTENTS_DIR="$APP_BUNDLE/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
@@ -45,40 +48,12 @@ if [[ -d "$ROOT_DIR/Resources/Sounds" ]]; then
     cp -R "$ROOT_DIR/Resources/Sounds/"* "$RESOURCES_DIR/Sounds/"
 fi
 
-cat > "$CONTENTS_DIR/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>${APP_NAME}</string>
-    <key>CFBundleIdentifier</key>
-    <string>${BUNDLE_ID}</string>
-    <key>CFBundleName</key>
-    <string>${APP_NAME}</string>
-    <key>CFBundleDisplayName</key>
-    <string>Bitz the Cyber Cat</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.3.2</string>
-    <key>CFBundleVersion</key>
-    <string>6</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>LSUIElement</key>
-    <true/>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>BitzLocalDevLicenseToken</key>
-    <string>BITZ1.eyJsaWNlbnNlX2lkIjoiQlRaLUxPQ0FMLURFVi1QUk8iLCJ0aWVyIjoicHJvIiwiaXNzdWVkX2F0IjoxNzc1NjAwMDAwLCJwdXJjaGFzZXJfZW1haWwiOiJsb2NhbC1kZXZAYml0ei5hcHAifQ.7O-bo3C8CbTRuI3ZL2iFQ6biivRBy2POB2PZunmOjgQ2zJRu0Abb3dgOlHNkm3APF-g4pbH1xSEjtOaJsHa7DQ</string>
-</dict>
-</plist>
-EOF
+"$ROOT_DIR/Scripts/render_info_plist.sh" "$APP_NAME" "$BUNDLE_ID" "$CONTENTS_DIR/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :BitzLocalDevLicenseToken string BITZ1.eyJsaWNlbnNlX2lkIjoiQlRaLUxPQ0FMLURFVi1QUk8iLCJ0aWVyIjoicHJvIiwiaXNzdWVkX2F0IjoxNzc1NjAwMDAwLCJwdXJjaGFzZXJfZW1haWwiOiJsb2NhbC1kZXZAYml0ei5hcHAifQ.7O-bo3C8CbTRuI3ZL2iFQ6biivRBy2POB2PZunmOjgQ2zJRu0Abb3dgOlHNkm3APF-g4pbH1xSEjtOaJsHa7DQ" "$CONTENTS_DIR/Info.plist"
 
-codesign --force --deep --sign - "$APP_BUNDLE"
+# Hardened runtime (no --deep: the bundle has no nested code); entitlements grant mic and Apple Events access
+codesign --force --options runtime --entitlements "$ROOT_DIR/Scripts/Bitz.entitlements" --sign - "$APP_BUNDLE"
+codesign --verify --strict "$APP_BUNDLE"
 
 echo "==> Packaged and signed: $APP_BUNDLE"
 open "$APP_BUNDLE"

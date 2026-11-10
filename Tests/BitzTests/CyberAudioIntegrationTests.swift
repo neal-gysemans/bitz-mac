@@ -195,6 +195,15 @@ final class CyberAudioIntegrationTests: XCTestCase {
         XCTAssertFalse(checkMic.allowed)
         XCTAssertEqual(checkMic.reason, .callOrScreenSharingActive)
 
+        // Meeting recorder chimes are never muted by the call gate: the user is by definition in a call (#43 D5)
+        for chime in [CyberSoundEvent.meetingRecordingStarted, .meetingRecordingSaved] {
+            XCTAssertTrue(service.canPlay(chime, bypassCooldown: true).allowed, "\(chime)")
+        }
+        store.setEventEnabled(.meetingRecordingStarted, enabled: false)
+        XCTAssertEqual(service.canPlay(.meetingRecordingStarted).reason, .eventDisabled, "their own toggle still applies")
+        XCTAssertTrue(store.isEventEnabled(.meetingRecordingSaved))
+        store.setEventEnabled(.meetingRecordingStarted, enabled: true)
+
         // Disabling call suppression in settings allows playback during calls
         store.setCallSuppressionEnabled(false)
         let checkMicAllowed = service.canPlay(.burnout)
@@ -207,6 +216,33 @@ final class CyberAudioIntegrationTests: XCTestCase {
         let checkDND = service.canPlay(.burnout)
         XCTAssertFalse(checkDND.allowed)
         XCTAssertEqual(checkDND.reason, .focusActive)
+    }
+
+    /// #43 A2: the start chime plays with Cyber Audio off and Focus on, only its toggle and system mute silence it;
+    /// the saved chime still follows the master switch.
+    func testMeetingStartChimeIgnoresMasterSwitchAndFocus() {
+        let suiteName = "BitzAudioIntegrationTest.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        // An earlier build saved the start chime off under the old key; the new key starts on regardless
+        defaults.set(false, forKey: "bitz.audio.isMeetingStartChimeEnabled")
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        XCTAssertFalse(store.isEnabled)
+        XCTAssertTrue(store.isMeetingStartChimeEnabled)
+        let mockDetector = MockAudioEnvironmentDetector()
+        mockDetector.isDNDActive = true
+        let service = CyberAudioService(settingsStore: store, environmentDetector: mockDetector)
+
+        XCTAssertTrue(service.canPlay(.meetingRecordingStarted).allowed)
+        XCTAssertEqual(service.canPlay(.meetingRecordingSaved).reason, .masterDisabled)
+        XCTAssertFalse(AudioSettingsTabView.soundEffectEvents.contains(.meetingRecordingStarted), "listed once, in the recorder card")
+
+        mockDetector.isMuted = true
+        XCTAssertEqual(service.canPlay(.meetingRecordingStarted).reason, .systemMuted)
+        mockDetector.isMuted = false
+
+        store.setMeetingStartChimeEnabled(false)
+        XCTAssertEqual(service.canPlay(.meetingRecordingStarted).reason, .eventDisabled)
     }
 
     func testEnvironmentalSuppressionIsReportedAndClearedByNextSound() {

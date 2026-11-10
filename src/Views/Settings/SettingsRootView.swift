@@ -52,6 +52,7 @@ public struct SettingsRootView: View {
     @ObservedObject public var characterStore: AvatarCharacterStore
     @ObservedObject public var personalitySettings: PersonalitySettingsStore
     @ObservedObject public var licensingService: LicensingService
+    @ObservedObject public var meetingRecorder: MeetingRecorderService
 
     @State private var selectedTab: SettingsTab
 
@@ -76,15 +77,17 @@ public struct SettingsRootView: View {
         characterStore: AvatarCharacterStore = AvatarCharacterStore(),
         personalitySettings: PersonalitySettingsStore? = nil,
         licensingService: LicensingService? = nil,
+        meetingRecorder: MeetingRecorderService,
         initialTab: SettingsTab = .general
     ) {
-        _selectedTab = State(initialValue: initialTab)
+        self._selectedTab = State(initialValue: initialTab)
         self.interactionSettings = interactionSettings
         self.inboxDirectoryURL = inboxDirectoryURL
         self.paletteStore = paletteStore
         self.characterStore = characterStore
         self.personalitySettings = personalitySettings ?? PersonalitySettingsStore()
         self.licensingService = licensingService ?? LicensingService()
+        self.meetingRecorder = meetingRecorder
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.scaleStore = scaleStore
@@ -232,12 +235,15 @@ public struct SettingsRootView: View {
             )
         case .personality:
             PersonalitySettingsTabView(
-                settingsStore: personalitySettings
+                settingsStore: personalitySettings,
+                licensingService: licensingService
             )
         case .audio:
             AudioSettingsTabView(
                 settingsStore: audioSettings,
-                audioPlayer: audioPlayer
+                audioPlayer: audioPlayer,
+                meetingRecorder: meetingRecorder,
+                licensingService: licensingService
             )
         case .telemetry:
             TelemetrySettingsTabView(
@@ -254,7 +260,8 @@ public struct SettingsRootView: View {
                 engine: engine,
                 activityMonitor: activityMonitor,
                 updateStore: updateStore,
-                agentMonitor: agentMonitor
+                agentMonitor: agentMonitor,
+                meetingRecorder: meetingRecorder
             )
         }
     }

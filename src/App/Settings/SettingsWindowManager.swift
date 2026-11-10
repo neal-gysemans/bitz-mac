@@ -12,7 +12,7 @@ import SwiftUI
 public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     public static let shared = SettingsWindowManager()
     /// Content (not frame) minimum, shared with `SettingsRootView`; `sizingOptions = []` means AppKit can't read it from SwiftUI.
-    public static let minimumContentSize = NSSize(width: 660, height: 560)
+    public static let minimumContentSize = NSSize(width: 820, height: 560)
 
     private var windowController: NSWindowController?
     @Published public private(set) var isWindowOpen: Bool = false
@@ -30,10 +30,11 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
     }
 
     /// Presents the Settings window hosting the provided SwiftUI content view.
-    /// If the window is already created, it is activated and brought to the front.
-    public func showSettingsWindow<Content: View>(rootView: Content) {
+    /// If the window is already created, it is activated and brought to the front; `replacingContent` swaps in
+    /// `rootView` even when it is open (e.g. to show a given tab).
+    public func showSettingsWindow<Content: View>(rootView: Content, replacingContent: Bool = false) {
         if let windowController = windowController, let existingWindow = windowController.window {
-            if !isWindowOpen || existingWindow.contentViewController == nil {
+            if replacingContent || !isWindowOpen || existingWindow.contentViewController == nil {
                 let contentSize = existingWindow.contentRect(forFrameRect: existingWindow.frame).size
                 let targetSize = NSSize(
                     width: max(contentSize.width, Self.minimumContentSize.width),
@@ -51,7 +52,7 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
             return
         }
 
-        let initialSize = NSSize(width: 680, height: 580)
+        let initialSize = NSSize(width: 860, height: 580)
         let hostingController = makeHostingController(rootView: rootView, size: initialSize)
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: initialSize),

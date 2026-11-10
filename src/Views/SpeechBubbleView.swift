@@ -1,23 +1,33 @@
 import SwiftUI
 
-/// What Bitz's speech bubble shows, in priority order: Agent Monitor popup, update alert,
-/// wellness text (e.g. the `"SYSTEM HOT! > <"` thermal warning, `FR-004`), then telemetry carousel (T016).
+/// What Bitz's speech bubble shows, in priority order: Agent Monitor popup, update alert, thermal warning (`FR-004`),
+/// meeting recorder bubble (#43 D5), other wellness text and personality commentary, then telemetry carousel (T016).
 public enum SpeechBubbleContent {
     case agentPopup(AgentPopupState)
     case update(GitHubReleaseInfo)
+    case meeting(MeetingBubble)
     case wellness(String)
     case carousel(String)
 
-    /// Update alert and agent warning bubbles have buttons, so they are the only bubbles that take clicks.
+    /// Update alert, agent warning, and meeting bubbles with buttons are the only bubbles that take clicks.
     public var isInteractive: Bool {
         switch self {
         case .update:
             return true
         case .agentPopup(let popup):
             return popup.kind == .warning
+        case .meeting(let bubble):
+            return bubble.isInteractive
         case .wellness, .carousel:
             return false
         }
+    }
+
+    /// The thermal warning outranks meeting bubbles; other wellness text does not,
+    /// so a 45-minute "take a break" never hides a recording that failed to start.
+    @MainActor
+    public static func thermalWarning(_ engine: WellnessPointEngine) -> String? {
+        engine.currentState == .overheating ? engine.activeSpeechBubbleText : nil
     }
 
     @MainActor
@@ -26,13 +36,20 @@ public enum SpeechBubbleContent {
         agentMonitor: AgentMonitorService,
         updateStore: AppUpdateStore,
         telemetryDashboard: TelemetryDashboardService,
-        telemetrySettings: TelemetrySettingsStore
+        telemetrySettings: TelemetrySettingsStore,
+        meetingRecorder: MeetingRecorderService? = nil
     ) -> SpeechBubbleContent? {
         if let popup = agentMonitor.activePopup {
             return .agentPopup(popup)
         }
         if updateStore.isSpeechBubbleAlertActive, let release = updateStore.latestRelease {
             return .update(release)
+        }
+        if let text = thermalWarning(engine) {
+            return .wellness(text)
+        }
+        if let bubble = meetingRecorder?.bubble {
+            return .meeting(bubble)
         }
         if let text = engine.displayedSpeechBubbleText {
             return .wellness(text)
@@ -59,6 +76,7 @@ public struct SpeechBubbleView: View {
     public let telemetryDashboard: TelemetryDashboardService
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
     @ObservedObject public var paletteStore: AvatarPaletteStore
+    @ObservedObject public var meetingRecorder: MeetingRecorderService
 
     public init(
         engine: WellnessPointEngine,
@@ -67,9 +85,11 @@ public struct SpeechBubbleView: View {
         updateStore: AppUpdateStore,
         telemetryDashboard: TelemetryDashboardService,
         telemetrySettings: TelemetrySettingsStore,
-        paletteStore: AvatarPaletteStore = AvatarPaletteStore()
+        paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
+        meetingRecorder: MeetingRecorderService
     ) {
         self.paletteStore = paletteStore
+        self.meetingRecorder = meetingRecorder
         self.engine = engine
         self.scaleStore = scaleStore
         self.agentMonitor = agentMonitor
@@ -100,6 +120,10 @@ public struct SpeechBubbleView: View {
             }
         } else if updateStore.isSpeechBubbleAlertActive, let release = updateStore.latestRelease {
             updateBubbleView(for: release)
+        } else if let thermal = SpeechBubbleContent.thermalWarning(engine) {
+            textBubble(thermal, fill: Color(red: 0.75, green: 0.06, blue: 0.10).opacity(0.95), stroke: visorColor)
+        } else if let meeting = meetingRecorder.bubble {
+            meetingBubbleView(meeting, visorColor: visorColor)
         } else if let text = engine.displayedSpeechBubbleText {
             textBubble(
                 text,
@@ -127,9 +151,9 @@ public struct SpeechBubbleView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .frame(maxWidth: Self.maxBubbleWidth)
-            .background(RoundedRectangle(cornerRadius: 8).fill(fill))
+            // Shadow on the filled shape before the stroke overlay (AGENTS.md §2.6)
+            .background(RoundedRectangle(cornerRadius: 8).fill(fill).shadow(color: stroke.opacity(0.7), radius: 6))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(stroke, lineWidth: 1.5))
-            .shadow(color: stroke.opacity(0.7), radius: 6)
     }
 
     private func agentPopupColors(for kind: AgentEventKind) -> (stroke: Color, fill: Color) {
@@ -178,9 +202,9 @@ public struct SpeechBubbleView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(maxWidth: Self.maxBubbleWidth)
-        .background(RoundedRectangle(cornerRadius: 8).fill(colors.fill))
+        // Shadow on the filled shape before the stroke overlay (AGENTS.md §2.6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(colors.fill).shadow(color: colors.stroke.opacity(0.6), radius: 6))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(colors.stroke, lineWidth: 1.5))
-        .shadow(color: colors.stroke.opacity(0.6), radius: 6)
     }
 
     private func updateBubbleView(for release: GitHubReleaseInfo) -> some View {
@@ -221,9 +245,89 @@ public struct SpeechBubbleView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(maxWidth: Self.maxBubbleWidth)
-        .background(RoundedRectangle(cornerRadius: 8).fill(bgColor))
+        // Shadow on the filled shape before the stroke overlay (AGENTS.md §2.6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(bgColor).shadow(color: accentColor.opacity(0.6), radius: 6))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(accentColor, lineWidth: 1.5))
-        .shadow(color: accentColor.opacity(0.6), radius: 6)
+    }
+
+    /// (stroke, fill) per meeting bubble kind.
+    private func meetingColors(for kind: MeetingBubble.Kind, visorColor: Color) -> (stroke: Color, fill: Color) {
+        switch kind {
+        case .recording:
+            return (Color(red: 1.0, green: 0.20, blue: 0.26), Color(red: 0.35, green: 0.05, blue: 0.09).opacity(0.95))
+        case .interruption:
+            return agentPopupColors(for: .warning)
+        case .saving, .transcribing:
+            return (visorColor, Color(red: 0.08, green: 0.09, blue: 0.13).opacity(0.95))
+        case .completion:
+            return (Color(red: 0.0, green: 1.0, blue: 0.53), Color(red: 0.05, green: 0.12, blue: 0.09).opacity(0.96))
+        case .failure:
+            return (Color.red, Color(red: 0.55, green: 0.08, blue: 0.12).opacity(0.95))
+        }
+    }
+
+    private func meetingBubbleView(_ meeting: MeetingBubble, visorColor: Color) -> some View {
+        let colors = meetingColors(for: meeting.kind, visorColor: visorColor)
+        let rowActions = meeting.actions.filter { $0 != .transcribeAgain }
+        return VStack(spacing: 5) {
+            Text(meeting.text)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(Color.white)
+                // The headline is one short clause and never truncates; only the detail may
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let detail = meeting.detail {
+                Text(detail)
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.75)
+                    .foregroundStyle(Color.white.opacity(0.85))
+            }
+
+            // TRANSCRIBE AGAIN gets its own row: three buttons do not fit the bubble width
+            if meeting.actions.contains(.transcribeAgain) {
+                meetingButton(.transcribeAgain, accent: colors.stroke)
+            }
+            if !rowActions.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(rowActions, id: \.self) { action in
+                        meetingButton(action, accent: colors.stroke)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, meeting.actions.isEmpty ? 5 : 6)
+        .frame(maxWidth: Self.maxBubbleWidth)
+        // Shadow on the filled shape before the stroke overlay (AGENTS.md §2.6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(colors.fill).shadow(color: colors.stroke.opacity(0.6), radius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(colors.stroke, lineWidth: 1.5))
+    }
+
+    /// DISMISS is the quiet outlined button; every other action is filled with the bubble's accent.
+    @ViewBuilder
+    private func meetingButton(_ action: MeetingBubble.Action, accent: Color) -> some View {
+        Button(action: { meetingRecorder.perform(action) }) {
+            if action == .dismiss {
+                Text(action.title)
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Capsule().stroke(Color.gray.opacity(0.6), lineWidth: 1))
+                    .foregroundStyle(Color.white.opacity(0.8))
+            } else {
+                Text(action.title)
+                    .font(.system(size: 8, weight: .heavy, design: .monospaced))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(accent))
+                    .foregroundStyle(Color.black)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(action.accessibilityLabel)
     }
 }
 

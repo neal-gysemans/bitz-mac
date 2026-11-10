@@ -30,14 +30,24 @@ public final class PersonalitySettingsStore: ObservableObject {
 
     private let userDefaults: UserDefaults
     private let calendar: Calendar
+    private let licensingService: (any LicensingServiceProtocol)?
     public var onSettingsChanged: (() -> Void)?
 
-    public init(userDefaults: UserDefaults = .standard, calendar: Calendar = .current) {
+    public init(
+        userDefaults: UserDefaults = .standard,
+        calendar: Calendar = .current,
+        licensingService: (any LicensingServiceProtocol)? = nil
+    ) {
         self.userDefaults = userDefaults
         self.calendar = calendar
+        self.licensingService = licensingService
 
-        // Master toggle: defaults to false (OFF)
-        self.isEnabled = userDefaults.bool(forKey: Self.isEnabledKey)
+        // Master toggle: defaults to false (OFF); falls back to false if Bitz Pro is locked
+        var storedEnabled = userDefaults.bool(forKey: Self.isEnabledKey)
+        if let licensingService, !licensingService.isFeatureUnlocked(.personality), storedEnabled {
+            storedEnabled = false
+        }
+        self.isEnabled = storedEnabled
 
         // Preset: defaults to .snarky
         if let rawPreset = userDefaults.string(forKey: Self.presetKey),
@@ -67,11 +77,29 @@ public final class PersonalitySettingsStore: ObservableObject {
 
     // MARK: - Mutators
 
-    public func setEnabled(_ enabled: Bool) {
-        guard isEnabled != enabled else { return }
+    /// Whether AI Personality Commentary is unlocked for the current user tier.
+    public var isPersonalityUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.personality) ?? true
+    }
+
+    /// Re-evaluates tier entitlement (e.g., after license deactivation) and turns off commentary if locked.
+    public func validateTierEntitlement() {
+        guard !isPersonalityUnlocked, isEnabled else { return }
+        isEnabled = false
+        userDefaults.set(false, forKey: Self.isEnabledKey)
+        onSettingsChanged?()
+    }
+
+    @discardableResult
+    public func setEnabled(_ enabled: Bool) -> Bool {
+        if enabled && !isPersonalityUnlocked {
+            return false
+        }
+        guard isEnabled != enabled else { return true }
         isEnabled = enabled
         userDefaults.set(enabled, forKey: Self.isEnabledKey)
         onSettingsChanged?()
+        return true
     }
 
     public func setPreset(_ newPreset: PersonalityPreset) {

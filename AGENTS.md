@@ -17,14 +17,14 @@ This file is the **single source of truth** for all AI coding agents (Antigravit
 - `src/App/Window/MascotOverlayPanel.swift` — Borderless floating `NSPanel` (`250×250` base scaled by `AvatarScaleStore` `0.50...1.75`), `AvatarScaleStore`, `AvatarOpacityStore`, `AvatarPositionStore` (freeform drag, `⌥ Option` hover, `⎋ Esc` lock, magnetic ~20pt edge snap, multi-display clamping). Owns child `SpeechBubblePanel`.
 - `src/App/Window/SpeechBubblePanel.swift` — Child floating `NSPanel` anchored just above Bitz's ear tips (`earOverflow`), dynamically sized to wrapped bubble text (#61).
 - `src/App/Window/DisplayPreferenceStore.swift` — Multi-monitor selection & fallback resolution when displays disconnect.
-- `src/App/Settings/SettingsWindowManager.swift` — Native `NSWindow` (`660×560`) hosting `SettingsRootView`. Detaches `contentViewController = nil` on close (`tearDownHostedContent`) so hidden SwiftUI trees consume **0% CPU & 0 MB** while closed (#70).
+- `src/App/Settings/SettingsWindowManager.swift` — Native resizable `NSWindow` (opens `860×580`, minimum content `820×560`) hosting `SettingsRootView`. Detaches `contentViewController = nil` on close (`tearDownHostedContent`) so hidden SwiftUI trees consume **0% CPU & 0 MB** while closed (#70).
 
 ### `src/Views/` — Mascot Canvas, Speech Bubbles & Settings Tabs
 - `src/Views/MascotOverlayView.swift` — Fixed `250×250` mascot overlay canvas: hosts `LiveBitzCharacterView`, `MascotCyberHUDContainerView` (`MascotCyberHUDPillView`), and drag-unlock border/pill.
 - `src/Views/BitzCharacterView.swift` —
   - `BitzCharacterView(state:time:...)`: Pure deterministic SwiftUI vector mascot (used for static rendering & `ImageRenderer` snapshot tests).
   - `LiveBitzCharacterView` / `AnimatedBitzCharacterView`: Production CoreAnimation-offloaded mascot (`CALayerMotionBridge` + `CoreAnimationParticlesView`) running continuous motion in `WindowServer` at 0% app CPU (#70).
-- `src/Views/SpeechBubbleView.swift` — Priority-ordered bubble renderer (`SpeechBubbleContent`: `.agentPopup` > `.update` > `.wellness` > `.carousel`) with `BubbleWindowLayout` and isolated `CarouselSpeechBubbleObserver`.
+- `src/Views/SpeechBubbleView.swift` — Priority-ordered bubble renderer (`SpeechBubbleContent.current`: `.agentPopup` > `.update` > thermal `.wellness` > `.meeting` > other `.wellness` > `.carousel`) with `BubbleWindowLayout` and isolated `CarouselSpeechBubbleObserver`.
 - `src/Views/Settings/` — `SettingsRootView.swift` + 6 tabs: `GeneralSettingsTabView.swift`, `BehaviorSettingsTabView.swift`, `AgentsSettingsTabView.swift`, `TelemetrySettingsTabView.swift`, `AudioSettingsTabView.swift`, `AdvancedSettingsTabView.swift`.
 
 ### `src/Services/` & `src/Models/` — Domain Engine, Telemetry, Agents & Audio
@@ -36,11 +36,17 @@ This file is the **single source of truth** for all AI coding agents (Antigravit
   - `AgentHookInstaller.swift` — Safe backup-first `~/.claude/settings.json` hook installer.
 - `src/Services/CyberAudioService.swift`, `CyberAudioPlaying.swift`, `AudioEnvironmentDetector.swift`, `src/Models/CyberAudioModels.swift`, `CyberAudioSettingsStore.swift` — Sound effects (`src/Resources/Sounds/*.wav`), DND/fullscreen/other-audio mute gating.
 - `src/Services/AppUpdateService.swift` — GitHub Releases checker (`AppUpdateStore`).
+- `src/Services/MeetingRecorder/` — Meeting recorder (#43), all on-device:
+  - `MeetingRecorderService.swift` — `@MainActor` lifecycle (start/stop, stop-time mix, quit finalize, launch recovery, retention, Transcribe Again, export), `MeetingBubble` publishing, first-recording consent notice.
+  - `MeetingAudioCaptureEngine.swift` — mic tap (`AVAudioEngine`) + system audio (`ScreenCaptureKit` `SCStream`) into separate tracks.
+  - `MeetingTrackWriter.swift` — `MeetingTrackWriter` (crash-safe `mic.caf` / `system.caf`, placed by host timestamp) and `MeetingTrackMixer` (offline mix to `audio.m4a`).
+  - `MeetingTranscriptionService.swift` (on-device `SFSpeechRecognizer`), `MeetingPermissionChecker.swift`.
+- `src/Models/MeetingSettingsStore.swift` (`bitz.meeting.*` keys, recordings/export folders, retention, hotkey), `MeetingBubble.swift` (single bubble model), `MeetingModels.swift` (state, metadata, transcript).
 
 ### Key Docs & Packaging Scripts
 - `docs/ARCHITECTURE.md` (system design & NFR budgets), `docs/STATE_MACHINE.md` (PTS math & edge cases), `docs/ACCEPTANCE_CRITERIA.md` (FR/NFR specs).
 - `docs/DISTRIBUTION.md` — Private repo distribution architecture (`AkramKs/bitz-mac` private source, `AkramKs/bitz-releases` public release sink, `AkramKs/homebrew-tap` Cask sync).
-- `Scripts/package_and_run.sh [debug|release]` (builds, signs ad-hoc `build/Bitz.app`, kills old instance, launches with SDK fallback), `Scripts/create_dmg.sh` (release DMG builder).
+- `Scripts/package_and_run.sh [debug|release]` (builds, signs ad-hoc `build/Bitz.app` with hardened runtime + `Scripts/Bitz.entitlements` and verifies the signature, kills old instance, launches with SDK fallback; bundle ID `com.bitz.cybercat.dev`, override with `BITZ_BUNDLE_ID`), `Scripts/create_dmg.sh` (release DMG builder, same signing, `com.bitz.cybercat`). Both render `Scripts/Info.plist.template` via `Scripts/render_info_plist.sh`.
 
 ---
 
@@ -58,7 +64,7 @@ Bitz sits on the user's desktop all day alongside heavy IDEs and LLM agents. Reg
    - AppKit windows with `isReleasedWhenClosed = false` keep their `NSHostingController` / `NSHostingView` active in the background when closed!
    - `SettingsWindowManager` detaches `window.contentViewController = nil` on close (`tearDownHostedContent`) and exposes `isWindowVisible`. Any new secondary window MUST do the same.
 4. **`NSHostingView.sizingOptions` Rule**:
-   - Fixed-size windows (`MascotOverlayPanel` `250×250` and `SettingsWindowManager` `660×560`) MUST set `sizingOptions = []` so AppKit never runs per-frame intrinsic content size measurement passes.
+   - `MascotOverlayPanel` (`250×250`) and `SettingsWindowManager` (AppKit-sized, minimum `820×560`) MUST set `sizingOptions = []` so AppKit never runs per-frame intrinsic content size measurement passes.
    - **Exception**: `SpeechBubblePanel`'s `NSHostingView` MUST retain default `sizingOptions` so the bubble window resizes dynamically to fit multi-line text (#61).
 5. **Isolate Polling `@ObservedObject`s to Leaf Subviews**:
    - Never attach `@ObservedObject var telemetryDashboard` (or any 1–5s polling service) directly to `MascotOverlayView` or `SpeechBubbleView` root properties. Subscribe inside small leaf views (`MascotCyberHUDContainerView` + `.equatable()`, `CarouselSpeechBubbleObserver`) so unchanged ticks never invalidate the mascot or speech bubble layout.
@@ -150,6 +156,7 @@ Bitz sits on the user's desktop all day alongside heavy IDEs and LLM agents. Reg
    - Every store or service test must use an isolated `UserDefaults(suiteName:)` domain with cleanup in `defer { defaults.removePersistentDomain(...) }`.
 3. **Local Packaging**:
    - Test packaging and run locally with `./Scripts/package_and_run.sh release` to confirm signing and live AppKit execution.
+   - The local build is `com.bitz.cybercat.dev`: its TCC grants and UserDefaults are separate from the installed release (reset with `tccutil reset All com.bitz.cybercat.dev`).
    - The script automatically checks active Command Line Tools and falls back to `MacOSX26.5.sdk` if the active SDK is a preview seed (e.g. 27.x) missing standalone SwiftUI macro binaries.
 
 ---

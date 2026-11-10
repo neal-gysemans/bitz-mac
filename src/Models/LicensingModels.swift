@@ -30,6 +30,7 @@ public enum BitzFeature: String, Codable, Sendable, Equatable, CaseIterable, Has
     case customThemes = "custom_themes"
     case multiAgentSwarm = "multi_agent_swarm"
     case meetingRecorder = "meeting_recorder"
+    case personality = "personality"
     case deepTelemetry = "deep_telemetry"
     case soundPacks = "sound_packs"
 
@@ -43,6 +44,8 @@ public enum BitzFeature: String, Codable, Sendable, Equatable, CaseIterable, Has
             return "Multi-Agent Swarm"
         case .meetingRecorder:
             return "Local Meeting Assistant"
+        case .personality:
+            return "AI Personality Commentary"
         case .deepTelemetry:
             return "Deep Telemetry"
         case .soundPacks:
@@ -59,7 +62,9 @@ public enum BitzFeature: String, Codable, Sendable, Equatable, CaseIterable, Has
         case .multiAgentSwarm:
             return "Monitor 2+ simultaneous background agents with aggregated status and stall alerts."
         case .meetingRecorder:
-            return "On-device audio recording and local Whisper transcription."
+            return "On-device audio recording and local Speech transcription."
+        case .personality:
+            return "On-device Apple Foundation Models & context-aware commentary with Snarky, Supportive, and Cute presets."
         case .deepTelemetry:
             return "Per-process battery impact and browser tab memory inspection."
         case .soundPacks:
@@ -73,6 +78,7 @@ public enum BitzFeature: String, Codable, Sendable, Equatable, CaseIterable, Has
              .customThemes,
              .multiAgentSwarm,
              .meetingRecorder,
+             .personality,
              .deepTelemetry,
              .soundPacks:
             return .pro

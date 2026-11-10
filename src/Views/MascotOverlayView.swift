@@ -20,6 +20,9 @@ public struct MascotOverlayView: View {
     @ObservedObject public var paletteStore: AvatarPaletteStore
     @ObservedObject public var characterStore: AvatarCharacterStore
     @ObservedObject public var agentMonitor: AgentMonitorService
+    /// A plain flag, not the recorder: its other updates must never invalidate the mascot (AGENTS.md §2.5).
+    /// `BitzAppDelegate` sets it on the hosting view's `rootView` when a recording starts or stops.
+    public var isRecordingMeeting: Bool
 
     private let explicitAttentionCue: Bool?
 
@@ -53,6 +56,7 @@ public struct MascotOverlayView: View {
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         characterStore: AvatarCharacterStore = AvatarCharacterStore(),
         agentMonitor: AgentMonitorService = AgentMonitorService(),
+        isRecordingMeeting: Bool = false,
         isAttentionCueActive: Bool? = nil,
         onFilesDropped: (([URL]) -> Void)? = nil,
         onDragChanged: ((NSPoint, NSScreen?) -> Void)? = nil,
@@ -72,6 +76,7 @@ public struct MascotOverlayView: View {
         self.paletteStore = paletteStore
         self.characterStore = characterStore
         self.agentMonitor = agentMonitor
+        self.isRecordingMeeting = isRecordingMeeting
         self.explicitAttentionCue = isAttentionCueActive
         self.onFilesDropped = onFilesDropped
         self.onDragChanged = onDragChanged
@@ -156,7 +161,7 @@ public struct MascotOverlayView: View {
     }
 
     private var isLoafPosture: Bool {
-        displayedState == .burnout || displayedState == .charging
+        BitzCharacterView.isLoaf(state: displayedState, isRecording: isRecordingMeeting)
     }
 
     // Holding ⌥ alone only shows the border, so typing ⌥ shortcuts in other apps doesn't flash the HUD
@@ -185,7 +190,8 @@ public struct MascotOverlayView: View {
                 isPaused: isAnimationPaused,
                 palette: paletteStore.resolvedPalette,
                 isAttentionCueActive: isAttentionCueActive,
-                character: activeCharacter
+                character: activeCharacter,
+                isRecordingMeeting: isRecordingMeeting
             )
             .frame(width: 180, height: 140)
             .opacity(opacityStore.opacityFactor)

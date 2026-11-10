@@ -41,17 +41,8 @@ public final class SystemDiffViewer: DiffViewing {
             process.arguments = ["diff"]
             process.currentDirectoryURL = URL(fileURLWithPath: dir)
 
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
-
             do {
-                try process.run()
-                process.waitUntilExit()
-
-                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                let (stdoutData, stderrData) = try process.runCollectingOutput()
                 let stdoutString = String(data: stdoutData, encoding: .utf8) ?? ""
                 let stderrString = String(data: stderrData, encoding: .utf8) ?? ""
 
@@ -105,4 +96,32 @@ public final class SystemDiffViewer: DiffViewing {
             return false
         }
     }
+}
+
+extension Process {
+    /// Runs the process and reads stdout and stderr to EOF before waiting for exit.
+    /// Waiting first deadlocks once the child fills a pipe's ~64 KB buffer.
+    func runCollectingOutput() throws -> (stdout: Data, stderr: Data) {
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        standardOutput = stdoutPipe
+        standardError = stderrPipe
+        try run()
+
+        let stderrHandle = stderrPipe.fileHandleForReading
+        let stderrBox = ProcessOutputBox()
+        let group = DispatchGroup()
+        DispatchQueue.global(qos: .utility).async(group: group) {
+            stderrBox.data = stderrHandle.readDataToEndOfFile()
+        }
+        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        group.wait()
+        waitUntilExit()
+        return (stdoutData, stderrBox.data)
+    }
+}
+
+/// Written once on a background queue and read after `group.wait()`, which orders the accesses.
+private final class ProcessOutputBox: @unchecked Sendable {
+    var data = Data()
 }

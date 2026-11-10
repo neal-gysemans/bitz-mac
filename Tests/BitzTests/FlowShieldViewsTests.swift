@@ -83,7 +83,8 @@ final class FlowShieldViewsTests: XCTestCase {
             audioSettings: delegate.audioSettings,
             audioPlayer: delegate.audioService,
             flowShieldSettings: delegate.flowShieldSettings,
-            flowShieldService: delegate.flowShieldService
+            flowShieldService: delegate.flowShieldService,
+            meetingRecorder: .stub(defaults: defaults)
         )
         _ = rootView.body
 
@@ -98,7 +99,8 @@ final class FlowShieldViewsTests: XCTestCase {
             audioSettings: delegate.audioSettings,
             audioService: delegate.audioService,
             flowShieldSettings: delegate.flowShieldSettings,
-            flowShieldService: delegate.flowShieldService
+            flowShieldService: delegate.flowShieldService,
+            meetingRecorder: .stub(defaults: defaults)
         )
         _ = menuBarView.body
 

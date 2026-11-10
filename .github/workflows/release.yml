@@ -100,10 +100,14 @@ jobs:
 
             app "Bitz.app"
 
+            # Bitz's own data only: Application Support/Bitz/Meetings holds the user's recordings and is kept.
+            # rmdir removes the Bitz folder only once it is empty.
             zap trash: [
-              "~/Library/Application Support/Bitz",
-              "~/Library/Preferences/com.bitz.cybercat.plist",
-            ]
+                  "~/Library/Application Support/Bitz/agent-events",
+                  "~/Library/Application Support/Bitz/inbox",
+                  "~/Library/Preferences/com.bitz.cybercat.plist",
+                ],
+                rmdir: "~/Library/Application Support/Bitz"
           end
           EOF
           sed -i '' "s/VERSION_PLACEHOLDER/${VERSION}/g" Casks/bitz.rb

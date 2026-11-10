@@ -82,7 +82,8 @@ final class PersonalitySettingsTabTests: XCTestCase {
             updateStore: fixture.updateStore,
             telemetryDashboard: fixture.telemetryDashboard,
             telemetrySettings: fixture.telemetrySettings,
-            personalitySettings: personalityStore
+            personalitySettings: personalityStore,
+            meetingRecorder: .stub(defaults: defaults)
         )
 
         XCTAssertNotNil(rootView.body)
@@ -110,7 +111,8 @@ final class PersonalitySettingsTabTests: XCTestCase {
             updateStore: fixture.updateStore,
             telemetryDashboard: fixture.telemetryDashboard,
             telemetrySettings: fixture.telemetrySettings,
-            personalitySettings: personalityStore
+            personalitySettings: personalityStore,
+            meetingRecorder: .stub(defaults: defaults)
         )
 
         manager.showSettingsWindow(rootView: rootView)

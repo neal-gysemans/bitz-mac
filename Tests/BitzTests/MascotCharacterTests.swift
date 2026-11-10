@@ -260,6 +260,14 @@ final class MascotCharacterTests: XCTestCase {
 
     // MARK: - Helpers
 
+    private func makeCharacterStore(initialTier: BitzTier) -> (AvatarCharacterStore, MockCharacterLicensingService, UserDefaults) {
+        let unlocked: Set<BitzFeature> = initialTier == .pro ? [.multiMascot] : []
+        let mockLicensing = MockCharacterLicensingService(unlockedFeatures: unlocked)
+        mockLicensing.currentTier = initialTier
+        let store = AvatarCharacterStore(userDefaults: defaults, licensingService: mockLicensing)
+        return (store, mockLicensing, defaults)
+    }
+
     private func renderCharacter(_ character: MascotCharacter, state: BitzState) throws -> CGImage {
         let view = BitzCharacterView(state: state, time: 0, showParticles: false, character: character)
         return try render(view)

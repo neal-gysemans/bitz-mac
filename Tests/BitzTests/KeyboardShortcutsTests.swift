@@ -252,4 +252,119 @@ final class KeyboardShortcutsTests: XCTestCase {
             "Expected shortcuts \(expectedShortcuts) must all be present in menu, found \(keyEquivalents)"
         )
     }
+
+    func testMainMenuHasTheMeetingRecordingItem() throws {
+        let suiteName = "KeyboardShortcutsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let delegate = BitzAppDelegate(meetingRecorder: .stub(defaults: defaults), userDefaults: defaults)
+        _ = NSApplication.shared
+        NSApp?.mainMenu = nil
+        delegate.setupApplicationMenu()
+
+        let item = try XCTUnwrap(NSApp?.mainMenu?.items.first?.submenu?.items.first {
+            $0.action == #selector(BitzAppDelegate.toggleMeetingRecordingAction)
+        })
+        XCTAssertTrue(item.target === delegate)
+        XCTAssertTrue(delegate.validateMenuItem(item))
+        XCTAssertEqual(item.title, "Start Meeting Recording")
+    }
+
+    // MARK: - Meeting recording hotkey (#43)
+
+    private func makeMeetingDelegate(
+        defaults: UserDefaults,
+        meetingsDirectory: URL
+    ) -> (BitzAppDelegate, MeetingRecorderService, MockMeetingAudioCaptureEngine) {
+        let settings = MeetingSettingsStore(userDefaults: defaults)
+        settings.setMeetingsRootDirectoryURL(meetingsDirectory)
+        settings.setConsentAcknowledged(true)
+        let captureEngine = MockMeetingAudioCaptureEngine()
+        let recorder = MeetingRecorderService(
+            settingsStore: settings,
+            captureEngine: captureEngine,
+            transcriptionService: MockMeetingTranscriptionService(),
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .authorized)
+            )
+        )
+        let delegate = BitzAppDelegate(meetingRecorder: recorder, userDefaults: defaults)
+        return (delegate, recorder, captureEngine)
+    }
+
+    /// The hotkey starts recording in a Task; wait until the recorder reports it (bounded at ~1 s).
+    private func waitForRecording(_ recorder: MeetingRecorderService) async {
+        for _ in 0..<200 where !recorder.isRecording {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
+    func testDefaultMeetingHotkeyIsControlOptionCommandRAndOptionShiftRNoLongerRecords() async throws {
+        let suiteName = "KeyboardShortcutsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("bitz-hotkey-\(UUID().uuidString)")
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+        let (delegate, recorder, captureEngine) = makeMeetingDelegate(defaults: defaults, meetingsDirectory: tempDir)
+        XCTAssertEqual(delegate.meetingSettings.recordingHotkey, .controlOptionCommandR)
+
+        // ⌥⇧R typed "‰" into other apps and recorded at the same time; it must pass through now
+        let optionShiftR = makeSyntheticKeyEvent(keyCode: 15, characters: "r", modifiers: [.option, .shift])
+        XCTAssertFalse(delegate.handleKeyEvent(optionShiftR, isGlobal: true))
+        let controlOptionR = makeSyntheticKeyEvent(keyCode: 15, characters: "r", modifiers: [.control, .option])
+        XCTAssertFalse(delegate.handleKeyEvent(controlOptionR, isGlobal: true), "Chords match exactly")
+
+        let defaultChord = makeSyntheticKeyEvent(keyCode: 15, characters: "r", modifiers: [.control, .option, .command])
+        XCTAssertTrue(delegate.handleKeyEvent(defaultChord, isGlobal: true))
+        await waitForRecording(recorder)
+        XCTAssertEqual(captureEngine.startCallCount, 1)
+        XCTAssertTrue(recorder.isRecording)
+        await recorder.stopRecording()
+    }
+
+    func testMeetingHotkeyOffMatchesNothingAndAlternativeChordWorks() async throws {
+        let suiteName = "KeyboardShortcutsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("bitz-hotkey-\(UUID().uuidString)")
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+        let (delegate, recorder, captureEngine) = makeMeetingDelegate(defaults: defaults, meetingsDirectory: tempDir)
+
+        delegate.meetingSettings.setRecordingHotkey(.off)
+        let chords: [NSEvent.ModifierFlags] = [[.control, .option, .command], [.control, .option], [.control, .shift], [.option, .shift]]
+        for modifiers in chords {
+            let event = makeSyntheticKeyEvent(keyCode: 15, characters: "r", modifiers: modifiers)
+            XCTAssertFalse(delegate.handleKeyEvent(event, isGlobal: true))
+            XCTAssertFalse(delegate.handleKeyEvent(event))
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(captureEngine.startCallCount, 0)
+
+        delegate.meetingSettings.setRecordingHotkey(.controlShiftR)
+        let controlShiftR = makeSyntheticKeyEvent(keyCode: 15, characters: "r", modifiers: [.control, .shift])
+        XCTAssertTrue(delegate.handleKeyEvent(controlShiftR, isGlobal: true))
+        await waitForRecording(recorder)
+        XCTAssertTrue(recorder.isRecording)
+        await recorder.stopRecording()
+    }
+
+    func testMeetingHotkeySettingPersists() {
+        let suiteName = "KeyboardShortcutsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = MeetingSettingsStore(userDefaults: defaults)
+        XCTAssertEqual(store.recordingHotkey, .controlOptionCommandR)
+        for hotkey in MeetingRecordingHotkey.allCases {
+            store.setRecordingHotkey(hotkey)
+            XCTAssertEqual(MeetingSettingsStore(userDefaults: defaults).recordingHotkey, hotkey)
+        }
+        XCTAssertEqual(MeetingRecordingHotkey.off.displayString, "Off")
+        XCTAssertNil(MeetingRecordingHotkey.off.modifierFlags)
+    }
 }

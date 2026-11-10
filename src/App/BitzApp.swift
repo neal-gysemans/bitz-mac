@@ -6,7 +6,7 @@ import SwiftUI
 /// Application delegate managing the transparent `MascotOverlayPanel`, `WellnessPointEngine`,
 /// `ActivityMonitorService`, `AvatarScaleStore`, and `AvatarOpacityStore` lifecycle (`FR-001`, `FR-005`, `FR-006`).
 @MainActor
-public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
+public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, ObservableObject {
     public static let hasCompletedInitialLaunchKey = "Bitz.HasCompletedInitialLaunch"
 
     public let riveController: ProductionRiveController
@@ -35,7 +35,12 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     public let appActivator: any AppActivating
     public let diffViewer: any DiffViewing
     public let licensingService: LicensingService
+    public let meetingRecorder: MeetingRecorderService
+    public var meetingSettings: MeetingSettingsStore { meetingRecorder.settingsStore }
+    private var isAwaitingTerminationReply = false
     @Published public private(set) var menuBarTitle: String = "Bitz"
+    /// Red record glyph + "REC" in the status item while a meeting records; static, no per-second updates (#43 D5).
+    @Published public private(set) var isRecordingIndicatorVisible = false
     public private(set) var overlayPanels: [MascotOverlayPanel] = []
     public var overlayPanel: MascotOverlayPanel? { overlayPanels.first }
 
@@ -46,6 +51,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     nonisolated(unsafe) private var localKeyMonitor: Any?
     nonisolated(unsafe) private var globalKeyMonitor: Any?
     private var bubbleInteractivityCancellable: AnyCancellable?
+    private var recordingIndicatorCancellable: AnyCancellable?
     private var warningVisorCancellable: AnyCancellable?
     private var personalityTickCancellable: AnyCancellable?
     private var personalityEnabledCancellable: AnyCancellable?
@@ -91,18 +97,26 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         appActivator: (any AppActivating)? = nil,
         diffViewer: (any DiffViewing)? = nil,
         licensingService: LicensingService? = nil,
+        meetingRecorder: MeetingRecorderService? = nil,
         userDefaults: UserDefaults = .standard
     ) {
         self.userDefaults = userDefaults
         let resolvedLicensingService = licensingService ?? LicensingService()
         self.licensingService = resolvedLicensingService
+        self.meetingRecorder = meetingRecorder ?? MeetingRecorderService(
+            settingsStore: MeetingSettingsStore(userDefaults: userDefaults),
+            licensingService: resolvedLicensingService
+        )
         let resolvedApprovalStore = approvalStore ?? AgentApprovalStore()
         self.approvalStore = resolvedApprovalStore
         self.appActivator = appActivator ?? WorkspaceAppActivator()
         self.diffViewer = diffViewer ?? SystemDiffViewer()
         self.paletteStore = paletteStore ?? AvatarPaletteStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
         self.characterStore = characterStore ?? AvatarCharacterStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
-        let resolvedPersonalitySettings = personalitySettings ?? PersonalitySettingsStore(userDefaults: userDefaults)
+        let resolvedPersonalitySettings = personalitySettings ?? PersonalitySettingsStore(
+            userDefaults: userDefaults,
+            licensingService: resolvedLicensingService
+        )
         self.personalitySettings = resolvedPersonalitySettings
         let resolvedPersonalityService = personalityService ?? PersonalityService(
             primaryGenerator: FoundationModelsCommentaryGenerator(),
@@ -189,16 +203,46 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             self?.agentMonitor.hookActionMessage = nil
             self?.agentMonitor.isHookActionError = false
         }
-        // An agent popup or pending approval can cover the update alert's buttons, so re-check on all changes
-        self.bubbleInteractivityCancellable = Publishers.Merge3(
+        // An agent popup, pending approval, or meeting bubble can show buttons; a thermal warning hides the meeting bubble's
+        self.bubbleInteractivityCancellable = Publishers.Merge5(
             self.updateStore.$isSpeechBubbleAlertActive.map { _ in () },
             self.agentMonitor.$activePopup.map { _ in () },
-            self.approvalStore.$activeRequest.map { _ in () }
+            self.approvalStore.$activeRequest.map { _ in () },
+            self.meetingRecorder.$bubble.map { _ in () },
+            self.engine.$currentState.map { $0 == .overheating }.removeDuplicates().map { _ in () }
         )
         .receive(on: DispatchQueue.main)
         .sink { [weak self] in
             self?.updatePanelsInteractivity()
         }
+
+        self.meetingRecorder.onPlaySound = { [weak self] event in
+            self?.audioService.play(event, bypassCooldown: true)
+        }
+        self.meetingRecorder.onOpenSettings = { [weak self] in
+            self?.showSettings(tab: .audio)
+        }
+        self.meetingRecorder.onOpenProSettings = { [weak self] in
+            self?.showSettings(tab: .pro)
+        }
+        self.licensingTierCancellable = self.licensingService.$currentTier
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.paletteStore.validateTierEntitlement()
+                self?.characterStore.validateTierEntitlement()
+                self?.personalitySettings.validateTierEntitlement()
+            }
+        self.recordingIndicatorCancellable = self.meetingRecorder.$state
+            .map { $0 == .recording }
+            .removeDuplicates()
+            .sink { [weak self] recording in
+                self?.isRecordingIndicatorVisible = recording
+                // The mascot gets only this flag, so other recorder updates never re-render it (AGENTS.md §2.5)
+                self?.overlayPanels.forEach { panel in
+                    (panel.contentView as? NSHostingView<MascotOverlayView>)?.rootView.isRecordingMeeting = recording
+                }
+            }
         // The engine only gets a flag, so agent policy stays in AgentMonitorService (R10)
         self.warningVisorCancellable = self.agentMonitor.$activeWarning
             .map { $0 != nil }
@@ -256,14 +300,6 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         self.displayStore.onDisplayPreferenceChanged = { [weak self] in
             self?.syncOverlayPanels()
         }
-
-        self.licensingTierCancellable = self.licensingService.$currentTier
-            .dropFirst()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.paletteStore.validateTierEntitlement()
-                self?.characterStore.validateTierEntitlement()
-            }
 
         self.screenParametersObserverToken = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -345,7 +381,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             agentMonitor: agentMonitor,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
-            telemetrySettings: telemetrySettings
+            telemetrySettings: telemetrySettings,
+            meetingRecorder: meetingRecorder
         )
         let bubbleIsInteractive = (currentContent?.isInteractive ?? false) || approvalStore.activeRequest != nil
         overlayPanels.forEach { panel in
@@ -363,6 +400,9 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         agentMonitor.startMonitoring()
         telemetryDashboard.start()
         updateStore.startPeriodicChecks()
+        Task { [meetingRecorder] in
+            await meetingRecorder.runLaunchMaintenance()
+        }
         if shouldOpenSettingsOnLaunch() {
             showSettingsWindow()
         }
@@ -388,9 +428,17 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             }
             return
         }
+        // Personality pauses for the whole recording, so an old line does not come back once the start bubble hides
+        guard !meetingRecorder.isRecording else {
+            if engine.idleCommentaryText != nil {
+                engine.setIdleCommentaryText(nil)
+            }
+            return
+        }
         let isBubbleIdle = agentMonitor.activePopup == nil
             && !updateStore.isSpeechBubbleAlertActive
             && engine.activeSpeechBubbleText == nil
+            && meetingRecorder.bubble == nil
         guard isBubbleIdle else { return }
 
         Task { @MainActor [weak self] in
@@ -416,7 +464,30 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         return true
     }
 
+    /// Quitting mid-recording would leave no `metadata.json`, so finalize first; the mix runs only if it fits the cap (#43).
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard meetingRecorder.hasUnfinalizedRecording else { return .terminateNow }
+        isAwaitingTerminationReply = true
+        Task { @MainActor [weak self] in
+            await self?.meetingRecorder.finalizeForTermination()
+            self?.replyToPendingTermination(sender)
+        }
+        // Safety net: a stuck capture device must never block quit
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            self?.replyToPendingTermination(sender)
+        }
+        return .terminateLater
+    }
+
+    private func replyToPendingTermination(_ sender: NSApplication) {
+        guard isAwaitingTerminationReply else { return }
+        isAwaitingTerminationReply = false
+        sender.reply(toApplicationShouldTerminate: true)
+    }
+
     public func applicationWillTerminate(_ notification: Notification) {
+        meetingRecorder.markTranscriptionInterrupted()
         overlayPanels.forEach { panel in
             panel.orderOut(nil)
             panel.close()
@@ -428,10 +499,10 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         telemetryDashboard.stop()
         updateStore.stopPeriodicChecks()
         audioService.stopAll()
-        licensingTierCancellable = nil
         personalityTickCancellable = nil
         personalityEnabledCancellable = nil
         personalityPresetCancellable = nil
+        licensingTierCancellable = nil
         Task { [personalityService] in
             await personalityService.unloadBackend()
         }
@@ -507,6 +578,16 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         appMenu.addItem(opacityDownItem)
         appMenu.addItem(NSMenuItem.separator())
 
+        // No key equivalent: the recording chord is configurable and handled by `handleKeyEvent`; title set in `validateMenuItem`
+        let meetingItem = NSMenuItem(
+            title: "Start Meeting Recording",
+            action: #selector(toggleMeetingRecordingAction),
+            keyEquivalent: ""
+        )
+        meetingItem.target = self
+        appMenu.addItem(meetingItem)
+        appMenu.addItem(NSMenuItem.separator())
+
         let closeItem = NSMenuItem(
             title: "Close Window",
             action: #selector(NSWindow.performClose(_:)),
@@ -528,6 +609,11 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
     // MARK: - Menu & Shortcut Actions
 
     @objc public func showSettingsWindow() {
+        showSettings(tab: nil)
+    }
+
+    /// With a `tab`, an already open window is switched to it (meeting failure bubble's OPEN SETTINGS → Audio).
+    public func showSettings(tab: SettingsTab?) {
         SettingsWindowManager.shared.showSettingsWindow(
             rootView: SettingsRootView(
                 engine: engine,
@@ -549,8 +635,11 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
                 paletteStore: paletteStore,
                 characterStore: characterStore,
                 personalitySettings: personalitySettings,
-                licensingService: licensingService
-            )
+                licensingService: licensingService,
+                meetingRecorder: meetingRecorder,
+                initialTab: tab ?? .general
+            ),
+            replacingContent: tab != nil
         )
     }
 
@@ -586,8 +675,22 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         positionStore.lockPosition()
     }
 
+    @objc public func toggleMeetingRecordingAction() {
+        Task { @MainActor [weak self] in
+            await self?.meetingRecorder.toggleRecording()
+        }
+    }
+
+    /// The main menu's meeting item mirrors the menu bar: Start/Stop, or a disabled Saving…/Transcribing….
+    public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(toggleMeetingRecordingAction) else { return true }
+        menuItem.title = meetingRecorder.busyMenuLabel
+            ?? (meetingRecorder.isRecording ? "Stop Meeting Recording" : "Start Meeting Recording")
+        return meetingRecorder.busyMenuLabel == nil
+    }
+
     /// Handles keyboard shortcuts locally or globally without stealing key focus.
-    /// `isGlobal` marks keystrokes typed in other apps: only ⌥⌘B and the Esc/Return lock apply there.
+    /// `isGlobal` marks keystrokes typed in other apps: only ⌥⌘B, the configured meeting-recording chord, and the Esc/Return lock apply there.
     @MainActor
     @discardableResult
     public func handleKeyEvent(_ event: NSEvent, isGlobal: Bool = false) -> Bool {
@@ -601,6 +704,12 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
         // 1. Toggle / Open Settings Window: ⌥⌘B (works from any app)
         if cmd && opt && !ctrl && (keyCode == 11 || chars == "b") {
             toggleSettingsWindow()
+            return true
+        }
+
+        // 1b. Start / Stop Meeting Recording: configurable chord, default ⌃⌥⌘R, Off matches nothing (works from any app, #43)
+        if meetingSettings.recordingHotkey.matches(event) {
+            toggleMeetingRecordingAction()
             return true
         }
 
@@ -756,7 +865,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
                     updateStore: updateStore,
                     telemetryDashboard: telemetryDashboard,
                     telemetrySettings: telemetrySettings,
-                    paletteStore: paletteStore
+                    paletteStore: paletteStore,
+                    meetingRecorder: meetingRecorder
                 ),
                 approvalStore: approvalStore,
                 agentMonitor: agentMonitor,
@@ -779,6 +889,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, ObservableO
             interactionSettings: interactionSettings,
             paletteStore: paletteStore,
             characterStore: characterStore,
+            agentMonitor: agentMonitor,
+            isRecordingMeeting: meetingRecorder.isRecording,
             onFilesDropped: { [weak self] urls in
                 guard let self else { return }
                 do {
@@ -907,6 +1019,8 @@ struct BitzMenuBarContentView: View {
     var audioService: CyberAudioService? = nil
     @ObservedObject var flowShieldSettings: FlowShieldSettingsStore
     let flowShieldService: FlowShieldService
+    @ObservedObject var meetingRecorder: MeetingRecorderService
+    @ObservedObject var meetingSettings: MeetingSettingsStore
     public var licensingService: (any LicensingServiceProtocol)?
     var onOpenSettings: () -> Void
 
@@ -924,11 +1038,14 @@ struct BitzMenuBarContentView: View {
         flowShieldService: FlowShieldService? = nil,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         characterStore: AvatarCharacterStore = AvatarCharacterStore(),
+        meetingRecorder: MeetingRecorderService = MeetingRecorderService(),
         licensingService: (any LicensingServiceProtocol)? = nil,
         onOpenSettings: @escaping () -> Void = {}
     ) {
         self.paletteStore = paletteStore
         self.characterStore = characterStore
+        self.meetingRecorder = meetingRecorder
+        self.meetingSettings = meetingRecorder.settingsStore
         self.licensingService = licensingService
         self.onOpenSettings = onOpenSettings
         self.engine = engine
@@ -988,6 +1105,39 @@ struct BitzMenuBarContentView: View {
                 engine.triggerPetInteraction()
             }
             .keyboardShortcut("p", modifiers: [.command])
+
+            if let busy = meetingRecorder.busyMenuLabel {
+                Button(busy) {}
+                    .disabled(true)
+            } else {
+                let isMeetingUnlocked = licensingService?.isFeatureUnlocked(.meetingRecorder) ?? meetingRecorder.isMeetingRecorderUnlocked
+                let startLabel = isMeetingUnlocked ? "Start Meeting Recording" : "Start Meeting Recording (Pro 🔒)"
+                Button(meetingRecorder.isRecording ? "Stop Meeting Recording" : startLabel) {
+                    if !isMeetingUnlocked && !meetingRecorder.isRecording {
+                        onOpenSettings()
+                        NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                        return
+                    }
+                    Task {
+                        await meetingRecorder.toggleRecording()
+                    }
+                }
+                .keyboardShortcut(meetingSettings.recordingHotkey.menuShortcut)
+            }
+
+            if let lastRecording = meetingRecorder.lastCompletedResult {
+                Button("Reveal Last Recording in Finder") {
+                    meetingRecorder.revealInFinder(lastRecording.sessionDirectoryURL)
+                }
+            }
+
+            if meetingRecorder.canTranscribeAgain {
+                Button("Transcribe Last Recording Again") {
+                    Task {
+                        await meetingRecorder.transcribeAgain()
+                    }
+                }
+            }
 
             Toggle("Show Mascot", isOn: $positionStore.isMascotVisible)
 
@@ -1113,6 +1263,7 @@ public struct BitzApp: App {
                 flowShieldService: appDelegate.flowShieldService,
                 paletteStore: appDelegate.paletteStore,
                 characterStore: appDelegate.characterStore,
+                meetingRecorder: appDelegate.meetingRecorder,
                 licensingService: appDelegate.licensingService,
                 onOpenSettings: appDelegate.showSettingsWindow
             )
@@ -1127,9 +1278,23 @@ struct BitzMenuBarLabel: View {
     @ObservedObject var appDelegate: BitzAppDelegate
     @ObservedObject var characterStore: AvatarCharacterStore
 
+    /// Non-template so the status item keeps it red (a SwiftUI `foregroundStyle` is dropped from menu bar labels).
+    private static let recordGlyph: NSImage = {
+        let image = NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "Recording")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [.systemRed])) ?? NSImage()
+        image.isTemplate = false
+        return image
+    }()
+
     var body: some View {
         let symbol = characterStore.selectedCharacter.menuBarSymbolName
-        if appDelegate.menuBarTitle == "Bitz" {
+        if appDelegate.isRecordingIndicatorVisible {
+            HStack {
+                Image(nsImage: Self.recordGlyph)
+                Text("REC")
+            }
+            .accessibilityLabel("Bitz is recording a meeting")
+        } else if appDelegate.menuBarTitle == "Bitz" {
             Image(systemName: symbol)
                 .accessibilityLabel("Bitz")
         } else {
@@ -1138,5 +1303,18 @@ struct BitzMenuBarLabel: View {
                 Text(appDelegate.menuBarTitle)
             }
         }
+    }
+}
+
+private extension MeetingRecordingHotkey {
+    /// Menu bar shortcut mirroring the global chord; nil (no shortcut shown) when Off.
+    var menuShortcut: KeyboardShortcut? {
+        guard let flags = modifierFlags else { return nil }
+        var modifiers: EventModifiers = []
+        if flags.contains(.control) { modifiers.insert(.control) }
+        if flags.contains(.option) { modifiers.insert(.option) }
+        if flags.contains(.command) { modifiers.insert(.command) }
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        return KeyboardShortcut(KeyEquivalent(Character(Self.character)), modifiers: modifiers)
     }
 }

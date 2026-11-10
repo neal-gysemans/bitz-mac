@@ -67,18 +67,12 @@ public actor GitActivityProvider: GitActivityProviding {
             process.currentDirectoryURL = URL(fileURLWithPath: repoPath)
             process.arguments = arguments
 
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = Pipe()
-
-            try process.run()
-            process.waitUntilExit()
+            let (data, _) = try process.runCollectingOutput()
 
             guard process.terminationStatus == 0 else {
                 throw GitError.commandFailed(process.terminationStatus)
             }
 
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             return String(data: data, encoding: .utf8) ?? ""
         }.value
     }

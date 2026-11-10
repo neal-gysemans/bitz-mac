@@ -19,6 +19,8 @@ final class MascotOverlayLayoutTests: XCTestCase {
     override func setUp() async throws {
         suiteName = "MascotOverlayLayoutTests.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
+        // Recordings started here must not wait on the first-recording notice
+        defaults.set(true, forKey: MeetingSettingsStore.consentAcknowledgedKey)
         OverlayFixture.resetAgentMonitorDefaults()
     }
 
@@ -151,6 +153,151 @@ final class MascotOverlayLayoutTests: XCTestCase {
 
         XCTAssertEqual(differingPixels(normal, optionHeld, in: hudBand), 0, "Holding ⌥ must leave the HUD untouched")
         XCTAssertGreaterThan(differingPixels(normal, unlocked, in: hudBand), 100, "Unlocking must swap the HUD for the drag pill")
+    }
+
+    /// #43: Cyber-headphones + recording LED and meeting bubbles must stay strictly within their windows.
+    func testMeetingRecordingHeadphonesAndBubblesFitInsideWindows() async throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bitz-layout-meeting-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let meetingSettings = MeetingSettingsStore(userDefaults: defaults)
+        meetingSettings.setMeetingsRootDirectoryURL(tempDir)
+        let recorder = MeetingRecorderService(
+            settingsStore: meetingSettings,
+            captureEngine: MockMeetingAudioCaptureEngine(),
+            transcriptionService: MockMeetingTranscriptionService(),
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(
+                    microphone: .authorized,
+                    screenAudio: .authorized,
+                    speechRecognition: .authorized
+                )
+            )
+        )
+
+        await recorder.startRecording()
+        XCTAssertTrue(recorder.isRecording)
+
+        // Character with cyber-headphones must preserve earOverflow
+        let character = BitzCharacterView(state: .balanced, time: 0, showParticles: false, isRecordingMeeting: true)
+        let renderer = ImageRenderer(content: character.padding(margin))
+        renderer.scale = renderScale
+        let image = try XCTUnwrap(renderer.cgImage)
+        let topRow = try XCTUnwrap(topmostVisibleRow(in: image))
+        let earTipAboveFrame = margin - CGFloat(topRow) / renderScale
+        XCTAssertEqual(
+            earTipAboveFrame,
+            BitzCharacterView.earOverflow(isLoafPosture: false),
+            accuracy: 1.5,
+            "Cyber-headphones must not rise above ear tips"
+        )
+
+        let recordingBubble = SpeechBubbleView(
+            engine: fixture.engine,
+            scaleStore: fixture.scaleStore,
+            agentMonitor: fixture.agentMonitor,
+            updateStore: fixture.updateStore,
+            telemetryDashboard: fixture.telemetryDashboard,
+            telemetrySettings: fixture.telemetrySettings,
+            meetingRecorder: recorder
+        )
+        try assertBubbleFitsItsWindow(recordingBubble)
+
+        await recorder.stopRecording()
+        XCTAssertEqual(recorder.bubble?.kind, .completion)
+        try assertBubbleFitsItsWindow(recordingBubble)
+    }
+
+    /// D5: the failure bubble (headline, detail, OPEN SETTINGS + DISMISS) and the interruption warning fit their windows.
+    func testFailureAndInterruptionMeetingBubblesFitTheirWindows() async throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        fixture.scaleStore.setScale(AvatarScaleStore.maxScaleFactor)
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bitz-layout-meeting-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let meetingSettings = MeetingSettingsStore(userDefaults: defaults)
+        meetingSettings.setMeetingsRootDirectoryURL(tempDir)
+        let denied = MeetingRecorderService(
+            settingsStore: meetingSettings,
+            captureEngine: MockMeetingAudioCaptureEngine(),
+            transcriptionService: MockMeetingTranscriptionService(),
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(microphone: .denied, screenAudio: .denied, speechRecognition: .authorized)
+            )
+        )
+        await denied.startRecording()
+        XCTAssertEqual(denied.bubble?.actions, [.openSettings, .dismiss])
+        try assertBubbleFitsItsWindow(bubbleView(fixture, recorder: denied))
+
+        let recorder = MeetingRecorderService(
+            settingsStore: meetingSettings,
+            captureEngine: MockMeetingAudioCaptureEngine(),
+            transcriptionService: MockMeetingTranscriptionService(),
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .authorized)
+            )
+        )
+        await recorder.startRecording()
+        recorder.handleCaptureInterruption(.microphone, "Microphone stopped after an audio device change: unplugged")
+        XCTAssertEqual(recorder.bubble?.text, MeetingBubble.micLostSystemContinuesText)
+        try assertBubbleFitsItsWindow(bubbleView(fixture, recorder: recorder))
+        await recorder.stopRecording(transcribe: false)
+    }
+
+    private func bubbleView(_ fixture: OverlayFixture, recorder: MeetingRecorderService) -> SpeechBubbleView {
+        SpeechBubbleView(
+            engine: fixture.engine,
+            scaleStore: fixture.scaleStore,
+            agentMonitor: fixture.agentMonitor,
+            updateStore: fixture.updateStore,
+            telemetryDashboard: fixture.telemetryDashboard,
+            telemetrySettings: fixture.telemetrySettings,
+            meetingRecorder: recorder
+        )
+    }
+
+    /// D6: a failed transcript adds the TRANSCRIBE AGAIN row; the bubble must still fit its window.
+    func testFailedTranscriptBubbleWithTranscribeAgainFitsItsWindow() async throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bitz-layout-meeting-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let meetingSettings = MeetingSettingsStore(userDefaults: defaults)
+        meetingSettings.setMeetingsRootDirectoryURL(tempDir)
+        var failing = MockMeetingTranscriptionService()
+        failing.error = NSError(domain: "test", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "A fairly long recognizer failure message that wraps across several lines in the bubble"
+        ])
+        let recorder = MeetingRecorderService(
+            settingsStore: meetingSettings,
+            captureEngine: MockMeetingAudioCaptureEngine(),
+            transcriptionService: failing,
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .authorized)
+            )
+        )
+        await recorder.startRecording()
+        await recorder.stopRecording()
+        XCTAssertNil(recorder.lastCompletedResult?.transcriptTextURL, "the TRANSCRIBE AGAIN row is shown")
+        XCTAssertEqual(recorder.bubble?.actions, [.transcribeAgain, .openInFinder, .dismiss])
+
+        let bubble = SpeechBubbleView(
+            engine: fixture.engine,
+            scaleStore: fixture.scaleStore,
+            agentMonitor: fixture.agentMonitor,
+            updateStore: fixture.updateStore,
+            telemetryDashboard: fixture.telemetryDashboard,
+            telemetrySettings: fixture.telemetrySettings,
+            meetingRecorder: recorder
+        )
+        try assertBubbleFitsItsWindow(bubble)
     }
 
     /// The bubble window takes the hosting view's fitting size, so drawing must stay within it.

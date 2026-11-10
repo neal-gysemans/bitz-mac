@@ -1,17 +1,36 @@
 import SwiftUI
 
 /// Settings tab for configuring Cyber Audio features: master toggle, output volume,
-/// individual sound event toggles with preview triggers, and environment suppression rules.
+/// individual sound event toggles with preview triggers, environment suppression rules,
+/// and the meeting recorder and its on-device transcription (#43).
 public struct AudioSettingsTabView: View {
     @ObservedObject public var settingsStore: CyberAudioSettingsStore
     public var audioPlayer: (any CyberAudioPlaying)?
+    @ObservedObject public var meetingSettings: MeetingSettingsStore
+    @ObservedObject public var meetingRecorder: MeetingRecorderService
+    public var licensingService: (any LicensingServiceProtocol)?
+    /// Built once in `.onAppear` (probing recognizers is not free), never in `body`.
+    @State private var transcriptionLocaleOptions: [(id: String, label: String)] = []
+    /// `syncWarning` reads the file system, so it runs when a folder changes, never in `body`.
+    @State private var recordingsFolderWarning: String?
+    @State private var exportFolderWarning: String?
+    @State private var showingProPopover = false
 
     public init(
         settingsStore: CyberAudioSettingsStore,
-        audioPlayer: (any CyberAudioPlaying)? = nil
+        audioPlayer: (any CyberAudioPlaying)? = nil,
+        meetingRecorder: MeetingRecorderService,
+        licensingService: (any LicensingServiceProtocol)? = nil
     ) {
         self.settingsStore = settingsStore
         self.audioPlayer = audioPlayer
+        self.meetingSettings = meetingRecorder.settingsStore
+        self.meetingRecorder = meetingRecorder
+        self.licensingService = licensingService
+    }
+
+    private var isMeetingRecorderUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.meetingRecorder) ?? meetingRecorder.isMeetingRecorderUnlocked
     }
 
     public var body: some View {
@@ -24,6 +43,391 @@ public struct AudioSettingsTabView: View {
 
             // Environmental Suppression Card
             suppressionCard
+
+            // Meeting recorder and its transcription (#43)
+            meetingRecorderCard
+            transcriptionCard
+        }
+        .onAppear {
+            Task { await meetingRecorder.refreshPermissions() }
+            updateRecordingsFolderWarning()
+            updateExportFolderWarning()
+            // Probing ~60 recognizers takes ~0.2 s, so build the list off the main thread
+            Task {
+                transcriptionLocaleOptions = await Task.detached(priority: .utility) {
+                    SpeechFrameworkTranscriptionService.onDeviceLocaleOptions()
+                }.value
+            }
+        }
+        .onChange(of: meetingSettings.meetingsRootDirectoryURL) { updateRecordingsFolderWarning() }
+        .onChange(of: meetingSettings.transcriptExportDirectoryURL) { updateExportFolderWarning() }
+    }
+
+    private func updateRecordingsFolderWarning() {
+        recordingsFolderWarning = MeetingSettingsStore.syncWarning(for: meetingSettings.meetingsRootDirectoryURL)
+    }
+
+    private func updateExportFolderWarning() {
+        exportFolderWarning = meetingSettings.transcriptExportDirectoryURL.flatMap { MeetingSettingsStore.syncWarning(for: $0) }
+    }
+
+    // MARK: - Meeting Recorder Card (#43)
+
+    private var meetingRecorderCard: some View {
+        settingsCard(title: "Meeting Recorder", systemImage: "waveform.badge.mic") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .center, spacing: 10) {
+                    Text("Records your microphone and the meeting's sound into the recordings folder below.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    if !isMeetingRecorderUnlocked {
+                        ProBadgeView()
+                            .onTapGesture {
+                                showingProPopover = true
+                            }
+                            .popover(isPresented: $showingProPopover, arrowEdge: .bottom) {
+                                proMeetingPopover
+                            }
+                    }
+
+                    Text(meetingStatusBadgeText)
+                        .font(.caption.bold())
+                        .foregroundStyle(meetingStatusBadgeColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule()
+                                .fill(meetingStatusBadgeColor.opacity(0.15))
+                        )
+                }
+
+                HStack(spacing: 10) {
+                    Button {
+                        if !isMeetingRecorderUnlocked && !meetingRecorder.isRecording {
+                            showingProPopover = true
+                            return
+                        }
+                        Task {
+                            await meetingRecorder.toggleRecording()
+                        }
+                    } label: {
+                        Label(
+                            meetingRecorder.isRecording ? "Stop Meeting Recording" : "Start Meeting Recording",
+                            systemImage: meetingRecorder.isRecording ? "stop.circle.fill" : "record.circle"
+                        )
+                        .font(.subheadline.bold())
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(meetingRecorder.isRecording ? .red : .accentColor)
+                    .disabled(meetingRecorder.busyMenuLabel != nil)
+
+                    if let lastResult = meetingRecorder.lastCompletedResult {
+                        Button {
+                            meetingRecorder.revealInFinder(lastResult.sessionDirectoryURL)
+                        } label: {
+                            Label("Reveal Last Recording in Finder", systemImage: "folder.fill")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+
+                    Button {
+                        meetingRecorder.revealInFinder(meetingSettings.meetingsRootDirectoryURL)
+                    } label: {
+                        Label("Open Meetings Folder", systemImage: "folder")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
+                Text(meetingRecorder.statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                Toggle("Microphone", isOn: Binding(
+                    get: { meetingSettings.captureMicrophone },
+                    set: { meetingSettings.setCaptureMicrophone($0) }
+                ))
+                .font(.subheadline)
+                .disabled(meetingRecorder.isRecording)
+
+                Toggle("Meeting / system audio", isOn: Binding(
+                    get: { meetingSettings.captureSystemAudio },
+                    set: { meetingSettings.setCaptureSystemAudio($0) }
+                ))
+                .font(.subheadline)
+                .disabled(meetingRecorder.isRecording)
+
+                HStack(spacing: 10) {
+                    Text("Recordings folder")
+                        .font(.subheadline)
+
+                    Spacer()
+
+                    Button("Choose…") {
+                        if let url = chooseFolder(message: "Select the folder where Bitz stores meeting recordings") {
+                            meetingSettings.setMeetingsRootDirectoryURL(url)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Use Default") {
+                        meetingSettings.setMeetingsRootDirectoryURL(nil)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(meetingSettings.isUsingDefaultMeetingsDirectory)
+                }
+                .disabled(meetingRecorder.isRecording)
+
+                caption((meetingSettings.meetingsRootDirectoryURL.path as NSString).abbreviatingWithTildeInPath,
+                        enabled: !meetingRecorder.isRecording)
+
+                if let warning = recordingsFolderWarning {
+                    Text("Recordings folder: \(warning)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
+                Picker("Delete older recordings", selection: Binding(
+                    get: { meetingSettings.retentionDays },
+                    set: { meetingSettings.setRetentionDays($0) }
+                )) {
+                    Text("Off").tag(Int?.none)
+                    ForEach(MeetingSettingsStore.retentionDayOptions, id: \.self) { days in
+                        Text("\(days) days").tag(Optional(days))
+                    }
+                }
+                .font(.subheadline)
+
+                // The cutoff is anchored on the newest recording, not on today (MeetingRecorderService retention)
+                if let days = meetingSettings.retentionDays {
+                    caption("Deletes recordings Bitz made that are more than \(days) days older than your newest one, at launch and after each recording. Your newest recordings stay until you delete them in Finder, so a Mac clock that jumps ahead doesn't remove older recordings until you make a new one.",
+                            enabled: true)
+                } else {
+                    caption("Only recordings Bitz made in the recordings folder are deleted, at launch and after each recording.",
+                            enabled: true)
+                }
+
+                Picker("Recording shortcut", selection: Binding(
+                    get: { meetingSettings.recordingHotkey },
+                    set: { meetingSettings.setRecordingHotkey($0) }
+                )) {
+                    ForEach(MeetingRecordingHotkey.allCases) { hotkey in
+                        Text(hotkey.displayString).tag(hotkey)
+                    }
+                }
+                .font(.subheadline)
+
+                Toggle("Start chime", isOn: Binding(
+                    get: { settingsStore.isMeetingStartChimeEnabled },
+                    set: { settingsStore.setMeetingStartChimeEnabled($0) }
+                ))
+                .font(.subheadline)
+
+                caption(eventDescription(for: .meetingRecordingStarted), enabled: true)
+
+                Divider()
+
+                HStack(spacing: 12) {
+                    permissionPill(label: "Microphone", status: meetingRecorder.permissionState.microphone)
+                    permissionPill(label: "System audio", status: meetingRecorder.permissionState.screenAudio)
+                    permissionPill(label: "Speech recognition", status: meetingRecorder.permissionState.speechRecognition)
+
+                    Spacer()
+
+                    Button("Check / Request Permissions") {
+                        Task {
+                            await meetingRecorder.requestPermissions(includeSpeech: true)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    // MARK: - Transcription Card (#43)
+
+    private var transcriptionCard: some View {
+        settingsCard(title: "Transcription", systemImage: "text.bubble") {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Transcribe after recording", isOn: Binding(
+                    get: { meetingSettings.autoTranscribeOnStop },
+                    set: { meetingSettings.setAutoTranscribeOnStop($0) }
+                ))
+                .font(.subheadline)
+
+                caption("Transcripts are made on this Mac and saved next to the recording.", enabled: true)
+
+                Picker("Language", selection: Binding(
+                    get: { meetingSettings.transcriptionLocaleIdentifier },
+                    set: { meetingSettings.setTranscriptionLocaleIdentifier($0) }
+                )) {
+                    Text("Automatic").tag(String?.none)
+                    ForEach(languageOptions, id: \.id) { option in
+                        Text(option.label).tag(Optional(option.id))
+                    }
+                }
+                .font(.subheadline)
+
+                caption("Transcription uses one language per recording, so pick the meeting's language.", enabled: true)
+
+                Toggle("Copy transcript path to clipboard", isOn: Binding(
+                    get: { meetingSettings.copyTranscriptPathToClipboard },
+                    set: { meetingSettings.setCopyTranscriptPathToClipboard($0) }
+                ))
+                .font(.subheadline)
+
+                HStack(spacing: 10) {
+                    Toggle("Copy transcripts to a folder", isOn: Binding(
+                        get: { meetingSettings.transcriptExportDirectoryURL != nil },
+                        set: { isOn in
+                            if isOn {
+                                chooseExportFolder()
+                            } else {
+                                meetingSettings.setTranscriptExportDirectoryURL(nil)
+                            }
+                        }
+                    ))
+                    .font(.subheadline)
+
+                    Spacer()
+
+                    Button("Choose…") {
+                        chooseExportFolder()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(meetingSettings.transcriptExportDirectoryURL == nil)
+                }
+
+                if let exportURL = meetingSettings.transcriptExportDirectoryURL {
+                    caption((exportURL.path as NSString).abbreviatingWithTildeInPath, enabled: true)
+                }
+
+                caption("Every transcript is copied, including work meetings — turn this off for recordings that must not leave Bitz's folder.",
+                        enabled: true)
+
+                if let warning = exportFolderWarning {
+                    Text("Export folder: \(warning)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+    }
+
+    private var languageOptions: [(id: String, label: String)] {
+        Self.languageOptions(selected: meetingSettings.transcriptionLocaleIdentifier, loaded: transcriptionLocaleOptions)
+    }
+
+    /// Loaded options, plus the saved language while the list loads (or if it is gone), so the selection is always valid.
+    static func languageOptions(selected: String?, loaded: [(id: String, label: String)]) -> [(id: String, label: String)] {
+        guard let selected, !loaded.contains(where: { $0.id == selected }) else { return loaded }
+        return [(id: selected, label: Locale.current.localizedString(forIdentifier: selected) ?? selected)] + loaded
+    }
+
+    private func chooseExportFolder() {
+        if let url = chooseFolder(message: "Select a folder that also receives a copy of each meeting transcript") {
+            meetingSettings.setTranscriptExportDirectoryURL(url)
+        }
+    }
+
+    /// `.disabled` does not dim plain text, so a caption dims itself along with its row.
+    private func caption(_ text: String, enabled: Bool) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(enabled ? .secondary : .tertiary)
+    }
+
+    private func chooseFolder(message: String) -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Select"
+        panel.message = message
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    private var meetingStatusBadgeText: String {
+        if !isMeetingRecorderUnlocked && !meetingRecorder.isRecording {
+            return "Bitz Pro"
+        }
+        if meetingRecorder.isRecording {
+            return "Recording"
+        }
+        return meetingRecorder.busyMenuLabel ?? "Ready"
+    }
+
+    private var meetingStatusBadgeColor: Color {
+        if !isMeetingRecorderUnlocked && !meetingRecorder.isRecording {
+            return .orange
+        }
+        if meetingRecorder.isRecording {
+            return .red
+        }
+        if meetingRecorder.busyMenuLabel != nil {
+            return .orange
+        }
+        return .green
+    }
+
+    private var proMeetingPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "crown.fill")
+                    .foregroundStyle(.orange)
+                Text("Bitz Pro Feature")
+                    .font(.headline)
+            }
+            Text("Dual-track meeting audio recording and 100% on-device Speech transcription require Bitz Pro.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                showingProPopover = false
+                NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+            } label: {
+                Label("View Bitz Pro Perks", systemImage: "crown.fill")
+                    .font(.caption.bold())
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+            .controlSize(.small)
+        }
+        .padding(14)
+        .frame(width: 260)
+    }
+
+    private func permissionPill(label: String, status: MeetingPermissionState.Status) -> some View {
+        let color: Color = {
+            switch status {
+            case .authorized: return .green
+            case .denied: return .red
+            case .notDetermined: return .secondary
+            }
+        }()
+        return HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text("\(label): \(status.displayLabel)")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -53,6 +457,10 @@ public struct AudioSettingsTabView: View {
                 }
 
                 Text("Low-latency 8-bit cybernetic sound effects for mascot wellness transitions and AI coding agent lifecycle alerts. Automatically pauses engine when silent (0.0% idle CPU).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text("Turning this off silences every sound except the meeting start chime (Meeting Recorder card).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -102,7 +510,7 @@ public struct AudioSettingsTabView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                ForEach(CyberSoundEvent.allCases) { event in
+                ForEach(Self.soundEffectEvents) { event in
                     HStack(alignment: .center, spacing: 12) {
                         Toggle(isOn: Binding(
                             get: { settingsStore.isEventEnabled(event) },
@@ -131,7 +539,7 @@ public struct AudioSettingsTabView: View {
                         .disabled(!settingsStore.isEnabled || !settingsStore.isEventEnabled(event))
                     }
 
-                    if event != CyberSoundEvent.allCases.last {
+                    if event != Self.soundEffectEvents.last {
                         Divider()
                     }
                 }
@@ -201,6 +609,9 @@ public struct AudioSettingsTabView: View {
         )
     }
 
+    /// The start chime has its own row in the Meeting Recorder card, outside the master switch.
+    static let soundEffectEvents = CyberSoundEvent.allCases.filter { !$0.ignoresMasterAndFocus }
+
     private func eventDescription(for event: CyberSoundEvent) -> String {
         switch event {
         case .purr:
@@ -215,6 +626,10 @@ public struct AudioSettingsTabView: View {
             return "Ascending 8-bit victory fanfare when all agents finish"
         case .charging:
             return "Calm ascending blip when entering offline/break charging"
+        case .meetingRecordingStarted:
+            return "Plays even with Cyber Audio off or Focus on, so you know Bitz is listening. Only this switch or a muted Mac silences it."
+        case .meetingRecordingSaved:
+            return "Fanfare when a meeting recording is saved — plays while the mic is in use; system mute, Focus suppression and Enable Cyber Audio still silence it"
         }
     }
 }

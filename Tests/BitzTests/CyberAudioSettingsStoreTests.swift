@@ -42,8 +42,9 @@ final class CyberAudioSettingsStoreTests: XCTestCase {
         XCTAssertTrue(store.isFocusDNDSuppressionEnabled)
         XCTAssertFalse(store.isCallSuppressionEnabled, "Mic-in-use suppression is opt-in (#95)")
 
-        // But isEventEnabled must return false for all events when master is disabled
-        for event in CyberSoundEvent.allCases {
+        // But isEventEnabled must return false for all events when master is disabled, except the start chime (#43 A2)
+        XCTAssertTrue(store.isEventEnabled(.meetingRecordingStarted))
+        for event in CyberSoundEvent.allCases where !event.ignoresMasterAndFocus {
             XCTAssertFalse(store.isEventEnabled(event), "Event \(event) should not be enabled while master is off")
         }
     }

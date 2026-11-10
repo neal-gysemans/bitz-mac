@@ -163,6 +163,28 @@ final class QuickActionHUDTests: XCTestCase {
         }
     }
 
+    func testSystemDiffViewer_LargeOutputDoesNotDeadlock() async throws {
+        // A fake git that writes 300 KB to stdout, then 300 KB to stderr: both exceed the ~64 KB pipe buffer.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("bitz-diff-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let script = dir.appendingPathComponent("fake-git")
+        try "#!/bin/sh\nhead -c 300000 /dev/zero | tr '\\0' a\nhead -c 300000 /dev/zero | tr '\\0' b >&2\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+
+        // A regression deadlocks forever: fail on timeout instead of hanging the suite (the stuck task leaks)
+        let viewer = SystemDiffViewer(gitPath: script.path)
+        let path = dir.path
+        let finished = expectation(description: "getDiff returns")
+        Task.detached {
+            let result = await viewer.getDiff(workingDirectory: path)
+            XCTAssertEqual(try? result.get().count, 300_000)
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 10)
+    }
+
     // MARK: - SpeechBubblePanel Interactivity & Focus Invariants (FR-008, NFR-003)
 
     func testSpeechBubblePanel_InteractivityClassification() {
