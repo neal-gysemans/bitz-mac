@@ -51,4 +51,12 @@ final class BuildScriptsTests: XCTestCase {
         let bad = dir.appendingPathComponent("bad.plist")
         XCTAssertNotEqual(try run("/bin/bash", [renderer, "Bitz", "com.bitz/<x>", bad.path]), 0)
     }
+
+    func testPackagingScriptsDoNotInjectLocalDevLicenseToken() throws {
+        for script in ["package_and_run.sh", "create_dmg.sh", "Info.plist.template"] {
+            let contents = try String(contentsOf: scriptsDir.appendingPathComponent(script), encoding: .utf8)
+            XCTAssertFalse(contents.contains("BitzLocalDevLicenseToken"), "\(script) must not embed BitzLocalDevLicenseToken")
+            XCTAssertFalse(contents.contains("BTZ-LOCAL-DEV-PRO"), "\(script) must not embed BTZ-LOCAL-DEV-PRO")
+        }
+    }
 }

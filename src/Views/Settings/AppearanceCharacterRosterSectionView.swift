@@ -14,7 +14,7 @@ public struct AppearanceCharacterRosterSectionView: View {
     @State private var proPopoverDescription: String = ""
 
     private var isMultiMascotUnlocked: Bool {
-        licensingService?.isFeatureUnlocked(.multiMascot) ?? true
+        licensingService?.isFeatureUnlocked(.multiMascot) ?? false
     }
 
     public init(

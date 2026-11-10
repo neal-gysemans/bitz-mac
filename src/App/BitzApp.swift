@@ -232,6 +232,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
                 self?.paletteStore.validateTierEntitlement()
                 self?.characterStore.validateTierEntitlement()
                 self?.personalitySettings.validateTierEntitlement()
+                self?.agentMonitor.validateTierEntitlement()
             }
         self.recordingIndicatorCancellable = self.meetingRecorder.$state
             .map { $0 == .recording }
@@ -1110,7 +1111,7 @@ struct BitzMenuBarContentView: View {
                 Button(busy) {}
                     .disabled(true)
             } else {
-                let isMeetingUnlocked = licensingService?.isFeatureUnlocked(.meetingRecorder) ?? meetingRecorder.isMeetingRecorderUnlocked
+                let isMeetingUnlocked = licensingService?.isFeatureUnlocked(.meetingRecorder) ?? false
                 let startLabel = isMeetingUnlocked ? "Start Meeting Recording" : "Start Meeting Recording (Pro 🔒)"
                 Button(meetingRecorder.isRecording ? "Stop Meeting Recording" : startLabel) {
                     if !isMeetingUnlocked && !meetingRecorder.isRecording {
@@ -1167,7 +1168,7 @@ struct BitzMenuBarContentView: View {
 
             Menu("Companion Character") {
                 ForEach(MascotCharacter.allCases) { character in
-                    let isUnlocked = licensingService?.isFeatureUnlocked(.multiMascot) ?? true
+                    let isUnlocked = licensingService?.isFeatureUnlocked(.multiMascot) ?? false
                     let isLocked = character.isPro && !isUnlocked
                     let label = isLocked ? "\(character.title) (Pro 🔒)" : character.title
                     Toggle(label, isOn: Binding(
@@ -1186,7 +1187,7 @@ struct BitzMenuBarContentView: View {
 
             Menu("Theme") {
                 ForEach(AvatarThemePreset.allCases) { preset in
-                    let isUnlocked = licensingService?.isFeatureUnlocked(.customThemes) ?? true
+                    let isUnlocked = licensingService?.isFeatureUnlocked(.customThemes) ?? false
                     let isLocked = preset.isPro && !isUnlocked
                     let label = isLocked ? "\(preset.title) (Pro 🔒)" : preset.title
                     Toggle(label, isOn: Binding(

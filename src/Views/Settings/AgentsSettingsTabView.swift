@@ -90,7 +90,7 @@ public struct AgentsSettingsTabView: View {
             // Section 3: Monitored Agents Catalog
             settingsCard(title: "Monitored AI Agents (\(agentMonitor.activeAgents.count) Active)", systemImage: "cpu.fill") {
                 VStack(spacing: 8) {
-                    if !(licensingService?.isFeatureUnlocked(.multiAgentSwarm) ?? true) {
+                    if !(licensingService?.isFeatureUnlocked(.multiAgentSwarm) ?? false) {
                         HStack(spacing: 8) {
                             Image(systemName: "info.circle")
                                 .foregroundStyle(.secondary)

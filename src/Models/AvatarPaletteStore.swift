@@ -33,7 +33,7 @@ public final class AvatarPaletteStore: ObservableObject {
         var preset = userDefaults.string(forKey: Self.themeIdKey).flatMap(AvatarThemePreset.init(rawValue:)) ?? .defaultPreset
         var chassis = userDefaults.string(forKey: Self.chassisKey).flatMap(AvatarHex.normalize)
         var trim = userDefaults.string(forKey: Self.trimKey).flatMap(AvatarHex.normalize)
-        let glow: Double
+        var glow: Double
         if let stored = userDefaults.object(forKey: Self.glowKey) as? Double, stored.isFinite {
             glow = min(max(stored, AvatarResolvedPalette.glowRange.lowerBound), AvatarResolvedPalette.glowRange.upperBound)
         } else {
@@ -55,6 +55,7 @@ public final class AvatarPaletteStore: ObservableObject {
             }
             chassis = nil
             trim = nil
+            glow = 1.0
             overrides = [:]
         }
 
@@ -163,10 +164,15 @@ public final class AvatarPaletteStore: ObservableObject {
         refresh()
     }
 
-    public func setGlowIntensity(_ value: Double) {
-        guard value.isFinite else { return }
+    @discardableResult
+    public func setGlowIntensity(_ value: Double) -> Bool {
+        if let licensingService, !licensingService.isFeatureUnlocked(.customThemes) {
+            return false
+        }
+        guard value.isFinite else { return false }
         glowIntensity = min(max(value, AvatarResolvedPalette.glowRange.lowerBound), AvatarResolvedPalette.glowRange.upperBound)
         refresh()
+        return true
     }
 
     @discardableResult
@@ -188,6 +194,7 @@ public final class AvatarPaletteStore: ObservableObject {
         }
         chassisOverride = nil
         trimOverride = nil
+        glowIntensity = 1.0
         emotionOverrides = [:]
         refresh()
     }

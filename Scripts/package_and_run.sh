@@ -49,7 +49,6 @@ if [[ -d "$ROOT_DIR/Resources/Sounds" ]]; then
 fi
 
 "$ROOT_DIR/Scripts/render_info_plist.sh" "$APP_NAME" "$BUNDLE_ID" "$CONTENTS_DIR/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :BitzLocalDevLicenseToken string BITZ1.eyJsaWNlbnNlX2lkIjoiQlRaLUxPQ0FMLURFVi1QUk8iLCJ0aWVyIjoicHJvIiwiaXNzdWVkX2F0IjoxNzc1NjAwMDAwLCJwdXJjaGFzZXJfZW1haWwiOiJsb2NhbC1kZXZAYml0ei5hcHAifQ.7O-bo3C8CbTRuI3ZL2iFQ6biivRBy2POB2PZunmOjgQ2zJRu0Abb3dgOlHNkm3APF-g4pbH1xSEjtOaJsHa7DQ" "$CONTENTS_DIR/Info.plist"
 
 # Hardened runtime (no --deep: the bundle has no nested code); entitlements grant mic and Apple Events access
 codesign --force --options runtime --entitlements "$ROOT_DIR/Scripts/Bitz.entitlements" --sign - "$APP_BUNDLE"

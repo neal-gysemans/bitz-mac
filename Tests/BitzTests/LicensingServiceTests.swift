@@ -79,12 +79,13 @@ final class LicensingServiceTests: XCTestCase {
     // MARK: - Tests
 
     @MainActor
-    func testInitialStateDefaultsToFree() {
+    func testInitialStateDefaultsToFreeUnderProductionPolicy() {
         let storage = MockLicenseStorage()
-        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData, accessPolicy: .production)
 
         XCTAssertEqual(service.currentTier, .free)
         XCTAssertNil(service.activeLicense)
+        XCTAssertFalse(service.isBetaAccessActive)
 
         // Pro features are locked
         for feature in BitzFeature.allCases {
@@ -93,9 +94,155 @@ final class LicensingServiceTests: XCTestCase {
     }
 
     @MainActor
+    func testDefaultBetaAccessPolicyUnlocksProBeforeSunsetDate() {
+        let storage = MockLicenseStorage()
+        let midBetaDate = Date(timeIntervalSince1970: 1_795_000_000) // Inside 2026-11-10 ..< 2027-01-09
+        let service = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData,
+            clock: { midBetaDate }
+        )
+
+        XCTAssertEqual(service.currentTier, .pro)
+        XCTAssertTrue(service.isBetaAccessActive)
+        XCTAssertNil(service.activeLicense)
+
+        for feature in BitzFeature.allCases {
+            XCTAssertTrue(service.isFeatureUnlocked(feature))
+        }
+    }
+
+    @MainActor
+    func testBetaAccessPolicySunsetAndClockRollbackGuardrail() {
+        let storage = MockLicenseStorage()
+        var currentTime = Date(timeIntervalSince1970: 1_795_000_000)
+
+        let service = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData,
+            accessPolicy: .current,
+            clock: { currentTime }
+        )
+        XCTAssertEqual(service.currentTier, .pro)
+        XCTAssertTrue(service.isBetaAccessActive)
+
+        // 1. Advance clock past Beta sunset deadline (2027-01-09T00:00:00Z)
+        currentTime = BetaAccessPolicy.defaultSunsetDate.addingTimeInterval(1)
+        XCTAssertFalse(service.isFeatureUnlocked(.multiMascot))
+        XCTAssertEqual(service.currentTier, .free)
+        XCTAssertFalse(service.isBetaAccessActive)
+
+        // 2. Roll clock back before build timestamp floor (2026-11-10T00:00:00Z)
+        currentTime = BetaAccessPolicy.defaultBuildDate.addingTimeInterval(-60)
+        service.refreshEntitlement()
+        XCTAssertEqual(service.currentTier, .free)
+        XCTAssertFalse(service.isBetaAccessActive)
+        XCTAssertFalse(service.isFeatureUnlocked(.customThemes))
+    }
+
+    @MainActor
+    func testRevokedLocalDevTokenRejectedAndPurged() throws {
+        // 1. Token signed with test key using revoked ID "BTZ-LOCAL-DEV-PRO"
+        let revokedTestToken = try makeToken(licenseId: "BTZ-LOCAL-DEV-PRO")
+        let storage = MockLicenseStorage(token: revokedTestToken)
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData, accessPolicy: .production)
+
+        XCTAssertEqual(service.currentTier, .free)
+        XCTAssertNil(service.activeLicense)
+        XCTAssertNil(storage.loadLicenseToken(), "Revoked dev token must be purged from storage on init")
+
+        XCTAssertThrowsError(try service.activateLicense(key: revokedTestToken)) { error in
+            XCTAssertEqual(error as? LicensingError, .revokedLicense)
+        }
+
+        // 2. Historical leaked production token from package_and_run.sh rejected against defaultPublicKeyData
+        let historicalLeakedToken = "BITZ1.eyJsaWNlbnNlX2lkIjoiQlRaLUxPQ0FMLURFVi1QUk8iLCJ0aWVyIjoicHJvIiwiaXNzdWVkX2F0IjoxNzc1NjAwMDAwLCJwdXJjaGFzZXJfZW1haWwiOiJsb2NhbC1kZXZAYml0ei5hcHAifQ.7O-bo3C8CbTRuI3ZL2iFQ6biivRBy2POB2PZunmOjgQ2zJRu0Abb3dgOlHNkm3APF-g4pbH1xSEjtOaJsHa7DQ"
+        XCTAssertThrowsError(
+            try LicensingService.validate(
+                token: historicalLeakedToken,
+                publicKeyData: LicensingService.defaultPublicKeyData
+            )
+        ) { error in
+            XCTAssertEqual(error as? LicensingError, .revokedLicense)
+        }
+    }
+
+    @MainActor
+    func testRuntimeLicenseExpirationTransitionsToFree() throws {
+        let storage = MockLicenseStorage()
+        var currentTime = Date(timeIntervalSince1970: 1_795_000_000)
+        let service = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData,
+            accessPolicy: .production,
+            clock: { currentTime }
+        )
+
+        let shortLivedKey = try makeToken(
+            issuedAt: currentTime.timeIntervalSince1970,
+            expiresAt: currentTime.addingTimeInterval(60).timeIntervalSince1970
+        )
+        try service.activateLicense(key: shortLivedKey)
+        XCTAssertEqual(service.currentTier, .pro)
+        XCTAssertTrue(service.isFeatureUnlocked(.multiMascot))
+
+        // Advance time past expiration while session is running
+        currentTime = currentTime.addingTimeInterval(120)
+        XCTAssertFalse(service.isFeatureUnlocked(.multiMascot))
+        XCTAssertEqual(service.currentTier, .free)
+        XCTAssertNil(service.activeLicense)
+        XCTAssertNil(storage.loadLicenseToken())
+    }
+
+    @MainActor
+    func testEntitlementOverrideLiveSwitching() {
+        let storage = MockLicenseStorage()
+        let midBetaDate = Date(timeIntervalSince1970: 1_795_000_000)
+        let service = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData,
+            accessPolicy: .current,
+            clock: { midBetaDate }
+        )
+
+        XCTAssertEqual(service.entitlementOverride, .automatic)
+        XCTAssertEqual(service.currentTier, .pro)
+        XCTAssertTrue(service.isBetaAccessActive)
+
+        // Simulate GA Free Tier (Gate Closed)
+        service.setEntitlementOverride(.simulateFreeTier)
+        XCTAssertEqual(service.currentTier, .free)
+        XCTAssertFalse(service.isBetaAccessActive)
+        XCTAssertFalse(service.isFeatureUnlocked(.multiMascot))
+
+        // Simulate Paid Pro License
+        service.setEntitlementOverride(.simulatePaidPro)
+        XCTAssertEqual(service.currentTier, .pro)
+        XCTAssertFalse(service.isBetaAccessActive)
+        XCTAssertEqual(service.activeLicense?.licenseId, "BTZ-QA-SIMULATED-PRO")
+        XCTAssertTrue(service.isFeatureUnlocked(.multiMascot))
+
+        // Reset back to Default (Beta All-Access)
+        service.setEntitlementOverride(.automatic)
+        XCTAssertEqual(service.currentTier, .pro)
+        XCTAssertTrue(service.isBetaAccessActive)
+        XCTAssertNil(service.activeLicense)
+    }
+
+    func testFeatureComingSoonClassification() {
+        XCTAssertFalse(BitzFeature.multiMascot.isComingSoon)
+        XCTAssertFalse(BitzFeature.customThemes.isComingSoon)
+        XCTAssertFalse(BitzFeature.multiAgentSwarm.isComingSoon)
+        XCTAssertFalse(BitzFeature.meetingRecorder.isComingSoon)
+        XCTAssertFalse(BitzFeature.personality.isComingSoon)
+        XCTAssertTrue(BitzFeature.deepTelemetry.isComingSoon)
+        XCTAssertTrue(BitzFeature.soundPacks.isComingSoon)
+    }
+
+    @MainActor
     func testValidLicenseActivationUnlocksPro() throws {
         let storage = MockLicenseStorage()
-        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData, accessPolicy: .production)
 
         let key = try makeToken(licenseId: "BTZ-PRO-2026-ALPHA")
         try service.activateLicense(key: key)
@@ -118,7 +265,7 @@ final class LicensingServiceTests: XCTestCase {
         let key = try makeToken(licenseId: "BTZ-PERSISTED-001")
         let storage = MockLicenseStorage(token: key)
 
-        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData, accessPolicy: .production)
 
         XCTAssertEqual(service.currentTier, .pro)
         XCTAssertEqual(service.activeLicense?.licenseId, "BTZ-PERSISTED-001")
@@ -128,7 +275,7 @@ final class LicensingServiceTests: XCTestCase {
     @MainActor
     func testCorruptSignatureThrowsAndLeavesFree() throws {
         let storage = MockLicenseStorage()
-        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData, accessPolicy: .production)
 
         let corruptKey = try makeToken(tamperSignature: true)
 
@@ -144,7 +291,7 @@ final class LicensingServiceTests: XCTestCase {
     @MainActor
     func testMalformedTokenFormatThrows() {
         let storage = MockLicenseStorage()
-        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData, accessPolicy: .production)
 
         let invalidTokens = [
             "",
@@ -166,7 +313,7 @@ final class LicensingServiceTests: XCTestCase {
     @MainActor
     func testExpiredLicenseThrowsAndLeavesFree() throws {
         let storage = MockLicenseStorage()
-        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData, accessPolicy: .production)
 
         let expiredKey = try makeToken(
             expiresAt: Date().timeIntervalSince1970 - 3600 // Expired 1 hour ago
@@ -183,7 +330,7 @@ final class LicensingServiceTests: XCTestCase {
     @MainActor
     func testDeactivationRevertsToFreeAndClearsStorage() throws {
         let storage = MockLicenseStorage()
-        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData, accessPolicy: .production)
 
         let key = try makeToken()
         try service.activateLicense(key: key)
@@ -199,7 +346,7 @@ final class LicensingServiceTests: XCTestCase {
     @MainActor
     func testCorruptStoredTokenPurgedOnInit() {
         let storage = MockLicenseStorage(token: "CORRUPTED-TOKEN-RECEIPT")
-        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData, accessPolicy: .production)
 
         XCTAssertEqual(service.currentTier, .free)
         XCTAssertNil(service.activeLicense)
@@ -235,7 +382,7 @@ final class LicensingServiceTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let storage = MockLicenseStorage()
-        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData, accessPolicy: .production)
 
         // Free tier
         let freeStore = AvatarPaletteStore(userDefaults: defaults, licensingService: service)
@@ -249,12 +396,14 @@ final class LicensingServiceTests: XCTestCase {
         XCTAssertTrue(freeStore.selectPreset(.colorblindSafe))
         XCTAssertEqual(freeStore.selectedPreset, .colorblindSafe)
 
-        // Custom hex overrides rejected on Free
+        // Custom hex overrides and custom glow intensity rejected on Free
         XCTAssertFalse(freeStore.setChassisHex("#112233"))
         XCTAssertNil(freeStore.chassisOverride)
         XCTAssertFalse(freeStore.setTrimHex("#445566"))
         XCTAssertNil(freeStore.trimOverride)
         XCTAssertFalse(freeStore.setEmotionHex("#AABBCC", for: .superCharged))
+        XCTAssertFalse(freeStore.setGlowIntensity(1.4))
+        XCTAssertEqual(freeStore.glowIntensity, 1.0, accuracy: 0.001)
 
         // Activate Pro
         let token = try makeToken()
@@ -265,9 +414,18 @@ final class LicensingServiceTests: XCTestCase {
         XCTAssertTrue(proStore.selectPreset(.tokyoNight))
         XCTAssertEqual(proStore.selectedPreset, .tokyoNight)
 
-        // Custom hex overrides allowed
+        // Custom hex overrides and custom glow intensity allowed
         XCTAssertTrue(proStore.setChassisHex("#112233"))
         XCTAssertEqual(proStore.chassisOverride, "#112233")
+        XCTAssertTrue(proStore.setGlowIntensity(1.4))
+        XCTAssertEqual(proStore.glowIntensity, 1.4, accuracy: 0.001)
+
+        // Downgrade back to Free resets preset, overrides, and glow intensity
+        try service.deactivateLicense()
+        proStore.validateTierEntitlement()
+        XCTAssertEqual(proStore.selectedPreset, .cyberpunkClassic)
+        XCTAssertNil(proStore.chassisOverride)
+        XCTAssertEqual(proStore.glowIntensity, 1.0, accuracy: 0.001)
     }
 
     @MainActor
@@ -277,28 +435,44 @@ final class LicensingServiceTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let storage = MockLicenseStorage()
-        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData, accessPolicy: .production)
 
         let monitor = AgentMonitorService(userDefaults: defaults, licensingService: service)
+        XCTAssertEqual(monitor.catalog.filter(\.isEnabled).map(\.id), ["claude"])
 
-        // Free tier: start Agent A
+        // Free tier: start Agent A ("claude")
         monitor.handleEvent(AgentEvent(agentID: "claude", agentName: "Claude Code", kind: .working))
         XCTAssertEqual(monitor.activeAgents, ["claude"])
 
-        // Agent B starts on Free tier: replaces Agent A, so count remains 1
+        // Agent B ("antigravity") event is ignored on Free tier while Agent A is active
         monitor.handleEvent(AgentEvent(agentID: "antigravity", agentName: "Antigravity", kind: .working))
-        XCTAssertEqual(monitor.activeAgents, ["antigravity"])
+        XCTAssertEqual(monitor.activeAgents, ["claude"])
         XCTAssertEqual(monitor.activeAgents.count, 1)
 
-        // Activate Pro
+        // Switching enabled agent on Free tier to "antigravity" disables "claude" and clears its active state
+        monitor.setAgentEnabled(id: "antigravity", isEnabled: true)
+        XCTAssertEqual(monitor.catalog.filter(\.isEnabled).map(\.id), ["antigravity"])
+        XCTAssertTrue(monitor.activeAgents.isEmpty)
+
+        monitor.handleEvent(AgentEvent(agentID: "antigravity", agentName: "Antigravity", kind: .working))
+        XCTAssertEqual(monitor.activeAgents, ["antigravity"])
+
+        // Activate Pro and validate entitlement: all built-in agents enabled, Swarm allows concurrent agents
         let token = try makeToken()
         try service.activateLicense(key: token)
+        monitor.validateTierEntitlement()
+        XCTAssertGreaterThan(monitor.catalog.filter(\.isEnabled).count, 1)
 
-        // Now start Agent A alongside Agent B: Swarm allows both simultaneously
         monitor.handleEvent(AgentEvent(agentID: "claude", agentName: "Claude Code", kind: .working))
         XCTAssertTrue(monitor.activeAgents.contains("claude"))
         XCTAssertTrue(monitor.activeAgents.contains("antigravity"))
         XCTAssertEqual(monitor.activeAgents.count, 2)
+
+        // Deactivate Pro and validate entitlement: clamps enabled catalog to 1 and prunes secondary active agents
+        try service.deactivateLicense()
+        monitor.validateTierEntitlement()
+        XCTAssertEqual(monitor.catalog.filter(\.isEnabled).count, 1)
+        XCTAssertEqual(monitor.activeAgents.count, 1)
     }
 
     @MainActor
@@ -308,7 +482,7 @@ final class LicensingServiceTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let storage = MockLicenseStorage()
-        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData, accessPolicy: .production)
 
         let store = PersonalitySettingsStore(userDefaults: defaults, licensingService: service)
         XCTAssertFalse(store.isPersonalityUnlocked)
@@ -340,7 +514,7 @@ final class LicensingServiceTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let storage = MockLicenseStorage()
-        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData, accessPolicy: .production)
 
         let settings = MeetingSettingsStore(userDefaults: defaults)
         let recorder = MeetingRecorderService(

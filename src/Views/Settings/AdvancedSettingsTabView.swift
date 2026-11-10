@@ -9,6 +9,7 @@ public struct AdvancedSettingsTabView: View {
     @ObservedObject public var updateStore: AppUpdateStore
     public var agentMonitor: AgentMonitorService?
     @ObservedObject public var meetingSettings: MeetingSettingsStore
+    public var licensingService: LicensingService?
 
     @State private var launchAtLoginEnabled: Bool = (SMAppService.mainApp.status == .enabled)
     @State private var launchAtLoginMessage: String? = Self.launchAtLoginApprovalMessage(for: SMAppService.mainApp.status)
@@ -18,13 +19,15 @@ public struct AdvancedSettingsTabView: View {
         activityMonitor: ActivityMonitorService,
         updateStore: AppUpdateStore,
         agentMonitor: AgentMonitorService? = nil,
-        meetingRecorder: MeetingRecorderService
+        meetingRecorder: MeetingRecorderService,
+        licensingService: LicensingService? = nil
     ) {
         self.meetingSettings = meetingRecorder.settingsStore
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.updateStore = updateStore
         self.agentMonitor = agentMonitor
+        self.licensingService = licensingService
     }
 
     /// Shown on open too, since macOS can already be waiting for approval before the toggle is touched.
@@ -153,6 +156,36 @@ public struct AdvancedSettingsTabView: View {
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                             }
+                        }
+                    }
+
+                    if let licensingService {
+                        Divider()
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("QA / Developer Licensing Entitlement Override:")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                if licensingService.entitlementOverride != .automatic {
+                                    Button("Reset Override") {
+                                        licensingService.setEntitlementOverride(.automatic)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.mini)
+                                }
+                            }
+
+                            Picker("Entitlement Mode", selection: Binding(
+                                get: { licensingService.entitlementOverride },
+                                set: { licensingService.setEntitlementOverride($0) }
+                            )) {
+                                ForEach(BitzEntitlementOverride.allCases) { mode in
+                                    Text(mode.displayName).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.segmented)
                         }
                     }
                 }

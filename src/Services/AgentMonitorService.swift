@@ -74,8 +74,14 @@ public final class AgentMonitorService: ObservableObject {
 
     private static let customAgentsKey = "Bitz.AgentMonitor.CustomAgents"
     private static let agentDisabledPrefix = "Bitz.AgentMonitor.Disabled."
+    private static let primaryFreeAgentKey = "Bitz.AgentMonitor.PrimaryFreeAgentID"
     private static let popupsEnabledKey = "Bitz.AgentMonitor.PopupsEnabled"
     private static let signalSettingsKey = "Bitz.AgentMonitor.SignalSettings"
+
+    /// Whether Multi-Agent Swarm (monitoring 2+ agents simultaneously) is unlocked.
+    public var isMultiAgentSwarmUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.multiAgentSwarm) ?? true
+    }
 
     public init(
         adapters: [AgentAdapter] = [],
@@ -96,7 +102,7 @@ public final class AgentMonitorService: ObservableObject {
         loadCatalog()
     }
 
-    /// Loads built-in and user-custom agent definitions.
+    /// Loads built-in and user-custom agent definitions, clamping to at most 1 enabled agent when `.multiAgentSwarm` is locked (#144).
     public func loadCatalog() {
         var merged: [AgentDefinition] = []
         for builtIn in AgentDefinition.builtInCatalog {
@@ -115,6 +121,27 @@ public final class AgentMonitorService: ObservableObject {
                 merged.append(def)
             }
         }
+
+        if !isMultiAgentSwarmUnlocked {
+            let storedPrimary = userDefaults.string(forKey: Self.primaryFreeAgentKey)
+            let chosenPrimaryID: String
+            if let storedPrimary {
+                // An empty string means the user explicitly toggled off their single Free-tier agent.
+                chosenPrimaryID = storedPrimary
+            } else {
+                let activeCandidate = activeAgents.sorted().first { activeID in
+                    merged.contains { $0.id == activeID && $0.isEnabled }
+                }
+                let fallbackCandidate = merged.first(where: { $0.isEnabled })?.id ?? ""
+                chosenPrimaryID = activeCandidate ?? fallbackCandidate
+                userDefaults.set(chosenPrimaryID, forKey: Self.primaryFreeAgentKey)
+            }
+
+            for index in merged.indices {
+                merged[index].isEnabled = merged[index].isEnabled && (merged[index].id == chosenPrimaryID)
+            }
+        }
+
         self.catalog = merged
     }
 
@@ -134,7 +161,11 @@ public final class AgentMonitorService: ObservableObject {
         if let encoded = try? JSONEncoder().encode(existingCustom) {
             userDefaults.set(encoded, forKey: Self.customAgentsKey)
         }
+        if !isMultiAgentSwarmUnlocked {
+            userDefaults.set(id, forKey: Self.primaryFreeAgentKey)
+        }
         loadCatalog()
+        pruneStateForDisabledAgents()
     }
 
     /// Removes a custom agent definition by ID.
@@ -144,27 +175,67 @@ public final class AgentMonitorService: ObservableObject {
         if let encoded = try? JSONEncoder().encode(existingCustom) {
             userDefaults.set(encoded, forKey: Self.customAgentsKey)
         }
+        if userDefaults.string(forKey: Self.primaryFreeAgentKey) == id {
+            userDefaults.removeObject(forKey: Self.primaryFreeAgentKey)
+        }
         loadCatalog()
+        pruneStateForDisabledAgents()
     }
 
     /// Enables or disables an agent definition.
     public func setAgentEnabled(id: String, isEnabled: Bool) {
         userDefaults.set(!isEnabled, forKey: Self.agentDisabledPrefix + id)
+        if !isMultiAgentSwarmUnlocked {
+            if isEnabled {
+                userDefaults.set(id, forKey: Self.primaryFreeAgentKey)
+            } else if userDefaults.string(forKey: Self.primaryFreeAgentKey) == id {
+                userDefaults.set("", forKey: Self.primaryFreeAgentKey)
+            }
+        }
         loadCatalog()
         if !isEnabled {
-            activeAgents.remove(id)
-            if activePopup?.agentName == catalog.first(where: { $0.id == id })?.displayName {
-                activePopup = nil
+            clearAgentState(id: id)
+        }
+        pruneStateForDisabledAgents()
+    }
+
+    /// Re-evaluates Multi-Agent Swarm entitlement after a tier change (`#144`).
+    public func validateTierEntitlement() {
+        if isMultiAgentSwarmUnlocked {
+            userDefaults.removeObject(forKey: Self.primaryFreeAgentKey)
+        } else {
+            let currentPrimary = userDefaults.string(forKey: Self.primaryFreeAgentKey)
+            if currentPrimary == nil || currentPrimary?.isEmpty == true {
+                userDefaults.removeObject(forKey: Self.primaryFreeAgentKey)
             }
-            sessions[id] = nil
-            contextReadings[id] = nil
-            if latestContext?.agentID == id { latestContext = nil }
-            if activeWarning?.agentID == id {
-                acknowledgeWarning()
-            } else if approvalOverrideAgentID == id {
-                approvalOverrideAgentID = nil
-                presentWarningBubble()
-            }
+        }
+        loadCatalog()
+        pruneStateForDisabledAgents()
+    }
+
+    private func pruneStateForDisabledAgents() {
+        let enabledIDs = Set(catalog.filter(\.isEnabled).map(\.id))
+        let trackedIDs = activeAgents
+            .union(sessions.keys)
+            .union(contextReadings.keys)
+        for id in trackedIDs where !enabledIDs.contains(id) {
+            clearAgentState(id: id)
+        }
+    }
+
+    private func clearAgentState(id: String) {
+        activeAgents.remove(id)
+        if activePopup?.agentName == catalog.first(where: { $0.id == id })?.displayName {
+            activePopup = nil
+        }
+        sessions[id] = nil
+        contextReadings[id] = nil
+        if latestContext?.agentID == id { latestContext = nil }
+        if activeWarning?.agentID == id {
+            acknowledgeWarning()
+        } else if approvalOverrideAgentID == id {
+            approvalOverrideAgentID = nil
+            presentWarningBubble()
         }
     }
 
@@ -245,6 +316,11 @@ public final class AgentMonitorService: ObservableObject {
 
         // Verify if agent is enabled in catalog
         guard let agentDef = catalog.first(where: { $0.id == event.agentID }), agentDef.isEnabled else {
+            return
+        }
+
+        // When Multi-Agent Swarm is locked, strictly ignore events from a 2nd concurrent agent while a 1st agent is active (#144)
+        if !isMultiAgentSwarmUnlocked, !activeAgents.isEmpty, !activeAgents.contains(event.agentID) {
             return
         }
 
@@ -379,14 +455,9 @@ public final class AgentMonitorService: ObservableObject {
     }
 
     private func registerActiveAgent(_ id: String) {
-        if let licensingService, !licensingService.isFeatureUnlocked(.multiAgentSwarm) {
-            // Free tier: allow 1 active simultaneously monitored agent.
-            // If another agent is already active and this agent takes over activity,
-            // replace active set so only 1 agent is active at any time.
-            if !activeAgents.contains(id) && !activeAgents.isEmpty {
+        if !isMultiAgentSwarmUnlocked {
+            if activeAgents.isEmpty || activeAgents.contains(id) {
                 activeAgents = [id]
-            } else {
-                activeAgents.insert(id)
             }
         } else {
             activeAgents.insert(id)

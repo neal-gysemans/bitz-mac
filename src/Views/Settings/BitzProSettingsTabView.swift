@@ -73,7 +73,20 @@ public struct BitzProSettingsTabView: View {
 
                 Spacer()
 
-                if licensingService.currentTier == .pro {
+                if licensingService.currentTier == .pro && licensingService.isBetaAccessActive && licensingService.activeLicense == nil {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.mint)
+                            .frame(width: 8, height: 8)
+                        Text("BETA ALL-ACCESS")
+                            .font(.caption.bold())
+                            .foregroundStyle(.mint)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.mint.opacity(0.14))
+                    .clipShape(Capsule())
+                } else if licensingService.currentTier == .pro {
                     HStack(spacing: 6) {
                         Circle()
                             .fill(Color.green)
@@ -104,7 +117,7 @@ public struct BitzProSettingsTabView: View {
 
             if licensingService.currentTier == .pro, let license = licensingService.activeLicense {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("All Pro companions, themes, and power tools are unlocked.")
+                    Text("All shipped Pro companions, themes, and power tools are unlocked.")
                         .font(.body)
                         .foregroundStyle(.primary)
 
@@ -137,6 +150,32 @@ public struct BitzProSettingsTabView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+            } else if licensingService.currentTier == .pro && licensingService.isBetaAccessActive {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Early Adopter Beta — All Pro Features Unlocked Free")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+
+                    Text("All 5 shipped Bitz Pro features (Mascot Roster, Palette & Visor Studio, Multi-Agent Swarm, Local Meeting Assistant, and AI Personality) are unlocked at no cost during the Early Adopter Beta.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+
+                    if let sunsetDate = licensingService.accessPolicy.sunsetDate {
+                        let dateString = DateFormatter.localizedString(
+                            from: sunsetDate,
+                            dateStyle: .medium,
+                            timeStyle: .none
+                        )
+                        HStack(spacing: 8) {
+                            Text("Beta Access Ends:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(dateString)
+                                .font(.caption.bold())
+                                .foregroundStyle(.mint)
+                        }
+                    }
+                }
             } else {
                 Text("You are using the Free tier. Bitz the Cyber Cat, wellness timers, single-agent monitoring, and standard telemetry are completely free without time limits.")
                     .font(.body)
@@ -161,7 +200,7 @@ public struct BitzProSettingsTabView: View {
 
     private var licenseManagementSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if licensingService.currentTier == .free {
+            if licensingService.activeLicense == nil {
                 Text("ACTIVATE A LICENSE KEY")
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
@@ -208,25 +247,37 @@ public struct BitzProSettingsTabView: View {
                     }
                 }
 
-                HStack {
-                    Text("Don't have a license key yet?")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Spacer()
-
-                    Link(destination: URL(string: "https://bitz.sh")!) {
-                        Label("Upgrade to Bitz Pro", systemImage: "arrow.up.right")
-                            .font(.caption.bold())
+                if licensingService.isBetaAccessActive {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sparkles")
+                            .font(.caption)
+                            .foregroundStyle(.mint)
+                        Text("No license key is required during the Early Adopter Beta. If you have a supporter or QA key, you can activate it above.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
+                    .padding(.top, 2)
+                } else {
+                    HStack {
+                        Text("Don't have a license key yet?")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Spacer()
+
+                        Link(destination: URL(string: "https://bitz.sh")!) {
+                            Label("Upgrade to Bitz Pro", systemImage: "arrow.up.right")
+                                .font(.caption.bold())
+                        }
+                    }
+                    .padding(.top, 4)
                 }
-                .padding(.top, 4)
             } else {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("License Management")
                             .font(.headline)
-                        Text("Deactivating will return Bitz to the Free tier and remove the key from Keychain.")
+                        Text("Deactivating removes the license key from Keychain.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -239,6 +290,16 @@ public struct BitzProSettingsTabView: View {
                         Text("Deactivate License")
                     }
                     .buttonStyle(.bordered)
+                }
+
+                if let successMessage {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text(successMessage)
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
                 }
             }
         }
@@ -260,59 +321,72 @@ public struct BitzProSettingsTabView: View {
                     icon: "pawprint.circle.fill",
                     color: .purple,
                     title: "Mascot Roster",
-                    description: "Byte (Dog), Aero (Hover Drone), Pixel (Mech), and seasonal avatars."
+                    description: "Drako (Dragon), Byte (Dog), Aero (Hover Drone), Pixel (Mech), and Volt (Bunny).",
+                    isComingSoon: BitzFeature.multiMascot.isComingSoon
                 )
 
                 featureCard(
                     icon: "paintpalette.fill",
                     color: .cyan,
                     title: "Palette & Visor Studio",
-                    description: "Custom themes (Synthwave, Tokyo Night, Monokai) and LED matrices."
+                    description: "Custom themes (Tokyo Night, Dracula, Matrix, Nord) and LED color overrides.",
+                    isComingSoon: BitzFeature.customThemes.isComingSoon
                 )
 
                 featureCard(
                     icon: "cpu.fill",
                     color: .blue,
                     title: "Multi-Agent Swarm",
-                    description: "Simultaneously monitor 2+ AI coding agents with aggregated HUD alerts."
+                    description: "Simultaneously monitor 2+ AI coding agents with aggregated HUD alerts.",
+                    isComingSoon: BitzFeature.multiAgentSwarm.isComingSoon
                 )
 
                 featureCard(
                     icon: "mic.fill",
                     color: .orange,
                     title: "Meeting Assistant",
-                    description: "Local microphone & system audio recording with private on-device Speech transcription."
+                    description: "Local microphone & system audio recording with private on-device Speech transcription.",
+                    isComingSoon: BitzFeature.meetingRecorder.isComingSoon
                 )
 
                 featureCard(
                     icon: "sparkles",
                     color: .mint,
                     title: "AI Personality",
-                    description: "On-device Apple Foundation Models commentary with Snarky, Supportive, and Cute presets."
+                    description: "On-device Apple Foundation Models commentary with Snarky, Supportive, and Cute presets.",
+                    isComingSoon: BitzFeature.personality.isComingSoon
                 )
 
                 featureCard(
                     icon: "chart.xyaxis.line",
                     color: .green,
                     title: "Deep Telemetry",
-                    description: "Per-process battery drain and browser tab memory consumption."
+                    description: "Per-process battery drain and browser tab memory consumption.",
+                    isComingSoon: BitzFeature.deepTelemetry.isComingSoon
                 )
 
                 featureCard(
                     icon: "speaker.wave.3.fill",
                     color: .pink,
                     title: "Audio Studio Packs",
-                    description: "Extra sound packs: Chiptune, Mechanical Switches, and Soft Chimes."
+                    description: "Extra sound packs: Chiptune, Mechanical Switches, and Soft Chimes.",
+                    isComingSoon: BitzFeature.soundPacks.isComingSoon
                 )
             }
         }
     }
 
-    private func featureCard(icon: String, color: Color, title: String, description: String) -> some View {
+    private func featureCard(
+        icon: String,
+        color: Color,
+        title: String,
+        description: String,
+        isComingSoon: Bool = false
+    ) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
                 .font(.title3)
-                .foregroundStyle(color)
+                .foregroundStyle(isComingSoon ? color.opacity(0.6) : color)
                 .frame(width: 24, height: 24)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -320,7 +394,11 @@ public struct BitzProSettingsTabView: View {
                     Text(title)
                         .font(.subheadline.bold())
                     Spacer()
-                    ProBadgeView()
+                    if isComingSoon {
+                        comingSoonBadge
+                    } else {
+                        ProBadgeView()
+                    }
                 }
 
                 Text(description)
@@ -336,6 +414,22 @@ public struct BitzProSettingsTabView: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 1)
         )
+    }
+
+    private var comingSoonBadge: some View {
+        Text("COMING SOON")
+            .font(.system(size: 9, weight: .bold, design: .rounded))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                Capsule()
+                    .fill(Color.secondary.opacity(0.14))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color.secondary.opacity(0.25), lineWidth: 0.5)
+            )
     }
 
     // MARK: - Actions
@@ -367,7 +461,11 @@ public struct BitzProSettingsTabView: View {
 
         do {
             try licensingService.deactivateLicense()
-            successMessage = "License deactivated. Reverted to Free tier."
+            if licensingService.isBetaAccessActive {
+                successMessage = "License key removed from Keychain. Early Adopter Beta All-Access remains active."
+            } else {
+                successMessage = "License deactivated. Reverted to Free tier."
+            }
         } catch {
             errorMessage = "Failed to deactivate: \(error.localizedDescription)"
         }
