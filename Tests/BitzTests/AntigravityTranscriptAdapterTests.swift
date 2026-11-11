@@ -1,3 +1,4 @@
+import SQLite3
 import XCTest
 @testable import BitzCore
 
@@ -283,5 +284,106 @@ final class AntigravityTranscriptAdapterTests: XCTestCase {
         try Data().write(to: lateTranscript)
 
         XCTAssertEqual(adapter.sessionCandidates().count, 2)
+    }
+
+    func testExtractsSessionIDFromTranscriptURL() {
+        let url = URL(fileURLWithPath: "/Users/user/.gemini/antigravity/brain/session-uuid-123/.system_generated/logs/transcript.jsonl")
+        XCTAssertEqual(AntigravityTranscriptAdapter.sessionID(fromTranscriptURL: url), "session-uuid-123")
+    }
+
+    func testDetectsToolPermissionApprovalFromDatabaseAndTransitionsBackToWorking() throws {
+        let sessionID = "approval-session-456"
+        let sessionDir = tempBrainDir.appendingPathComponent(sessionID)
+        let logsDir = sessionDir.appendingPathComponent(".system_generated/logs")
+        try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+        let transcriptURL = logsDir.appendingPathComponent("transcript.jsonl")
+        try Data().write(to: transcriptURL)
+
+        let conversationsDir = tempBrainDir.appendingPathComponent("conversations")
+        try FileManager.default.createDirectory(at: conversationsDir, withIntermediateDirectories: true)
+        let dbURL = conversationsDir.appendingPathComponent("\(sessionID).db")
+
+        // Set up SQLite steps table in the session database
+        var db: OpaquePointer?
+        guard sqlite3_open(dbURL.path, &db) == SQLITE_OK else {
+            XCTFail("Failed to create test SQLite database")
+            return
+        }
+        sqlite3_exec(db, "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER);", nil, nil, nil)
+        sqlite3_close(db)
+
+        let adapter = AntigravityTranscriptAdapter(
+            baseBrainURL: tempBrainDir,
+            conversationsDirectoryURL: conversationsDir
+        )
+        let collector = Collector()
+        adapter.setHandlerForTesting { collector.append($0) }
+        adapter.checkForUpdates()
+
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        defer { try? handle.close() }
+
+        // 1. User Input -> .working
+        let userLine = "{\"step_index\":1,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"content\":\"run inspection\"}\n"
+        handle.seekToEndOfFile()
+        handle.write(Data(userLine.utf8))
+        adapter.checkForUpdates()
+
+        var lifecycle = collector.snapshot.filter { $0.kind != .usage }
+        XCTAssertEqual(lifecycle.count, 1)
+        XCTAssertEqual(lifecycle.last?.kind, .working)
+
+        // 2. Model outputs tool call for run_command
+        let commandLine = "{\"step_index\":2,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"CommandLine\":\"ls -la\"}}]}\n"
+        handle.seekToEndOfFile()
+        handle.write(Data(commandLine.utf8))
+        adapter.checkForUpdates()
+
+        // Still 1 lifecycle event because run_command is not ask_question and status is not yet 9
+        lifecycle = collector.snapshot.filter { $0.kind != .usage }
+        XCTAssertEqual(lifecycle.count, 1)
+
+        // 3. Antigravity pauses execution and prompts user for permission (status == 9)
+        var writeDB: OpaquePointer?
+        sqlite3_open(dbURL.path, &writeDB)
+        sqlite3_exec(writeDB, "INSERT INTO steps VALUES (2, 132, 9);", nil, nil, nil)
+        sqlite3_close(writeDB)
+
+        adapter.checkForUpdates()
+
+        // Adapter must detect status == 9 and emit .needsApproval
+        lifecycle = collector.snapshot.filter { $0.kind != .usage }
+        XCTAssertEqual(lifecycle.count, 2)
+        XCTAssertEqual(lifecycle.last?.kind, .needsApproval)
+        XCTAssertEqual(lifecycle.last?.message, "Antigravity needs your approval!")
+
+        // Repeated check does not emit duplicate .needsApproval
+        adapter.checkForUpdates()
+        lifecycle = collector.snapshot.filter { $0.kind != .usage }
+        XCTAssertEqual(lifecycle.count, 2)
+
+        // 4. User selects an option / approves (status becomes 3)
+        sqlite3_open(dbURL.path, &writeDB)
+        sqlite3_exec(writeDB, "UPDATE steps SET status = 3 WHERE idx = 2;", nil, nil, nil)
+        sqlite3_close(writeDB)
+
+        adapter.checkForUpdates()
+
+        // Adapter detects status cleared from 9 and emits .working
+        lifecycle = collector.snapshot.filter { $0.kind != .usage }
+        XCTAssertEqual(lifecycle.count, 3)
+        XCTAssertEqual(lifecycle.last?.kind, .working)
+        XCTAssertEqual(lifecycle.last?.message, "Antigravity is working...")
+
+        // 5. Command finishes and model completes turn
+        let doneLine = "{\"step_index\":3,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"content\":\"all done\"}\n"
+        handle.seekToEndOfFile()
+        handle.write(Data(doneLine.utf8))
+        adapter.checkForUpdates()
+
+        lifecycle = collector.snapshot.filter { $0.kind != .usage }
+        XCTAssertEqual(lifecycle.count, 4)
+        XCTAssertEqual(lifecycle.last?.kind, .done)
+        XCTAssertEqual(lifecycle.last?.message, "Antigravity is done!")
     }
 }

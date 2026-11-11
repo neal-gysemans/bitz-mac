@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 /// Agent adapter that monitors Antigravity's active session transcript (`transcript.jsonl`)
 /// in `~/.gemini/antigravity/brain/<id>/.system_generated/logs/`.
@@ -8,6 +9,7 @@ public final class AntigravityTranscriptAdapter: AgentAdapter, @unchecked Sendab
     public let agentName: String = "Antigravity"
 
     public let baseBrainURL: URL
+    public let conversationsDirectoryURL: URL?
     public let pollInterval: TimeInterval
     public let maxIdleScanInterval: TimeInterval
     private let clock: @Sendable () -> Date
@@ -16,6 +18,7 @@ public final class AntigravityTranscriptAdapter: AgentAdapter, @unchecked Sendab
 
     private var tail = SessionLogTail()
     private var tracker = AgentSessionTracker(agentID: "antigravity", agentName: "Antigravity", startsTurnOnPrompt: true)
+    private var isAwaitingApproval = false
     private let lock = NSLock()
 
     private struct CachedSessionEntry {
@@ -40,11 +43,13 @@ public final class AntigravityTranscriptAdapter: AgentAdapter, @unchecked Sendab
 
     public init(
         baseBrainURL: URL = AntigravityTranscriptAdapter.defaultBrainURL,
+        conversationsDirectoryURL: URL? = nil,
         pollInterval: TimeInterval = 1.5,
         maxIdleScanInterval: TimeInterval = 30.0,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.baseBrainURL = baseBrainURL
+        self.conversationsDirectoryURL = conversationsDirectoryURL ?? baseBrainURL.deletingLastPathComponent().appendingPathComponent("conversations", isDirectory: true)
         self.pollInterval = pollInterval
         self.maxIdleScanInterval = max(pollInterval, maxIdleScanInterval)
         self.currentScanInterval = pollInterval
@@ -84,6 +89,7 @@ public final class AntigravityTranscriptAdapter: AgentAdapter, @unchecked Sendab
             eventHandler = nil
             tail = SessionLogTail()
             tracker.reset()
+            isAwaitingApproval = false
             cachedBrainModified = nil
             cachedSubdirs.removeAll()
             cachedCandidates.removeAll()
@@ -232,17 +238,98 @@ public final class AntigravityTranscriptAdapter: AgentAdapter, @unchecked Sendab
                 let seed = tail.attach(to: chosen)
                 // History primes turn state silently, so a turn in progress still ends in done (FR-014).
                 tracker.reset()
+                isAwaitingApproval = false
                 tracker.prime(fromSeed: seed.lines.flatMap(Self.entries(fromLine:)))
                 handler(tracker.usageEvent(at: now, seed: true))
+                checkApprovalStatus(at: now, handler: handler)
                 return
             }
         }
 
         let read = tail.readNew()
-        guard read.grew else { return }
-        currentScanInterval = pollInterval
-        tracker.ingest(read.lines.flatMap(Self.entries(fromLine:)), at: now).forEach(handler)
-        handler(tracker.usageEvent(at: now, seed: false))
+        if read.grew {
+            currentScanInterval = pollInterval
+            let events = tracker.ingest(read.lines.flatMap(Self.entries(fromLine:)), at: now)
+            for event in events {
+                if event.kind == .needsApproval {
+                    isAwaitingApproval = true
+                } else if event.kind == .working || event.kind == .done {
+                    isAwaitingApproval = false
+                }
+                handler(event)
+            }
+            handler(tracker.usageEvent(at: now, seed: false))
+        }
+
+        checkApprovalStatus(at: now, handler: handler)
+    }
+
+    /// Extracts the session ID (conversation UUID) from a transcript URL `.../<sessionID>/.system_generated/logs/transcript.jsonl`.
+    public static func sessionID(fromTranscriptURL url: URL) -> String? {
+        let logsDir = url.deletingLastPathComponent()
+        let sysGenDir = logsDir.deletingLastPathComponent()
+        let sessionDir = sysGenDir.deletingLastPathComponent()
+        let candidate = sessionDir.lastPathComponent
+        guard !candidate.isEmpty && candidate != "/" else { return nil }
+        return candidate
+    }
+
+    private func databaseURL(forSessionID sessionID: String) -> URL? {
+        guard let conversationsDir = conversationsDirectoryURL else { return nil }
+        return conversationsDir.appendingPathComponent("\(sessionID).db", isDirectory: false)
+    }
+
+    /// Checks if the session's SQLite database has an active step waiting for user input or approval (status == 9).
+    public static func isSessionWaitingForApproval(databaseURL: URL) -> Bool {
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else { return false }
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(databaseURL.path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else {
+            return false
+        }
+        defer { sqlite3_close(db) }
+
+        var stmt: OpaquePointer?
+        let query = "SELECT 1 FROM steps WHERE status = 9 LIMIT 1;"
+        guard sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK else {
+            return false
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        return sqlite3_step(stmt) == SQLITE_ROW
+    }
+
+    private func checkApprovalStatus(at now: Date, handler: @Sendable (AgentEvent) -> Void) {
+        guard let transcriptURL = tail.url,
+              let sessionID = Self.sessionID(fromTranscriptURL: transcriptURL),
+              let dbURL = databaseURL(forSessionID: sessionID),
+              FileManager.default.fileExists(atPath: dbURL.path) else {
+            return
+        }
+
+        let isWaiting = Self.isSessionWaitingForApproval(databaseURL: dbURL)
+        if isWaiting && !isAwaitingApproval {
+            isAwaitingApproval = true
+            currentScanInterval = pollInterval
+            handler(AgentEvent(
+                agentID: agentID,
+                agentName: agentName,
+                kind: .needsApproval,
+                message: "\(agentName) needs your approval!",
+                timestamp: now
+            ))
+        } else if !isWaiting && isAwaitingApproval {
+            isAwaitingApproval = false
+            currentScanInterval = pollInterval
+            if tracker.turnActive {
+                handler(AgentEvent(
+                    agentID: agentID,
+                    agentName: agentName,
+                    kind: .working,
+                    message: "\(agentName) is working...",
+                    timestamp: now
+                ))
+            }
+        }
     }
 
     /// Maps one Antigravity transcript line to tracker entries; unknown lines yield [.toolResult(id: nil)] only.
