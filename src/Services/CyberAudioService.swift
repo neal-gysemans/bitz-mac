@@ -13,9 +13,13 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
     public let environmentDetector: AudioEnvironmentDetecting
     public let dateProvider: @Sendable () -> Date
     public var randomPurrIntervalProvider: @Sendable () -> TimeInterval
+    /// Provider of the active companion character archetype (defaults to .defaultCharacter) (`#150`).
+    public var selectedCharacterProvider: @MainActor () -> MascotCharacter
 
     // Preloaded sound buffers decoded once at launch
     public private(set) var loadedBuffers: [CyberSoundEvent: AVAudioPCMBuffer] = [:]
+    // Preloaded archetype-specific companion reaction buffers (#150)
+    public private(set) var loadedCharacterBuffers: [MascotCharacter: AVAudioPCMBuffer] = [:]
 
     private static let candidateBasePaths = [
         "Resources/Sounds/",
@@ -53,12 +57,14 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
         environmentDetector: AudioEnvironmentDetecting = AudioEnvironmentDetector(),
         dateProvider: @escaping @Sendable () -> Date = { Date() },
         randomPurrIntervalProvider: @escaping @Sendable () -> TimeInterval = { Double.random(in: 45.0...90.0) },
+        selectedCharacterProvider: @escaping @MainActor () -> MascotCharacter = { .defaultCharacter },
         engine: AVAudioEngine = AVAudioEngine()
     ) {
         self.settingsStore = settingsStore
         self.environmentDetector = environmentDetector
         self.dateProvider = dateProvider
         self.randomPurrIntervalProvider = randomPurrIntervalProvider
+        self.selectedCharacterProvider = selectedCharacterProvider
         self.engine = engine
         self.mixerNode = engine.mainMixerNode
         self.purrNode = AVAudioPlayerNode()
@@ -131,6 +137,30 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
                 } catch {
                     #if DEBUG
                     print("[CyberAudioService] Failed to decode \(event.assetFileName): \(error)")
+                    #endif
+                }
+            }
+        }
+
+        // Preload archetype companion reaction sound buffers (#150)
+        for character in MascotCharacter.allCases {
+            if character == .cyberCat, let catBuffer = loadedBuffers[.purr] {
+                loadedCharacterBuffers[.cyberCat] = catBuffer
+                continue
+            }
+            if let url = resolveAssetURL(for: character.reactionSoundFileName) {
+                do {
+                    let audioFile = try AVAudioFile(forReading: url)
+                    let format = audioFile.processingFormat
+                    let frameCount = AVAudioFrameCount(audioFile.length)
+                    guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+                        continue
+                    }
+                    try audioFile.read(into: buffer)
+                    loadedCharacterBuffers[character] = buffer
+                } catch {
+                    #if DEBUG
+                    print("[CyberAudioService] Failed to decode \(character.reactionSoundFileName): \(error)")
                     #endif
                 }
             }
@@ -373,19 +403,35 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
         }
     }
 
-    /// Plays a single natural purr cycle (~3.0s), automatically pausing the engine when complete.
-    public func playPurrBurst() {
+    /// Resolves the audio buffer for a given companion character's reaction sound,
+    /// falling back to the universal Bitz cyber cat purr if the asset is missing or fails to decode (`FR-003`, `#150`).
+    public func reactionBuffer(for character: MascotCharacter) -> AVAudioPCMBuffer? {
+        loadedCharacterBuffers[character] ?? loadedBuffers[.purr]
+    }
+
+    /// Plays a single natural reaction burst (~1.3s–3.0s) for the active companion,
+    /// automatically pausing the engine when complete (`#150`).
+    public func playPurrBurst(for character: MascotCharacter? = nil, bypassSuppression: Bool = false) {
         guard settingsStore.isEnabled, settingsStore.isPurrEnabled else { return }
         if environmentDetector.isSystemOutputMuted() { return }
-        if settingsStore.isCallSuppressionEnabled && environmentDetector.isMicrophoneOrScreenCaptureActive() { return }
-        if settingsStore.isFocusDNDSuppressionEnabled && environmentDetector.isFocusOrDNDActive() { return }
+        if !bypassSuppression {
+            if settingsStore.isCallSuppressionEnabled && environmentDetector.isMicrophoneOrScreenCaptureActive() { return }
+            if settingsStore.isFocusDNDSuppressionEnabled && environmentDetector.isFocusOrDNDActive() { return }
+        }
 
-        guard let buffer = loadedBuffers[.purr] else { return }
+        let targetCharacter = character ?? selectedCharacterProvider()
+        guard let buffer = reactionBuffer(for: targetCharacter) else { return }
         guard ensureEngineRunning() else { return }
 
         isPurring = true
         purrNode.stop()
         purrFadeTask?.cancel()
+
+        let currentFormat = purrNode.outputFormat(forBus: 0)
+        if currentFormat.channelCount != buffer.format.channelCount || currentFormat.sampleRate != buffer.format.sampleRate {
+            engine.disconnectNodeOutput(purrNode)
+            engine.connect(purrNode, to: mixerNode, format: buffer.format)
+        }
 
         purrNode.volume = 0.50
         let purrCompletion: @Sendable () -> Void = { [weak self] in
@@ -398,6 +444,15 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
         }
         purrNode.scheduleBuffer(buffer, at: nil, options: [], completionHandler: purrCompletion)
         purrNode.play()
+    }
+
+    /// Audition preview for a specific companion character's reaction sound (`FR-005`, `#150`).
+    /// Bypasses active character selection and cooldown, but respects master audio toggle and system mute.
+    public func playReactionSound(for character: MascotCharacter) {
+        guard settingsStore.isEnabled, settingsStore.isPurrEnabled else { return }
+        if environmentDetector.isSystemOutputMuted() { return }
+
+        playPurrBurst(for: character, bypassSuppression: true)
     }
 
     /// Stops any active purr audio immediately and evaluates power gating.
@@ -515,6 +570,27 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
                 }
 
                 previousActiveCount = currentCount
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Attaches observations to AvatarCharacterStore to follow the selected companion (`FR-002`, `#150`).
+    public func observe(characterStore: AvatarCharacterStore) {
+        selectedCharacterProvider = { [weak characterStore] in
+            characterStore?.selectedCharacter ?? .defaultCharacter
+        }
+
+        characterStore.$selectedCharacter
+            .sink { [weak self] newCharacter in
+                guard let self else { return }
+                // Pre-align purrNode output format if companion reaction buffer format differs
+                if let buffer = self.reactionBuffer(for: newCharacter) {
+                    let currentFormat = self.purrNode.outputFormat(forBus: 0)
+                    if currentFormat.channelCount != buffer.format.channelCount || currentFormat.sampleRate != buffer.format.sampleRate {
+                        self.engine.disconnectNodeOutput(self.purrNode)
+                        self.engine.connect(self.purrNode, to: self.mixerNode, format: buffer.format)
+                    }
+                }
             }
             .store(in: &cancellables)
     }

@@ -1,0 +1,79 @@
+{
+  "mission_slug": "archetype-sound-design-01M75HR0",
+  "mission_number": "",
+  "mission_type": "software-dev",
+  "overall_verdict": "pass",
+  "criteria": [
+    {
+      "criterion_id": "FR-001",
+      "description": "Per-companion reaction sound: each companion archetype has its own distinct reaction sound",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/MascotCharacterTests.swift, Tests/BitzTests/CyberAudioServiceTests.swift",
+      "pass_fail": "pass",
+      "verified_by": "Antigravity",
+      "verified_at": "2026-11-12T01:00:00.000000+00:00",
+      "notes": "Verified all 6 companion sound metadata and loaded buffers."
+    },
+    {
+      "criterion_id": "FR-002",
+      "description": "Live routing to active companion on character change without restart",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/CyberAudioServiceTests.swift::testCompanionSelectionRoutingViaStore",
+      "pass_fail": "pass",
+      "verified_by": "Antigravity",
+      "verified_at": "2026-11-12T01:00:00.000000+00:00",
+      "notes": "AvatarCharacterStore observation immediately routes reaction buffer in CyberAudioService."
+    },
+    {
+      "criterion_id": "FR-003",
+      "description": "Fallback to Bitz cat purr if companion reaction sound is missing or fails to load",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/CyberAudioServiceTests.swift::testReactionBufferFallbackToPurr",
+      "pass_fail": "pass",
+      "verified_by": "Antigravity",
+      "verified_at": "2026-11-12T01:00:00.000000+00:00",
+      "notes": "reactionBuffer(for:) safely falls back to purr buffer if character buffer is absent."
+    },
+    {
+      "criterion_id": "FR-004",
+      "description": "Companion-aware Audio settings row displaying active companion reaction sound and test preview",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/AudioSettingsViewsTests.swift::testAudioSettingsTabViewReactionSoundRowDynamicTitle",
+      "pass_fail": "pass",
+      "verified_by": "Antigravity",
+      "verified_at": "2026-11-12T01:02:00.000000+00:00",
+      "notes": "AudioSettingsTabView dynamically updates row title and test button routes reaction audio."
+    },
+    {
+      "criterion_id": "FR-005",
+      "description": "Roster card sound preview allowing users to audition companions before selecting",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/AudioSettingsViewsTests.swift::testAppearanceCharacterRosterSectionViewAuditionButton",
+      "pass_fail": "pass",
+      "verified_by": "Antigravity",
+      "verified_at": "2026-11-12T01:02:00.000000+00:00",
+      "notes": "Audition button invokes playReactionSound without mutating active selection or opening popover."
+    },
+    {
+      "criterion_id": "FR-006",
+      "description": "Preference continuity carrying over purr toggle to govern companion reaction audio",
+      "proof_type": "automated_test",
+      "evidence": "Tests/BitzTests/CyberAudioServiceTests.swift::testPlayReactionSoundAuditionBypassesActiveSelection",
+      "pass_fail": "pass",
+      "verified_by": "Antigravity",
+      "verified_at": "2026-11-12T01:00:00.000000+00:00",
+      "notes": "Existing isPurrEnabled toggle directly governs companion reaction audio."
+    },
+    {
+      "criterion_id": "FR-007",
+      "description": "Reproducible companion sound assets synthesized via checked-in generator with CC0 license",
+      "proof_type": "manual_inspection",
+      "evidence": "Scripts/generate_archetype_sounds.py, src/Resources/Sounds/LICENSE.md",
+      "pass_fail": "pass",
+      "verified_by": "Antigravity",
+      "verified_at": "2026-11-12T00:53:00.000000+00:00",
+      "notes": "5 WAVs synthesized in Mono 22,050 Hz Int16, all < 100 KB and <= 3.0s, documented in LICENSE.md."
+    }
+  ],
+  "negative_invariants": []
+}

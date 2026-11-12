@@ -1,6 +1,8 @@
 # macOS / Xcode / SwiftPM
 .DS_Store
 .build/
+.agents/
+skills-lock.json
 DerivedData/
 *.xcuserdata
 
@@ -18,3 +20,5 @@ DerivedData/
 .kittify/workspaces/
 
 build/
+.agents/
+skills-lock.json

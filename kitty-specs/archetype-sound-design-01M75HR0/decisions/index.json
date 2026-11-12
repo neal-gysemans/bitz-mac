@@ -1,0 +1,31 @@
+{
+  "entries": [
+    {
+      "created_at": "2026-11-11T14:57:05.213227Z",
+      "decision_id": "01M75HSKNXC9TKZ9WJWTN2EGZX",
+      "final_answer": "Procedurally synthesized by a checked-in generator script (deterministic, license-clean, <100 KB); if the resulting sounds are rejected in listening review, fall back to curated CC0/public-domain recordings",
+      "input_key": "companion_sound_asset_sourcing",
+      "mission_id": "01M75HR09P6FQMEF8WFX5D8XQB",
+      "mission_slug": "archetype-sound-design-01M75HR0",
+      "opened_by": "cli",
+      "options": [
+        "Procedurally synthesized by a checked-in generator script (deterministic, license-clean, <100 KB)",
+        "Curated CC0/public-domain recordings processed to fit",
+        "You will supply the WAV files",
+        "Other"
+      ],
+      "origin_flow": "specify",
+      "other_answer": false,
+      "question": "How should the 5 new companion reaction sounds (Drako, Byte, Aero, Pixel, Volt) be sourced?",
+      "rationale": null,
+      "resolved_at": "2026-11-11T15:00:42.112867Z",
+      "resolved_by": null,
+      "slot_key": "specify.assets.sourcing",
+      "status": "resolved",
+      "step_id": null,
+      "summary_json": null
+    }
+  ],
+  "mission_id": "01M75HR09P6FQMEF8WFX5D8XQB",
+  "version": 1
+}

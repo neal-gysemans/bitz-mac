@@ -8,6 +8,7 @@ public struct AppearanceCharacterRosterSectionView: View {
     @ObservedObject private var settingsWindowManager: SettingsWindowManager = .shared
     public var engine: WellnessPointEngine?
     public var licensingService: (any LicensingServiceProtocol)?
+    public var audioPlayer: (any CyberAudioPlaying)?
 
     @State private var showingProPopover: Bool = false
     @State private var proPopoverTitle: String = "Bitz Pro Companion"
@@ -21,12 +22,14 @@ public struct AppearanceCharacterRosterSectionView: View {
         characterStore: AvatarCharacterStore,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         engine: WellnessPointEngine? = nil,
-        licensingService: (any LicensingServiceProtocol)? = nil
+        licensingService: (any LicensingServiceProtocol)? = nil,
+        audioPlayer: (any CyberAudioPlaying)? = nil
     ) {
         self.characterStore = characterStore
         self.paletteStore = paletteStore
         self.engine = engine
         self.licensingService = licensingService
+        self.audioPlayer = audioPlayer
     }
 
     public var body: some View {
@@ -155,6 +158,26 @@ public struct AppearanceCharacterRosterSectionView: View {
                             .foregroundStyle(.secondary)
 
                         Spacer()
+
+                        // Audition reaction sound button (#150)
+                        Button {
+                            audioPlayer?.playReactionSound(for: character)
+                        } label: {
+                            Image(systemName: "speaker.wave.2.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 24, height: 24)
+                                .background(
+                                    Circle()
+                                        .fill(Color.secondary.opacity(0.12))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .highPriorityGesture(TapGesture().onEnded {
+                            audioPlayer?.playReactionSound(for: character)
+                        })
+                        .help("Audition \(character.name)'s reaction sound (\(character.reactionSoundDisplayName))")
+                        .accessibilityLabel("Audition \(character.name) reaction sound")
 
                         if isSelected {
                             Label("Active", systemImage: "checkmark.circle.fill")

@@ -163,6 +163,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
 
         self.audioService.observe(wellnessEngine: self.engine)
         self.audioService.observe(agentMonitor: self.agentMonitor)
+        self.audioService.observe(characterStore: self.characterStore)
         self.flowShieldService.observe(wellnessEngine: self.engine)
         self.approvalStore.bind(agentMonitor: self.agentMonitor)
 

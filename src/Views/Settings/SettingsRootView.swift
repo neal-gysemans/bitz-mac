@@ -219,7 +219,8 @@ public struct SettingsRootView: View {
                 engine: engine,
                 paletteStore: paletteStore,
                 characterStore: characterStore,
-                licensingService: licensingService
+                licensingService: licensingService,
+                audioPlayer: audioPlayer
             )
         case .behaviors:
             BehaviorSettingsTabView(
@@ -243,7 +244,8 @@ public struct SettingsRootView: View {
                 settingsStore: audioSettings,
                 audioPlayer: audioPlayer,
                 meetingRecorder: meetingRecorder,
-                licensingService: licensingService
+                licensingService: licensingService,
+                characterStore: characterStore
             )
         case .telemetry:
             TelemetrySettingsTabView(

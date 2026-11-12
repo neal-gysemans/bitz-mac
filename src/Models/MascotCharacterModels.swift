@@ -109,4 +109,28 @@ public enum MascotCharacter: String, CaseIterable, Identifiable, Codable, Sendab
         case .cyberBunny: return "🐰 *boing!* Twin blade ears at 100%!"
         }
     }
+
+    /// Descriptive name of the archetype-specific petting/comfort reaction sound (`FR-001`, `#150`).
+    public var reactionSoundDisplayName: String {
+        switch self {
+        case .cyberCat: return "Soothing Cat Purr"
+        case .cyberDragon: return "Plasma Wyvern Rumble"
+        case .cyberDog: return "Tactical Servo Whine"
+        case .hoverDrone: return "Antigravity Turbine Spool"
+        case .retroMech: return "Hydraulic Stepper Click"
+        case .cyberBunny: return "High-Voltage Capacitor Chirp"
+        }
+    }
+
+    /// Bundled audio asset filename of the archetype-specific reaction sound (`FR-001`, `#150`).
+    public var reactionSoundFileName: String {
+        switch self {
+        case .cyberCat: return "purr_loop.wav"
+        case .cyberDragon: return "drako_plasma_rumble.wav"
+        case .cyberDog: return "byte_servo_whine.wav"
+        case .hoverDrone: return "aero_turbine_spool.wav"
+        case .retroMech: return "pixel_stepper_click.wav"
+        case .cyberBunny: return "volt_capacitor_chirp.wav"
+        }
+    }
 }

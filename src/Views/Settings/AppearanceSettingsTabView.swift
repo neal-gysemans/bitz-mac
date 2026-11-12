@@ -10,6 +10,7 @@ public struct AppearanceSettingsTabView: View {
     @ObservedObject public var paletteStore: AvatarPaletteStore
     @ObservedObject public var characterStore: AvatarCharacterStore
     public var licensingService: (any LicensingServiceProtocol)?
+    public var audioPlayer: (any CyberAudioPlaying)?
 
     public init(
         scaleStore: AvatarScaleStore,
@@ -17,7 +18,8 @@ public struct AppearanceSettingsTabView: View {
         engine: WellnessPointEngine? = nil,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         characterStore: AvatarCharacterStore = AvatarCharacterStore(),
-        licensingService: (any LicensingServiceProtocol)? = nil
+        licensingService: (any LicensingServiceProtocol)? = nil,
+        audioPlayer: (any CyberAudioPlaying)? = nil
     ) {
         self.scaleStore = scaleStore
         self.opacityStore = opacityStore
@@ -25,6 +27,7 @@ public struct AppearanceSettingsTabView: View {
         self.paletteStore = paletteStore
         self.characterStore = characterStore
         self.licensingService = licensingService
+        self.audioPlayer = audioPlayer
     }
 
     public var body: some View {
@@ -37,7 +40,8 @@ public struct AppearanceSettingsTabView: View {
                 characterStore: characterStore,
                 paletteStore: paletteStore,
                 engine: engine,
-                licensingService: licensingService
+                licensingService: licensingService,
+                audioPlayer: audioPlayer
             )
 
             // Section 1: Avatar Size & Scale

@@ -51,7 +51,31 @@ final class MascotCharacterTests: XCTestCase {
             XCTAssertFalse(character.menuBarSymbolName.isEmpty)
             XCTAssertFalse(character.petVisorText.isEmpty)
             XCTAssertFalse(character.petReactionBubble.isEmpty)
+            XCTAssertFalse(character.reactionSoundDisplayName.isEmpty)
+            XCTAssertTrue(character.reactionSoundFileName.hasSuffix(".wav"))
         }
+
+        // Distinct reaction sound assets and names per companion (#150)
+        XCTAssertEqual(MascotCharacter.cyberCat.reactionSoundDisplayName, "Soothing Cat Purr")
+        XCTAssertEqual(MascotCharacter.cyberCat.reactionSoundFileName, "purr_loop.wav")
+
+        XCTAssertEqual(MascotCharacter.cyberDragon.reactionSoundDisplayName, "Plasma Wyvern Rumble")
+        XCTAssertEqual(MascotCharacter.cyberDragon.reactionSoundFileName, "drako_plasma_rumble.wav")
+
+        XCTAssertEqual(MascotCharacter.cyberDog.reactionSoundDisplayName, "Tactical Servo Whine")
+        XCTAssertEqual(MascotCharacter.cyberDog.reactionSoundFileName, "byte_servo_whine.wav")
+
+        XCTAssertEqual(MascotCharacter.hoverDrone.reactionSoundDisplayName, "Antigravity Turbine Spool")
+        XCTAssertEqual(MascotCharacter.hoverDrone.reactionSoundFileName, "aero_turbine_spool.wav")
+
+        XCTAssertEqual(MascotCharacter.retroMech.reactionSoundDisplayName, "Hydraulic Stepper Click")
+        XCTAssertEqual(MascotCharacter.retroMech.reactionSoundFileName, "pixel_stepper_click.wav")
+
+        XCTAssertEqual(MascotCharacter.cyberBunny.reactionSoundDisplayName, "High-Voltage Capacitor Chirp")
+        XCTAssertEqual(MascotCharacter.cyberBunny.reactionSoundFileName, "volt_capacitor_chirp.wav")
+
+        let allFileNames = Set(MascotCharacter.allCases.map(\.reactionSoundFileName))
+        XCTAssertEqual(allFileNames.count, 6, "Every companion must have a unique sound asset file name")
     }
 
     // MARK: - 2. AvatarCharacterStore Persistence & Fallback Tests

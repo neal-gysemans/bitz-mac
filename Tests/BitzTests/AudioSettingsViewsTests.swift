@@ -137,4 +137,70 @@ final class AudioSettingsViewsTests: XCTestCase {
 
         _ = menuView.body
     }
+
+    // MARK: - Companion Reaction Sound & Roster Audition UI Tests (#150)
+
+    func testAudioSettingsTabViewReactionSoundRowDynamicTitle() {
+        let suiteName = "AudioSettingsViewsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        let spyPlayer = SpyCyberAudioPlayer()
+        let charStore = AvatarCharacterStore(userDefaults: defaults)
+
+        let view = AudioSettingsTabView(
+            settingsStore: store,
+            audioPlayer: spyPlayer,
+            meetingRecorder: .stub(defaults: defaults),
+            characterStore: charStore
+        )
+        _ = view.body
+
+        // Verify initial selection (Bitz)
+        XCTAssertEqual(charStore.selectedCharacter, .cyberCat)
+        XCTAssertEqual(charStore.selectedCharacter.reactionSoundDisplayName, "Soothing Cat Purr")
+
+        // Switch to Drako
+        _ = charStore.selectCharacter(.cyberDragon)
+        XCTAssertEqual(charStore.selectedCharacter, .cyberDragon)
+        XCTAssertEqual(charStore.selectedCharacter.reactionSoundDisplayName, "Plasma Wyvern Rumble")
+        _ = view.body
+
+        // Switch to Byte
+        _ = charStore.selectCharacter(.cyberDog)
+        XCTAssertEqual(charStore.selectedCharacter, .cyberDog)
+        XCTAssertEqual(charStore.selectedCharacter.reactionSoundDisplayName, "Tactical Servo Whine")
+        _ = view.body
+    }
+
+    func testAppearanceCharacterRosterSectionViewAuditionButton() {
+        let suiteName = "AudioSettingsViewsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let charStore = AvatarCharacterStore(userDefaults: defaults)
+        let paletteStore = AvatarPaletteStore(userDefaults: defaults)
+        let spyPlayer = SpyCyberAudioPlayer()
+
+        let galleryView = AppearanceCharacterRosterSectionView(
+            characterStore: charStore,
+            paletteStore: paletteStore,
+            audioPlayer: spyPlayer
+        )
+        _ = galleryView.body
+
+        // Active companion is default (Bitz)
+        XCTAssertEqual(charStore.selectedCharacter, .cyberCat)
+
+        // Auditioning any character calls spyPlayer.playReactionSound without changing selection
+        spyPlayer.playReactionSound(for: .hoverDrone)
+        XCTAssertEqual(spyPlayer.playedCharacterReactions, [.hoverDrone])
+        XCTAssertEqual(charStore.selectedCharacter, .cyberCat, "Auditioning must not mutate selected companion")
+
+        // Audition locked character (e.g. Aero / Volt) without selection change
+        spyPlayer.playReactionSound(for: .cyberBunny)
+        XCTAssertEqual(spyPlayer.playedCharacterReactions, [.hoverDrone, .cyberBunny])
+        XCTAssertEqual(charStore.selectedCharacter, .cyberCat)
+    }
 }

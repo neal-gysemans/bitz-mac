@@ -9,6 +9,7 @@ public struct AudioSettingsTabView: View {
     @ObservedObject public var meetingSettings: MeetingSettingsStore
     @ObservedObject public var meetingRecorder: MeetingRecorderService
     public var licensingService: (any LicensingServiceProtocol)?
+    @ObservedObject public var characterStore: AvatarCharacterStore
     /// Built once in `.onAppear` (probing recognizers is not free), never in `body`.
     @State private var transcriptionLocaleOptions: [(id: String, label: String)] = []
     /// `syncWarning` reads the file system, so it runs when a folder changes, never in `body`.
@@ -20,13 +21,15 @@ public struct AudioSettingsTabView: View {
         settingsStore: CyberAudioSettingsStore,
         audioPlayer: (any CyberAudioPlaying)? = nil,
         meetingRecorder: MeetingRecorderService,
-        licensingService: (any LicensingServiceProtocol)? = nil
+        licensingService: (any LicensingServiceProtocol)? = nil,
+        characterStore: AvatarCharacterStore = AvatarCharacterStore()
     ) {
         self.settingsStore = settingsStore
         self.audioPlayer = audioPlayer
         self.meetingSettings = meetingRecorder.settingsStore
         self.meetingRecorder = meetingRecorder
         self.licensingService = licensingService
+        self.characterStore = characterStore
     }
 
     private var isMeetingRecorderUnlocked: Bool {
@@ -517,7 +520,7 @@ public struct AudioSettingsTabView: View {
                             set: { settingsStore.setEventEnabled(event, enabled: $0) }
                         )) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(event.displayName)
+                                Text(displayName(for: event))
                                     .font(.subheadline.bold())
                                 Text(eventDescription(for: event))
                                     .font(.caption)
@@ -529,7 +532,11 @@ public struct AudioSettingsTabView: View {
                         Spacer()
 
                         Button {
-                            audioPlayer?.play(event, bypassCooldown: true)
+                            if event == .purr {
+                                audioPlayer?.playReactionSound(for: characterStore.selectedCharacter)
+                            } else {
+                                audioPlayer?.play(event, bypassCooldown: true)
+                            }
                         } label: {
                             Label("Test", systemImage: "play.fill")
                                 .font(.caption)
@@ -612,10 +619,19 @@ public struct AudioSettingsTabView: View {
     /// The start chime has its own row in the Meeting Recorder card, outside the master switch.
     static let soundEffectEvents = CyberSoundEvent.allCases.filter { !$0.ignoresMasterAndFocus }
 
+    private func displayName(for event: CyberSoundEvent) -> String {
+        if event == .purr {
+            let character = characterStore.selectedCharacter
+            return "Companion Reaction: \(character.name) — \(character.reactionSoundDisplayName)"
+        }
+        return event.displayName
+    }
+
     private func eventDescription(for event: CyberSoundEvent) -> String {
         switch event {
         case .purr:
-            return "Warm, soothing cat purr (plays on petting & at random intervals when supercharged)"
+            let charName = characterStore.selectedCharacter.name
+            return "Comfort reaction for \(charName) (plays on petting & at random intervals when supercharged)"
         case .burnout:
             return "8-bit power-down pitch sweep when entering burnout"
         case .overheating:

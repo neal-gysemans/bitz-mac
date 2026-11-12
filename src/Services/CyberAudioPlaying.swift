@@ -12,6 +12,9 @@ public protocol CyberAudioPlaying: AnyObject {
     /// Plays a sound effect with an optional flag to bypass cooldown/rate-limit checks (for UI previews).
     func play(_ event: CyberSoundEvent, bypassCooldown: Bool)
 
+    /// Plays the reaction sound for a specific companion character (bypassing active companion selection and cooldown, e.g. for roster card previews) (`#150`).
+    func playReactionSound(for character: MascotCharacter)
+
     /// Controls whether the continuous mechanical purr loop is active.
     func setPurring(_ on: Bool)
 
@@ -26,6 +29,10 @@ public extension CyberAudioPlaying {
     func play(_ event: CyberSoundEvent) {
         play(event, bypassCooldown: false)
     }
+
+    func playReactionSound(for character: MascotCharacter) {
+        play(.purr, bypassCooldown: true)
+    }
 }
 
 /// A test spy conforming to `CyberAudioPlaying` for unit testing state machines,
@@ -33,6 +40,7 @@ public extension CyberAudioPlaying {
 @MainActor
 public final class SpyCyberAudioPlayer: CyberAudioPlaying {
     public private(set) var playedEvents: [CyberSoundEvent] = []
+    public private(set) var playedCharacterReactions: [MascotCharacter] = []
     public private(set) var purrHistory: [Bool] = []
     public private(set) var stopAllCallCount: Int = 0
     public var isPurring: Bool = false
@@ -41,6 +49,10 @@ public final class SpyCyberAudioPlayer: CyberAudioPlaying {
 
     public func play(_ event: CyberSoundEvent, bypassCooldown: Bool) {
         playedEvents.append(event)
+    }
+
+    public func playReactionSound(for character: MascotCharacter) {
+        playedCharacterReactions.append(character)
     }
 
     public func setPurring(_ on: Bool) {
@@ -55,6 +67,7 @@ public final class SpyCyberAudioPlayer: CyberAudioPlaying {
 
     public func reset() {
         playedEvents.removeAll()
+        playedCharacterReactions.removeAll()
         purrHistory.removeAll()
         stopAllCallCount = 0
         isPurring = false

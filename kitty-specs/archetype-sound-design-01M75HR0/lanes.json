@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "mission_slug": "archetype-sound-design-01M75HR0",
+  "mission_id": "01M75HR09P6FQMEF8WFX5D8XQB",
+  "mission_branch": "feat/issue-150-archetype-sound-design",
+  "target_branch": "feat/issue-150-archetype-sound-design",
+  "lanes": [
+    {
+      "lane_id": "lane-a",
+      "wp_ids": [
+        "WP01"
+      ],
+      "write_scope": [
+        "Scripts/generate_archetype_sounds.py",
+        "Resources/Sounds/LICENSE.md",
+        "Resources/Sounds/aero_turbine_spool.wav",
+        "Resources/Sounds/byte_servo_whine.wav",
+        "Resources/Sounds/drako_plasma_rumble.wav",
+        "Resources/Sounds/pixel_stepper_click.wav",
+        "Resources/Sounds/volt_capacitor_chirp.wav",
+        "src/Resources/Sounds/LICENSE.md",
+        "src/Resources/Sounds/aero_turbine_spool.wav",
+        "src/Resources/Sounds/byte_servo_whine.wav",
+        "src/Resources/Sounds/drako_plasma_rumble.wav",
+        "src/Resources/Sounds/pixel_stepper_click.wav",
+        "src/Resources/Sounds/volt_capacitor_chirp.wav"
+      ],
+      "predicted_surfaces": [],
+      "depends_on_lanes": [],
+      "parallel_group": 0
+    },
+    {
+      "lane_id": "lane-b",
+      "wp_ids": [
+        "WP02"
+      ],
+      "write_scope": [
+        "src/Models/MascotCharacterModels.swift",
+        "src/Services/CyberAudioPlaying.swift",
+        "Tests/BitzTests/MascotCharacterTests.swift"
+      ],
+      "predicted_surfaces": [],
+      "depends_on_lanes": [],
+      "parallel_group": 0
+    },
+    {
+      "lane_id": "lane-c",
+      "wp_ids": [
+        "WP03"
+      ],
+      "write_scope": [
+        "src/Services/CyberAudioService.swift",
+        "src/App/BitzApp.swift",
+        "Tests/BitzTests/CyberAudioServiceTests.swift"
+      ],
+      "predicted_surfaces": [],
+      "depends_on_lanes": [
+        "lane-a",
+        "lane-b"
+      ],
+      "parallel_group": 1
+    },
+    {
+      "lane_id": "lane-d",
+      "wp_ids": [
+        "WP04"
+      ],
+      "write_scope": [
+        "src/Views/Settings/AudioSettingsTabView.swift",
+        "src/Views/Settings/AppearanceCharacterRosterSectionView.swift",
+        "src/Views/Settings/AppearanceSettingsTabView.swift",
+        "src/Views/Settings/SettingsRootView.swift",
+        "Tests/BitzTests/AudioSettingsViewsTests.swift"
+      ],
+      "predicted_surfaces": [],
+      "depends_on_lanes": [
+        "lane-b",
+        "lane-c"
+      ],
+      "parallel_group": 2
+    },
+    {
+      "lane_id": "lane-e",
+      "wp_ids": [
+        "WP05"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/MascotOverlayLayoutTests.swift"
+      ],
+      "predicted_surfaces": [],
+      "depends_on_lanes": [
+        "lane-a",
+        "lane-b",
+        "lane-c",
+        "lane-d"
+      ],
+      "parallel_group": 3
+    }
+  ],
+  "computed_at": "2026-11-12T00:54:00.000000+00:00",
+  "computed_from": "dependency_graph+ownership",
+  "planning_artifact_wps": [],
+  "planning_commit_sha": "884d21a9386d34bcf1b70d4e3cbda0346a074092"
+}
