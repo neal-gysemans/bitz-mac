@@ -7,7 +7,6 @@ public final class KeychainLicenseStorage: LicenseStorageProtocol, @unchecked Se
     private let service: String
     private let account: String
     private let lock = NSLock()
-    private var didDeactivateInSession = false
 
     public init(
         service: String = "com.akramks.bitz.licensing",
@@ -39,20 +38,12 @@ public final class KeychainLicenseStorage: LicenseStorageProtocol, @unchecked Se
             return token
         }
 
-        if !didDeactivateInSession,
-           let bundledDevToken = Bundle.main.object(forInfoDictionaryKey: "BitzLocalDevLicenseToken") as? String,
-           !bundledDevToken.isEmpty {
-            return bundledDevToken
-        }
-
         return nil
     }
 
     public func saveLicenseToken(_ token: String) throws {
         lock.lock()
         defer { lock.unlock() }
-
-        didDeactivateInSession = false
 
         guard let tokenData = token.data(using: .utf8) else {
             throw LicensingError.storageFailed("Failed to encode license token to UTF-8 data")
@@ -84,8 +75,6 @@ public final class KeychainLicenseStorage: LicenseStorageProtocol, @unchecked Se
     public func deleteLicenseToken() throws {
         lock.lock()
         defer { lock.unlock() }
-
-        didDeactivateInSession = true
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

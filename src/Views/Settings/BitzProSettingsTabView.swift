@@ -7,9 +7,11 @@ public struct BitzProSettingsTabView: View {
     public var audioPlayer: (any CyberAudioPlaying)?
 
     @State private var licenseKeyInput: String = ""
+    @State private var emailInput: String = ""
     @State private var errorMessage: String? = nil
     @State private var successMessage: String? = nil
     @State private var isActivating: Bool = false
+    @State private var isEditingEmail: Bool = false
 
     public init(
         licensingService: LicensingService,
@@ -24,6 +26,8 @@ public struct BitzProSettingsTabView: View {
             headerSection
             Divider()
             planStatusCard
+            Divider()
+            emailRegistrationSection
             Divider()
             licenseManagementSection
             Divider()
@@ -167,7 +171,7 @@ public struct BitzProSettingsTabView: View {
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 8) {
-                    TextField("BITZ1.payload.signature", text: $licenseKeyInput)
+                    TextField("e.g. BTZ-BETA-XXXX-XXXX or BITZ1...", text: $licenseKeyInput)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
                         .autocorrectionDisabled()
@@ -236,9 +240,73 @@ public struct BitzProSettingsTabView: View {
                     Button(role: .destructive) {
                         deactivateKey()
                     } label: {
-                        Text("Deactivate License")
+                        Text("Deactivate this Mac")
                     }
                     .buttonStyle(.bordered)
+                }
+            }
+        }
+        .padding(14)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(10)
+    }
+
+    // MARK: - Email Registration (Beta Outreach & GA Perks)
+
+    private var emailRegistrationSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("BETA EARLY-ADOPTER PERKS")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+
+            if let registered = licensingService.registeredEmail, !registered.isEmpty, !isEditingEmail {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Linked Email: \(registered)")
+                            .font(.subheadline.bold())
+                        Text("You will receive exclusive early-adopter Pro perks and GA launch notifications.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Edit") {
+                        emailInput = registered
+                        isEditingEmail = true
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            } else {
+                Text("Register your email to receive an exclusive early-adopter Pro discount when Bitz launches.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    TextField("your.email@example.com", text: $emailInput)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.body)
+                        .autocorrectionDisabled()
+
+                    Button {
+                        registerEmail()
+                    } label: {
+                        Text("Save Email")
+                            .fontWeight(.semibold)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.cyan)
+                    .disabled(emailInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    if isEditingEmail {
+                        Button("Cancel") {
+                            isEditingEmail = false
+                            emailInput = ""
+                        }
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                    }
                 }
             }
         }
@@ -345,19 +413,21 @@ public struct BitzProSettingsTabView: View {
         successMessage = nil
         isActivating = true
 
-        defer { isActivating = false }
+        Task { @MainActor in
+            defer { isActivating = false }
 
-        do {
-            try licensingService.activateLicense(key: licenseKeyInput)
-            successMessage = "License successfully activated! Welcome to Bitz Pro."
-            licenseKeyInput = ""
-            audioPlayer?.play(.charging, bypassCooldown: true)
-        } catch let error as LocalizedError {
-            errorMessage = error.errorDescription ?? error.localizedDescription
-            audioPlayer?.play(.overheating, bypassCooldown: true)
-        } catch {
-            errorMessage = error.localizedDescription
-            audioPlayer?.play(.overheating, bypassCooldown: true)
+            do {
+                try await licensingService.activateLicense(key: licenseKeyInput)
+                successMessage = "License successfully activated! Welcome to Bitz Pro."
+                licenseKeyInput = ""
+                audioPlayer?.play(.charging, bypassCooldown: true)
+            } catch let error as LocalizedError {
+                errorMessage = error.errorDescription ?? error.localizedDescription
+                audioPlayer?.play(.overheating, bypassCooldown: true)
+            } catch {
+                errorMessage = error.localizedDescription
+                audioPlayer?.play(.overheating, bypassCooldown: true)
+            }
         }
     }
 
@@ -371,5 +441,24 @@ public struct BitzProSettingsTabView: View {
         } catch {
             errorMessage = "Failed to deactivate: \(error.localizedDescription)"
         }
+    }
+
+    private func registerEmail() {
+        errorMessage = nil
+        successMessage = nil
+
+        let trimmed = emailInput.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let emailRegex = "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
+        let isValid = trimmed.range(of: emailRegex, options: .regularExpression) != nil
+
+        guard isValid else {
+            errorMessage = "Please enter a valid email address."
+            return
+        }
+
+        licensingService.saveRegisteredEmail(trimmed)
+        successMessage = "Email saved for Beta perks & GA updates!"
+        emailInput = ""
+        isEditingEmail = false
     }
 }

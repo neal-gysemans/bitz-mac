@@ -101,7 +101,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         userDefaults: UserDefaults = .standard
     ) {
         self.userDefaults = userDefaults
-        let resolvedLicensingService = licensingService ?? LicensingService()
+        let resolvedLicensingService = licensingService ?? LicensingService(backendClient: SupabaseLicensingClient())
+        resolvedLicensingService.startPeriodicValidationSchedule()
         self.licensingService = resolvedLicensingService
         self.meetingRecorder = meetingRecorder ?? MeetingRecorderService(
             settingsStore: MeetingSettingsStore(userDefaults: userDefaults),
@@ -499,6 +500,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         agentMonitor.stopMonitoring()
         telemetryDashboard.stop()
         updateStore.stopPeriodicChecks()
+        licensingService.stopPeriodicValidationSchedule()
         audioService.stopAll()
         personalityTickCancellable = nil
         personalityEnabledCancellable = nil

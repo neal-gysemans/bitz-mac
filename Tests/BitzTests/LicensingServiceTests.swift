@@ -359,4 +359,171 @@ final class LicensingServiceTests: XCTestCase {
         recorder.perform(.openSettings)
         XCTAssertTrue(openedPro)
     }
+
+    // MARK: - Periodic Background Validation Tests
+
+    @MainActor
+    func testPeriodicValidationScheduleStartAndStop() {
+        let storage = MockLicenseStorage()
+        let service = LicensingService(storage: storage, publicKeyData: testPublicKeyData)
+
+        service.startPeriodicValidationSchedule(validationInterval: 0.1, wakeDebounce: 0.05, minCheckInterval: 0.01)
+        // Calling start again should safely replace any existing timers/observers
+        service.startPeriodicValidationSchedule(validationInterval: 0.1, wakeDebounce: 0.05, minCheckInterval: 0.01)
+        service.stopPeriodicValidationSchedule()
+    }
+
+    @MainActor
+    func testValidateActiveLicenseRemotelyRevokedKeyRevertsToFree() async throws {
+        let storage = MockLicenseStorage()
+        let mockBackend = MockLicensingTestBackend(validateHandler: { _, _ in
+            RemoteLicenseResult(valid: false, error: "revoked")
+        })
+        let service = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData,
+            backendClient: mockBackend
+        )
+
+        // Seed a BTZ- key in storage
+        let token = try makeToken(licenseId: "BTZ-BETA-ABCD-1234")
+        try service.activateOfflineLicense(key: token)
+        XCTAssertEqual(service.currentTier, .pro)
+
+        // Run remote validation - backend reports invalid!
+        await service.validateActiveLicenseRemotely()
+
+        XCTAssertEqual(service.currentTier, .free)
+        XCTAssertNil(service.activeLicense)
+    }
+
+    @MainActor
+    func testValidateActiveLicenseRemotelyValidPreservesPro() async throws {
+        let storage = MockLicenseStorage()
+        let mockBackend = MockLicensingTestBackend(validateHandler: { _, _ in
+            RemoteLicenseResult(valid: true, tier: "pro")
+        })
+        let service = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData,
+            backendClient: mockBackend
+        )
+
+        let token = try makeToken(licenseId: "BTZ-BETA-ABCD-5678")
+        try service.activateOfflineLicense(key: token)
+        XCTAssertEqual(service.currentTier, .pro)
+
+        await service.validateActiveLicenseRemotely()
+
+        XCTAssertEqual(service.currentTier, .pro)
+        XCTAssertNotNil(service.activeLicense)
+    }
+
+    @MainActor
+    func testValidateActiveLicenseRemotelyNetworkFailureGracePeriod() async throws {
+        let storage = MockLicenseStorage()
+        let mockBackend = MockLicensingTestBackend(validateHandler: { _, _ in
+            throw URLError(.notConnectedToInternet)
+        })
+        let service = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData,
+            backendClient: mockBackend
+        )
+
+        // Valid unexpired license
+        let token = try makeToken(licenseId: "BTZ-BETA-ABCD-9999", expiresAt: Date().addingTimeInterval(86400).timeIntervalSince1970)
+        try service.activateOfflineLicense(key: token)
+        XCTAssertEqual(service.currentTier, .pro)
+
+        // Remote validation fails with network error, but within grace period -> still Pro
+        await service.validateActiveLicenseRemotely()
+
+        XCTAssertEqual(service.currentTier, .pro)
+    }
+
+    @MainActor
+    func testStartupWithUnknownTokenPurgesAndRevertsToFree() {
+        let storage = MockLicenseStorage(token: "invalid_unauthenticated_random_token")
+        let service = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData
+        )
+
+        XCTAssertEqual(service.currentTier, .free)
+        XCTAssertNil(service.activeLicense)
+        XCTAssertNil(storage.loadLicenseToken())
+    }
+
+    @MainActor
+    func testDeactivateLicenseReleasesRemoteDeviceSeat() async throws {
+        let storage = MockLicenseStorage()
+        var deactivatedKey: String?
+        var deactivatedDevice: String?
+        let mockBackend = MockLicensingTestBackend(deactivateHandler: { key, device in
+            deactivatedKey = key
+            deactivatedDevice = device
+            return RemoteDeactivateResult(success: true, deactivated: true)
+        })
+
+        let service = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData,
+            backendClient: mockBackend
+        )
+
+        let token = try makeToken(licenseId: "BTZ-BETA-RELEASE-TEST")
+        try service.activateOfflineLicense(key: token)
+        XCTAssertEqual(service.currentTier, .pro)
+
+        try service.deactivateLicense()
+        XCTAssertEqual(service.currentTier, .free)
+        XCTAssertNil(service.activeLicense)
+
+        // Yield to allow non-blocking async deactivation task to run
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertEqual(deactivatedKey, "BTZ-BETA-RELEASE-TEST")
+        XCTAssertNotNil(deactivatedDevice)
+    }
+
+    @MainActor
+    func testValidateActiveLicenseRemotelyPurgesNonPrefixToken() async {
+        let storage = MockLicenseStorage()
+        let service = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData
+        )
+
+        // Force an unexpected payload in memory
+        service.saveRegisteredEmail("test@bitz.app")
+        await service.validateActiveLicenseRemotely()
+        // With currentTier .free, nothing happens
+        XCTAssertEqual(service.currentTier, .free)
+    }
+}
+
+// MARK: - Test Mock Backend Client
+
+private struct MockLicensingTestBackend: LicensingBackendClient {
+    var activateHandler: (@Sendable (String, String, String?) async throws -> RemoteLicenseResult)?
+    var validateHandler: (@Sendable (String, String) async throws -> RemoteLicenseResult)?
+    var registerEmailHandler: (@Sendable (String, String) async throws -> RemoteEmailResult)?
+    var deactivateHandler: (@Sendable (String, String) async throws -> RemoteDeactivateResult)?
+
+    func activateBeta(deviceId: String, deviceName: String, customerEmail: String?) async throws -> RemoteLicenseResult {
+        try await activateHandler?(deviceId, deviceName, customerEmail) ?? RemoteLicenseResult(valid: true)
+    }
+
+    func validate(licenseKey: String, deviceId: String) async throws -> RemoteLicenseResult {
+        try await validateHandler?(licenseKey, deviceId) ?? RemoteLicenseResult(valid: true)
+    }
+
+    func registerEmail(licenseKey: String, customerEmail: String) async throws -> RemoteEmailResult {
+        try await registerEmailHandler?(licenseKey, customerEmail) ?? RemoteEmailResult(success: true)
+    }
+
+    func deactivate(licenseKey: String, deviceId: String) async throws -> RemoteDeactivateResult {
+        try await deactivateHandler?(licenseKey, deviceId) ?? RemoteDeactivateResult(success: true, deactivated: true)
+    }
 }
