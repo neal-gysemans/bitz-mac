@@ -1,0 +1,40 @@
+name: CODEOWNERS Guardrail Check
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check-codeowners:
+    name: Verify Owner for Protected Paths
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - name: Check modified protected paths
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [ "$PR_AUTHOR" = "AkramKs" ] || [ "$PR_AUTHOR" = "neal-gysemans" ]; then
+            echo "✅ PR author '$PR_AUTHOR' is a listed code owner."
+            exit 0
+          fi
+
+          FILES=$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename') || exit 1
+          PROTECTED=$(printf '%s\n' "$FILES" | grep -E '^(\.github/|\.agents/|\.jules/|\.kittify/|AGENTS\.md$|CLAUDE\.md$|CONTRIBUTING\.md$|Package\.swift$|Scripts/)' || true)
+
+          if [ -n "$PROTECTED" ]; then
+            echo "❌ PR author '$PR_AUTHOR' is not a listed code owner for protected paths:"
+            echo "$PROTECTED"
+            exit 1
+          fi
+
+          echo "✅ No protected CODEOWNERS paths modified."

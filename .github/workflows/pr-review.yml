@@ -1,0 +1,68 @@
+name: OpenHands PR Review
+
+on:
+  pull_request_target:
+    types: [opened, ready_for_review, synchronize, reopened]
+    branches:
+      - main
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: self-hosted
+    timeout-minutes: 15
+    steps:
+      - name: Checkout OpenHands extensions
+        uses: actions/checkout@v4
+        with:
+          repository: OpenHands/extensions
+          ref: b98ac0671a51cc91bab3609bf4d334c7c832dd98
+          path: extensions
+
+      - name: Checkout PR repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: pr-repo
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+          enable-cache: 'false'
+
+      - name: Run OpenHands PR Review
+        env:
+          UV_PYTHON: '3.12'
+          AGENT_KIND: 'openhands'
+          LLM_MODEL: 'deepseek/deepseek-reasoner'
+          REQUIRE_EVIDENCE: 'true'
+          REQUIRE_PINNED_ACTIONS: 'false'
+          COLLECT_FEEDBACK: 'true'
+          REVIEW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          USE_SUB_AGENTS: 'false'
+          LOAD_PUBLIC_SKILLS: 'false'
+          LLM_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          REPO_NAME: ${{ github.repository }}
+        run: |
+          cd pr-repo
+          uv run --no-project --with 'openhands-sdk==1.60.1' --with 'openhands-tools==1.60.1' --with 'lmnr==0.7.67' \
+            python ../extensions/plugins/pr-review/scripts/agent_script.py

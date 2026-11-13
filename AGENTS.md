@@ -84,7 +84,7 @@ Bitz sits on the user's desktop all day alongside heavy IDEs and LLM agents. Reg
 
 ## 🔒 3. Issue Ticket & PR Lifecycle (STRICT)
 
-> **Private Repository Note**: `AkramKs/bitz-mac` is private. On GitHub Free accounts, branch protection rulesets are unavailable for private repos. Therefore, **all contributors and AI agents must strictly honor the PR and CI check lifecycle without exception**—never pushing directly to `main`.
+> **Private Repository Note**: `AkramKs/bitz-mac` is private. On GitHub Free accounts, branch protection rulesets are unavailable for private repos (so `.github/CODEOWNERS` is advisory at the GitHub platform level and enforced via `.github/workflows/codeowners-check.yml` on PRs). Therefore, **all contributors and AI agents must strictly honor the PR and CI check lifecycle without exception**—never pushing directly to `main`, and AI agents must never modify `CODEOWNERS`-listed paths without explicit maintainer approval.
 
 ### Rule 3.1: Ticket First
 - Never write code or open a PR without an associated GitHub Issue ticket.

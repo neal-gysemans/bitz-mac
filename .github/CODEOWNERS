@@ -1,0 +1,11 @@
+# Lock workflow, agent instructions/skills, and build/release configuration to repo owners.
+# Note: enforcement requires GitHub Pro or a public repository (advisory on GitHub Free private repos).
+/.github/ @AkramKs @neal-gysemans
+/.agents/ @AkramKs @neal-gysemans
+/.jules/ @AkramKs @neal-gysemans
+/.kittify/ @AkramKs @neal-gysemans
+/AGENTS.md @AkramKs @neal-gysemans
+/CLAUDE.md @AkramKs @neal-gysemans
+/CONTRIBUTING.md @AkramKs @neal-gysemans
+/Package.swift @AkramKs @neal-gysemans
+/Scripts/ @AkramKs @neal-gysemans
