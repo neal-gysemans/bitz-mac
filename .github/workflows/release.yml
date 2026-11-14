@@ -66,10 +66,37 @@ jobs:
           TAG="${{ steps.release_meta.outputs.tag }}"
           VERSION="${{ steps.release_meta.outputs.version }}"
 
+          cat > /tmp/release-notes.md <<'EOF'
+          ## 🚀 Public Beta Quick-Start & Gatekeeper Notice
+
+          **Beta All-Access:** All shipped Bitz Pro features are unlocked at no cost during Public Beta (no license key required).
+          Public Beta builds are ad-hoc signed (`codesign --sign -`) without Apple Developer ID notarization (which follows at commercial launch).
+
+          ### Option A: Install via Homebrew (Recommended)
+          ```bash
+          brew tap akramks/tap
+          brew install --cask bitz
+          ```
+          Update later with `brew upgrade --cask bitz`.
+
+          ### Option B: Direct `.dmg` Download
+          1. Download `Bitz.dmg`, open it, and drag **`Bitz.app`** into **`/Applications`** (see `FIRST TIME OPENING - READ ME.txt` inside the DMG).
+          2. Because macOS 15 Sequoia+ removed the old right-click → Open shortcut, allow Bitz on first launch using **either** method below (do **not** click *Move to Trash*):
+             - **Terminal one-liner:**
+               ```bash
+               xattr -cr /Applications/Bitz.app
+               ```
+             - **System Settings (no Terminal):** Double-click `Bitz.app` in `/Applications` once, click Done, then open **System Settings → Privacy & Security → Open Anyway**.
+
+          ### Updating During Beta
+          If you use **Meeting Recorder** after updating an ad-hoc Beta build and macOS stops honoring Microphone or Screen & System Audio Recording permissions, toggle them off/on in **System Settings → Privacy & Security** or run `tccutil reset All com.bitz.cybercat`.
+          EOF
+
           echo "Publishing release ${TAG} to AkramKs/bitz-releases..."
           gh release create "${TAG}" \
             --repo "AkramKs/bitz-releases" \
             --title "Bitz v${VERSION}" \
+            --notes-file /tmp/release-notes.md \
             --generate-notes \
             build/Bitz.dmg
 
@@ -108,6 +135,22 @@ jobs:
                   "~/Library/Preferences/com.bitz.cybercat.plist",
                 ],
                 rmdir: "~/Library/Application Support/Bitz"
+
+            caveats <<~EOS
+              Bitz is currently in free Public Beta and uses ad-hoc code signing
+              (Apple Developer ID notarization will follow at commercial launch).
+
+              If macOS Gatekeeper quarantines or blocks Bitz on first launch
+              (macOS 15 Sequoia+ removed the right-click -> Open shortcut), run:
+                xattr -cr /Applications/Bitz.app
+              Or open:
+                System Settings -> Privacy & Security -> Open Anyway
+
+              If Meeting Recorder permissions stop working after a Beta update,
+              toggle Microphone / Screen Recording off and on in System Settings
+              -> Privacy & Security, or reset TCC grants with:
+                tccutil reset All com.bitz.cybercat
+            EOS
           end
           EOF
           sed -i '' "s/VERSION_PLACEHOLDER/${VERSION}/g" Casks/bitz.rb

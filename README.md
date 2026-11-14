@@ -17,6 +17,8 @@
 
 ## 🚀 Quick Install
 
+> **Public Beta Onboarding Guide**: See [docs/BETA_TESTING.md](docs/BETA_TESTING.md) for complete step-by-step Public Beta setup, Gatekeeper bypass instructions (including macOS 15 Sequoia+ changes), update permissions tips, and Beta All-Access details.
+
 ### Install via Homebrew (Recommended)
 
 Install Bitz with a single command via [Homebrew](https://brew.sh):
@@ -43,10 +45,13 @@ brew upgrade --cask bitz
 2. Open `Bitz.dmg` and drag `Bitz.app` into your **Applications** folder.
 3. Launch `Bitz.app` from `/Applications` or Spotlight (`Cmd + Space`).
 
-> **Note on macOS Gatekeeper**: Because Bitz is distributed outside the Mac App Store and built open-source without an Apple Developer ID certificate, macOS may show a prompt on first open. Simply right-click (or Control-click) `Bitz.app` in `/Applications` and select **Open**, or run:
+> **Note on macOS Gatekeeper (macOS 14 / 15 Sequoia / 26)**: Public Beta builds are ad-hoc signed (`codesign --sign -`) without Apple Developer ID notarization (which follows at commercial launch), so macOS may warn that `Bitz.app` is unverified or "damaged" on first open. Do **not** click *Move to Trash*.
+>
+> **macOS 15 Sequoia+ removed the old right-click → Open shortcut.** To allow Bitz to open, run:
 > ```bash
 > xattr -cr /Applications/Bitz.app
 > ```
+> **Or** attempt to open `Bitz.app` once, then open **System Settings → Privacy & Security → Open Anyway**. Full details and Beta update tips live in [docs/BETA_TESTING.md](docs/BETA_TESTING.md).
 
 ---
 
@@ -158,6 +163,7 @@ bitz-mac/
 │       └── AgentHookInstallerTests.swift
 └── docs/
     ├── ARCHITECTURE.md                        # Layered system architecture & invariants
+    ├── BETA_TESTING.md                        # Public Beta onboarding, Gatekeeper bypass & update guide
     ├── STATE_MACHINE.md                       # 7-state emotional machine & Rive contract
     ├── ACCEPTANCE_CRITERIA.md                 # Requirements traceability & test matrix
     └── agent-research.md                      # AI agent signaling research & adapter specifications

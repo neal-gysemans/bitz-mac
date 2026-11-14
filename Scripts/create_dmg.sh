@@ -48,6 +48,36 @@ rm -rf "$DMG_STAGING" "$DMG_PATH"
 mkdir -p "$DMG_STAGING"
 cp -R "$APP_BUNDLE" "$DMG_STAGING/"
 ln -s /Applications "$DMG_STAGING/Applications"
+cat > "$DMG_STAGING/FIRST TIME OPENING - READ ME.txt" <<'EOF'
+Bitz the Cyber Cat — First Time Opening (Public Beta)
+=====================================================
+
+1. Drag Bitz.app into the Applications folder.
+   (Do not run Bitz.app directly from inside this disk image.)
+
+2. First time opening?
+   Public Beta builds are ad-hoc signed without Apple Developer ID
+   notarization (official notarization follows at commercial launch).
+   If macOS warns that Bitz cannot be verified or is "damaged":
+   DO NOT click "Move to Trash". Instead, choose ONE option below:
+
+   Option A — Terminal One-Liner (Fastest — macOS 14 / 15 / 26):
+     Open Terminal and run:
+       xattr -cr /Applications/Bitz.app
+
+   Option B — System Settings (No Terminal — macOS 14 / 15 Sequoia / 26):
+     (Note: macOS 15 Sequoia+ removed the old right-click -> Open shortcut.)
+     1) Double-click Bitz.app in /Applications once, then click Done.
+     2) Open System Settings -> Privacy & Security.
+     3) Scroll to Security and click "Open Anyway" next to Bitz.app.
+
+3. Tip for Beta Updates & Meeting Recorder:
+   - You can also install/update via Homebrew:
+       brew tap akramks/tap && brew install --cask bitz
+   - After updating an ad-hoc Beta build, re-toggle Microphone / Screen
+     Recording in System Settings -> Privacy & Security if needed, or run:
+       tccutil reset All com.bitz.cybercat
+EOF
 
 echo "==> Creating compressed disk image: ${DMG_PATH}..."
 hdiutil create -volname "${APP_NAME}" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_PATH"
