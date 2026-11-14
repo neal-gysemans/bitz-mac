@@ -390,7 +390,10 @@ public final class AntigravityTranscriptAdapter: AgentAdapter, @unchecked Sendab
 
                 anyGrew = true
                 session.lastActivityAt = now
-                let events = session.tracker.ingest(read.lines.flatMap(Self.entries(fromLine:)), at: now)
+                let events = session.tracker.ingest(
+                    read.lines.flatMap { Self.parseEntries(fromLine: $0, referenceDate: now) },
+                    at: now
+                )
                 for event in events {
                     if event.kind == .working || event.kind == .done {
                         session.isDatabaseAwaitingApproval = false
@@ -638,6 +641,10 @@ public final class AntigravityTranscriptAdapter: AgentAdapter, @unchecked Sendab
 
     /// Maps one Antigravity transcript line to tracker entries; unknown lines yield [.toolResult(id: nil)] only.
     public static func entries(fromLine data: Data) -> [SessionLogEntry] {
+        parseEntries(fromLine: data, referenceDate: Date())
+    }
+
+    static func parseEntries(fromLine data: Data, referenceDate: Date) -> [SessionLogEntry] {
         guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [] }
 
         // Tool calls carry no ids, so any later line means the previous calls finished (R5).
@@ -645,6 +652,40 @@ public final class AntigravityTranscriptAdapter: AgentAdapter, @unchecked Sendab
         let type = obj["type"] as? String
         let status = obj["status"] as? String
         let toolCalls = obj["tool_calls"] as? [[String: Any]] ?? []
+
+        // Quota / 429 rate-limit detection on error steps only (avoids false positives in prompts or normal stdout).
+        let explicitErrorStrings = RateLimitParser.collectErrorStrings(from: obj["error"])
+        let isErrorLine = (type == "ERROR_MESSAGE" || type == "ERROR" || status == "ERROR" || !explicitErrorStrings.isEmpty)
+        if isErrorLine {
+            var errorTexts = explicitErrorStrings
+            if type == "ERROR_MESSAGE" || type == "ERROR" || status == "ERROR" {
+                errorTexts.append(contentsOf: RateLimitParser.collectErrorStrings(from: obj["content"]))
+                errorTexts.append(contentsOf: RateLimitParser.collectErrorStrings(from: obj["message"]))
+                errorTexts.append(contentsOf: RateLimitParser.collectErrorStrings(from: obj["details"]))
+            }
+            var statusCodes: [Int] = []
+            for key in ["statusCode", "status_code", "httpStatus", "http_status", "code"] {
+                if let code = RateLimitParser.intValue(obj[key]) {
+                    statusCodes.append(code)
+                }
+            }
+            if let errorDict = obj["error"] as? [String: Any] {
+                for key in ["statusCode", "status_code", "httpStatus", "http_status", "code"] {
+                    if let code = RateLimitParser.intValue(errorDict[key]) {
+                        statusCodes.append(code)
+                    }
+                }
+            }
+            if RateLimitParser.isQuotaError(texts: errorTexts, statusCodes: statusCodes) {
+                let lineDate = RateLimitParser.parseTimestamp(obj["created_at"] ?? obj["timestamp"]) ?? referenceDate
+                let resetsAt = RateLimitParser.extractResetDate(
+                    in: obj,
+                    texts: errorTexts,
+                    referenceDate: lineDate
+                )
+                return [.toolResult(id: nil), .rateLimit(resetsAt: resetsAt), .turnEnd(isDone: false)]
+            }
+        }
 
         if type == "USER_INPUT" {
             entries.append(.prompt)

@@ -12,7 +12,13 @@ public struct AgentsSettingsTabView: View {
 
     /// Picker tag for Custom; stored windows are always > 0 (`AgentSignalSettings.clamped()`).
     static let customWindowTag = 0
-    private static let contextWindowAgents = [(id: "claude", name: "Claude Code"), (id: "antigravity", name: "Antigravity")]
+    private static let contextWindowAgents = [
+        (id: "claude", name: "Claude Code"),
+        (id: "antigravity", name: "Antigravity"),
+        (id: "gemini", name: "Gemini CLI"),
+        (id: "codex", name: "Codex"),
+        (id: "cursor", name: "Cursor"),
+    ]
 
     public init(
         agentMonitor: AgentMonitorService,
@@ -60,7 +66,7 @@ public struct AgentsSettingsTabView: View {
                         .disabled(!agentMonitor.signalSettings.stallWarningEnabled)
                         .padding(.leading, 20)
 
-                    Toggle("Usage Limit Warnings (Claude Code)", isOn: $agentMonitor.signalSettings.rateLimitWarningEnabled)
+                    Toggle("Usage Limit / Quota Warnings (429)", isOn: $agentMonitor.signalSettings.rateLimitWarningEnabled)
 
                     Toggle("Runaway CPU Warnings", isOn: $agentMonitor.signalSettings.runawayCPUWarningEnabled)
                     Stepper("Warn above \(agentMonitor.signalSettings.runawayCPUPercentThreshold)% CPU",

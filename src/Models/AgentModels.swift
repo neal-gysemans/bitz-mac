@@ -258,7 +258,13 @@ public struct AgentSignalSettings: Codable, Sendable, Equatable {
     /// 1...15
     public var runawayCPUDurationMinutes = 2
     /// Session logs don't state the model's window, so it is a per-agent setting.
-    public var contextWindowTokens: [String: Int] = ["claude": 200_000, "antigravity": 1_000_000]
+    public var contextWindowTokens: [String: Int] = [
+        "claude": 200_000,
+        "antigravity": 1_000_000,
+        "gemini": 1_000_000,
+        "codex": 200_000,
+        "cursor": 200_000,
+    ]
 
     public init() {}
 
@@ -276,7 +282,11 @@ public struct AgentSignalSettings: Codable, Sendable, Equatable {
         stallTimeoutMinutes = try container.decodeIfPresent(Int.self, forKey: .stallTimeoutMinutes) ?? defaults.stallTimeoutMinutes
         runawayCPUPercentThreshold = try container.decodeIfPresent(Int.self, forKey: .runawayCPUPercentThreshold) ?? defaults.runawayCPUPercentThreshold
         runawayCPUDurationMinutes = try container.decodeIfPresent(Int.self, forKey: .runawayCPUDurationMinutes) ?? defaults.runawayCPUDurationMinutes
-        contextWindowTokens = try container.decodeIfPresent([String: Int].self, forKey: .contextWindowTokens) ?? defaults.contextWindowTokens
+        if let decodedWindows = try container.decodeIfPresent([String: Int].self, forKey: .contextWindowTokens) {
+            contextWindowTokens = defaults.contextWindowTokens.merging(decodedWindows) { _, stored in stored }
+        } else {
+            contextWindowTokens = defaults.contextWindowTokens
+        }
     }
 
     public func contextWindow(for agentID: String) -> Int {

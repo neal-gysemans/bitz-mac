@@ -156,8 +156,19 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         let dropboxAdapter = DropboxAgentAdapter()
         let antigravityAdapter = AntigravityTranscriptAdapter()
         let claudeAdapter = ClaudeCodeTranscriptAdapter()
+        let geminiAdapter = GeminiCLITranscriptAdapter()
+        let codexAdapter = CodexTranscriptAdapter()
+        let cursorAdapter = CursorTranscriptAdapter()
         self.agentMonitor = AgentMonitorService(
-            adapters: [processAdapter, dropboxAdapter, antigravityAdapter, claudeAdapter],
+            adapters: [
+                processAdapter,
+                dropboxAdapter,
+                antigravityAdapter,
+                claudeAdapter,
+                geminiAdapter,
+                codexAdapter,
+                cursorAdapter,
+            ],
             userDefaults: userDefaults,
             licensingService: resolvedLicensingService
         )
