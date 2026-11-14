@@ -263,7 +263,8 @@ public struct SettingsRootView: View {
                 activityMonitor: activityMonitor,
                 updateStore: updateStore,
                 agentMonitor: agentMonitor,
-                meetingRecorder: meetingRecorder
+                meetingRecorder: meetingRecorder,
+                licensingService: licensingService
             )
         }
     }

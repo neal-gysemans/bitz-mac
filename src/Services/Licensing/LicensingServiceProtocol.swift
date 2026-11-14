@@ -12,6 +12,9 @@ public protocol LicensingServiceProtocol: AnyObject, ObservableObject {
     /// The registered customer email for Beta outreach / updates.
     var registeredEmail: String? { get }
 
+    /// `true` when runtime QA simulation is temporarily forcing Free tier so stores do not overwrite persisted Pro prefs.
+    var isSimulatingFreeTier: Bool { get }
+
     /// Checks if a specific feature is unlocked under the current tier.
     func isFeatureUnlocked(_ feature: BitzFeature) -> Bool
 
@@ -30,6 +33,7 @@ public protocol LicensingServiceProtocol: AnyObject, ObservableObject {
 
 public extension LicensingServiceProtocol {
     var registeredEmail: String? { nil }
+    var isSimulatingFreeTier: Bool { false }
     func saveRegisteredEmail(_ email: String) {}
     func activateLicense(key: String) throws {
         try activateOfflineLicense(key: key)

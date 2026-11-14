@@ -375,6 +375,37 @@ final class SettingsViewsTests: XCTestCase {
         // C9: agent simulation buttons present in Advanced tab
         XCTAssertTrue(advancedRendered.contains("Question / Chime"))
         XCTAssertTrue(advancedRendered.contains("All Done / Fanfare"))
+        let prodLicensing = LicensingService(
+            storage: InMemoryTestLicenseStorage(),
+            accessPolicy: .production,
+            userDefaults: defaults
+        )
+        let advancedProdTab = AdvancedSettingsTabView(
+            engine: engine,
+            activityMonitor: activityMonitor,
+            updateStore: AppUpdateStore(userDefaults: defaults),
+            agentMonitor: monitor,
+            meetingRecorder: .stub(defaults: defaults),
+            licensingService: prodLicensing
+        )
+        XCTAssertFalse(String(describing: advancedProdTab.body).contains("QA / Developer Licensing Entitlement Override"))
+
+        let qaLicensing = LicensingService(
+            storage: InMemoryTestLicenseStorage(),
+            accessPolicy: .production,
+            userDefaults: defaults,
+            allowEntitlementOverride: true
+        )
+        let advancedQATab = AdvancedSettingsTabView(
+            engine: engine,
+            activityMonitor: activityMonitor,
+            updateStore: AppUpdateStore(userDefaults: defaults),
+            agentMonitor: monitor,
+            meetingRecorder: .stub(defaults: defaults),
+            licensingService: qaLicensing
+        )
+        XCTAssertTrue(String(describing: advancedQATab.body).contains("QA / Developer Licensing Entitlement Override"))
+
         // C8: global vs focused shortcut headings
         XCTAssertTrue(advancedRendered.contains("Global (Works from Any App)"))
         XCTAssertTrue(advancedRendered.contains("When Bitz or Settings is Focused"))
@@ -383,4 +414,10 @@ final class SettingsViewsTests: XCTestCase {
         XCTAssertNotNil(AdvancedSettingsTabView.launchAtLoginApprovalMessage(for: .requiresApproval))
         XCTAssertNil(AdvancedSettingsTabView.launchAtLoginApprovalMessage(for: .enabled))
     }
+}
+
+private final class InMemoryTestLicenseStorage: LicenseStorageProtocol {
+    func saveLicenseToken(_ token: String) throws {}
+    func loadLicenseToken() -> String? { nil }
+    func deleteLicenseToken() throws {}
 }

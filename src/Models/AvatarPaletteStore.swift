@@ -30,9 +30,43 @@ public final class AvatarPaletteStore: ObservableObject {
     ) {
         self.userDefaults = userDefaults
         self.licensingService = licensingService
-        var preset = userDefaults.string(forKey: Self.themeIdKey).flatMap(AvatarThemePreset.init(rawValue:)) ?? .defaultPreset
-        var chassis = userDefaults.string(forKey: Self.chassisKey).flatMap(AvatarHex.normalize)
-        var trim = userDefaults.string(forKey: Self.trimKey).flatMap(AvatarHex.normalize)
+        var stored = Self.loadStoredValues(from: userDefaults)
+
+        // Gate Pro themes and custom overrides for Free tier
+        if let licensingService, !licensingService.isFeatureUnlocked(.customThemes) {
+            if stored.preset.isPro {
+                stored.preset = .defaultPreset
+            }
+            stored.chassis = nil
+            stored.trim = nil
+            stored.glow = 1.0
+            stored.overrides = [:]
+        }
+
+        self.selectedPreset = stored.preset
+        self.chassisOverride = stored.chassis
+        self.trimOverride = stored.trim
+        self.glowIntensity = stored.glow
+        self.emotionOverrides = stored.overrides
+        self.resolvedPalette = Self.resolve(
+            preset: stored.preset,
+            chassis: stored.chassis,
+            trim: stored.trim,
+            glow: stored.glow,
+            overrides: stored.overrides
+        )
+    }
+
+    private static func loadStoredValues(from userDefaults: UserDefaults) -> (
+        preset: AvatarThemePreset,
+        chassis: String?,
+        trim: String?,
+        glow: Double,
+        overrides: [AvatarEmotionColorSlot: String]
+    ) {
+        let preset = userDefaults.string(forKey: Self.themeIdKey).flatMap(AvatarThemePreset.init(rawValue:)) ?? .defaultPreset
+        let chassis = userDefaults.string(forKey: Self.chassisKey).flatMap(AvatarHex.normalize)
+        let trim = userDefaults.string(forKey: Self.trimKey).flatMap(AvatarHex.normalize)
         let glow: Double
         if let stored = userDefaults.object(forKey: Self.glowKey) as? Double, stored.isFinite {
             glow = min(max(stored, AvatarResolvedPalette.glowRange.lowerBound), AvatarResolvedPalette.glowRange.upperBound)
@@ -47,23 +81,7 @@ public final class AvatarPaletteStore: ObservableObject {
                 }
             }
         }
-
-        // Gate Pro themes and custom overrides for Free tier
-        if let licensingService, !licensingService.isFeatureUnlocked(.customThemes) {
-            if preset.isPro {
-                preset = .defaultPreset
-            }
-            chassis = nil
-            trim = nil
-            overrides = [:]
-        }
-
-        self.selectedPreset = preset
-        self.chassisOverride = chassis
-        self.trimOverride = trim
-        self.glowIntensity = glow
-        self.emotionOverrides = overrides
-        self.resolvedPalette = Self.resolve(preset: preset, chassis: chassis, trim: trim, glow: glow, overrides: overrides)
+        return (preset: preset, chassis: chassis, trim: trim, glow: glow, overrides: overrides)
     }
 
     private static func resolve(
@@ -86,12 +104,16 @@ public final class AvatarPaletteStore: ObservableObject {
         return palette
     }
 
-    private func refresh() {
+    private func applyResolvedPalette() {
         let next = Self.resolve(
             preset: selectedPreset, chassis: chassisOverride, trim: trimOverride,
             glow: glowIntensity, overrides: emotionOverrides
         )
         if next != resolvedPalette { resolvedPalette = next }
+    }
+
+    private func refresh() {
+        applyResolvedPalette()
         persist()
     }
 
@@ -163,10 +185,15 @@ public final class AvatarPaletteStore: ObservableObject {
         refresh()
     }
 
-    public func setGlowIntensity(_ value: Double) {
-        guard value.isFinite else { return }
+    @discardableResult
+    public func setGlowIntensity(_ value: Double) -> Bool {
+        if let licensingService, !licensingService.isFeatureUnlocked(.customThemes) {
+            return false
+        }
+        guard value.isFinite else { return false }
         glowIntensity = min(max(value, AvatarResolvedPalette.glowRange.lowerBound), AvatarResolvedPalette.glowRange.upperBound)
         refresh()
+        return true
     }
 
     @discardableResult
@@ -180,16 +207,32 @@ public final class AvatarPaletteStore: ObservableObject {
         return true
     }
 
-    /// Re-evaluates tier entitlement (e.g. after license activation or deactivation).
+    /// Re-evaluates tier entitlement (e.g. after license activation, deactivation, or QA override).
+    /// Leaves `UserDefaults` untouched during `.simulateFreeTier` so switching back restores saved Pro customizations.
     public func validateTierEntitlement() {
-        guard let licensingService, !licensingService.isFeatureUnlocked(.customThemes) else { return }
-        if selectedPreset.isPro {
-            selectedPreset = .defaultPreset
+        guard let licensingService else { return }
+        if !licensingService.isFeatureUnlocked(.customThemes) {
+            if selectedPreset.isPro {
+                selectedPreset = .defaultPreset
+            }
+            chassisOverride = nil
+            trimOverride = nil
+            glowIntensity = 1.0
+            emotionOverrides = [:]
+            if licensingService.isSimulatingFreeTier {
+                applyResolvedPalette()
+            } else {
+                refresh()
+            }
+        } else {
+            let stored = Self.loadStoredValues(from: userDefaults)
+            selectedPreset = stored.preset
+            chassisOverride = stored.chassis
+            trimOverride = stored.trim
+            glowIntensity = stored.glow
+            emotionOverrides = stored.overrides
+            applyResolvedPalette()
         }
-        chassisOverride = nil
-        trimOverride = nil
-        emotionOverrides = [:]
-        refresh()
     }
 
     /// Row reset: returns the slot to the active preset's color.

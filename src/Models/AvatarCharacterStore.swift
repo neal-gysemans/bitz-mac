@@ -52,12 +52,24 @@ public final class AvatarCharacterStore: ObservableObject {
         return true
     }
 
-    /// Re-evaluates tier entitlement (e.g., after license activation or deactivation) and falls back to `.cyberCat` if locked.
+    /// Re-evaluates tier entitlement (e.g., after license activation, deactivation, or QA override) and falls back to `.cyberCat` if locked.
+    /// Leaves `UserDefaults` untouched while `licensingService?.isSimulatingFreeTier == true` so switching back restores Pro preferences.
     public func validateTierEntitlement() {
-        guard !isCharacterUnlocked(selectedCharacter) else { return }
-        selectedCharacter = .defaultCharacter
-        userDefaults.set(MascotCharacter.defaultCharacter.rawValue, forKey: Self.selectedCharacterKey)
-        onCharacterChanged?(.defaultCharacter)
+        if !isCharacterUnlocked(selectedCharacter) {
+            selectedCharacter = .defaultCharacter
+            if licensingService?.isSimulatingFreeTier != true {
+                userDefaults.set(MascotCharacter.defaultCharacter.rawValue, forKey: Self.selectedCharacterKey)
+            }
+            onCharacterChanged?(.defaultCharacter)
+        } else if licensingService?.isFeatureUnlocked(.multiMascot) == true {
+            let stored = userDefaults
+                .string(forKey: Self.selectedCharacterKey)
+                .flatMap(MascotCharacter.init(rawValue:)) ?? .defaultCharacter
+            if stored != selectedCharacter {
+                selectedCharacter = stored
+                onCharacterChanged?(stored)
+            }
+        }
     }
 
     /// Resets the companion character back to the default Bitz Cyber Cat (`.cyberCat`).

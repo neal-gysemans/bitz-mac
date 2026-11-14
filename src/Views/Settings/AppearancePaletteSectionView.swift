@@ -11,7 +11,7 @@ public struct AppearancePaletteSectionView: View {
     @State private var proPopoverDescription: String = ""
 
     private var isCustomThemesUnlocked: Bool {
-        licensingService?.isFeatureUnlocked(.customThemes) ?? true
+        licensingService?.isFeatureUnlocked(.customThemes) ?? false
     }
 
     public init(
@@ -132,6 +132,7 @@ public struct AppearancePaletteSectionView: View {
                     ),
                     in: AvatarResolvedPalette.glowRange
                 )
+                .disabled(!isCustomThemesUnlocked)
             }
 
             Divider()

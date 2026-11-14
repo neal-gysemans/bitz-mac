@@ -1,16 +1,21 @@
-import Foundation
 import AppKit
 import CryptoKit
+import Foundation
 
-/// Core domain service responsible for backendless, offline cryptographic validation
-/// of Bitz Pro license keys and managing tier entitlements.
+/// Core domain service responsible for offline Ed25519 verification and Supabase seat
+/// validation of Bitz Pro license keys, plus `BetaAccessPolicy` entitlement guardrails (`#144`, `#146`).
 @MainActor
 public final class LicensingService: LicensingServiceProtocol, ObservableObject {
     /// The canonical embedded Ed25519 public key used for production license verification.
     /// Base64: "5F3+zylHfBfB8nvILA9f6gxKCSAqIKa+ldsLoi/J514="
-    public static let defaultPublicKeyData: Data = Data(base64Encoded: "5F3+zylHfBfB8nvILA9f6gxKCSAqIKa+ldsLoi/J514=") ?? Data()
+    nonisolated public static let defaultPublicKeyData: Data = Data(base64Encoded: "5F3+zylHfBfB8nvILA9f6gxKCSAqIKa+ldsLoi/J514=") ?? Data()
 
-    /// Active product tier. Defaults to `.free`.
+    /// Revoked license identifiers rejected during offline and remote verification (`#144`).
+    nonisolated public static let revokedLicenseIDs: Set<String> = [
+        "BTZ-LOCAL-DEV-PRO"
+    ]
+
+    /// Active product tier.
     @Published public private(set) var currentTier: BitzTier = .free
 
     /// The active verified license payload, if available.
@@ -19,65 +24,199 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
     /// The registered customer email for Beta outreach / updates.
     @Published public private(set) var registeredEmail: String? = nil
 
+    /// `true` when `.pro` access is granted via the temporary `BetaAccessPolicy` rather than a stored license token.
+    @Published public private(set) var isBetaAccessActive: Bool = false
+
+    /// Runtime QA / developer override for testing Free vs. Paid Pro behavior while Beta All-Access is compiled in.
+    @Published public private(set) var entitlementOverride: BitzEntitlementOverride = .automatic
+
+    public let accessPolicy: BetaAccessPolicy
+    /// Whether QA / developer entitlement overrides (`setEntitlementOverride`) are permitted in this build.
+    public let isEntitlementOverrideAvailable: Bool
+
+    /// `true` when QA override is temporarily simulating `.simulateFreeTier`.
+    public var isSimulatingFreeTier: Bool {
+        isEntitlementOverrideAvailable && entitlementOverride == .simulateFreeTier
+    }
     private static let emailDefaultsKey = "bitz.licensing.customer_email"
     private let storage: LicenseStorageProtocol
     private let publicKeyData: Data
     private let backendClient: (any LicensingBackendClient)?
+    private let clock: () -> Date
+    private let userDefaults: UserDefaults
+    private var storedVerifiedLicense: LicensePayload? = nil
 
     private var validationTask: Task<Void, Never>?
-    private var wakeObserver: (any NSObjectProtocol)?
+    private var entitlementWakeObserver: (any NSObjectProtocol)?
+    private var validationWakeObserver: (any NSObjectProtocol)?
     private var lastValidationTime: Date?
+
+    /// Returns whether runtime QA entitlement overrides are allowed by default for `accessPolicy`.
+    /// Locked strictly to `#if DEBUG` builds with non-`.production` access policy so Release DMG binaries cannot bypass GA gating.
+    nonisolated public static func defaultAllowEntitlementOverride(
+        for accessPolicy: BetaAccessPolicy,
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        isDebugBuild: Bool = {
+            #if DEBUG
+            return true
+            #else
+            return false
+            #endif
+        }()
+    ) -> Bool {
+        _ = bundleIdentifier
+        _ = environment
+        return accessPolicy != .production && isDebugBuild
+    }
 
     public init(
         storage: LicenseStorageProtocol = KeychainLicenseStorage(),
         publicKeyData: Data = LicensingService.defaultPublicKeyData,
-        backendClient: (any LicensingBackendClient)? = nil
+        backendClient: (any LicensingBackendClient)? = nil,
+        accessPolicy: BetaAccessPolicy = .current,
+        clock: @escaping () -> Date = { Date() },
+        userDefaults: UserDefaults = .standard,
+        allowEntitlementOverride: Bool? = nil
     ) {
         self.storage = storage
         self.publicKeyData = publicKeyData
         self.backendClient = backendClient
-        self.registeredEmail = UserDefaults.standard.string(forKey: Self.emailDefaultsKey)
+        self.accessPolicy = accessPolicy
+        self.clock = clock
+        self.userDefaults = userDefaults
+        self.isEntitlementOverrideAvailable = allowEntitlementOverride ?? Self.defaultAllowEntitlementOverride(for: accessPolicy)
+        self.registeredEmail = userDefaults.string(forKey: Self.emailDefaultsKey)
 
         // Restore previously stored license on startup
         if let storedToken = storage.loadLicenseToken() {
-            if storedToken.hasPrefix("BITZ1.") {
+            let trimmedToken = storedToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedToken.hasPrefix("BITZ1.") {
                 do {
-                    let payload = try Self.validate(token: storedToken, publicKeyData: publicKeyData)
-                    self.activeLicense = payload
-                    self.currentTier = payload.resolvedTier
+                    let payload = try Self.validate(token: trimmedToken, publicKeyData: publicKeyData, now: clock())
+                    self.storedVerifiedLicense = payload
                 } catch {
-                    self.activeLicense = nil
-                    self.currentTier = .free
+                    // If stored token is invalid, expired, or revoked, purge corrupted receipt
+                    self.storedVerifiedLicense = nil
                     try? storage.deleteLicenseToken()
                 }
-            } else if storedToken.hasPrefix("BTZ-") {
-                self.activeLicense = LicensePayload(tier: "pro", licenseId: storedToken, issuedAt: Date().timeIntervalSince1970)
-                self.currentTier = .pro
+            } else if trimmedToken.hasPrefix("BTZ-") {
+                let normalizedID = trimmedToken.uppercased()
+                if Self.revokedLicenseIDs.contains(normalizedID) {
+                    self.storedVerifiedLicense = nil
+                    try? storage.deleteLicenseToken()
+                } else {
+                    self.storedVerifiedLicense = LicensePayload(
+                        tier: "pro",
+                        licenseId: normalizedID,
+                        issuedAt: clock().timeIntervalSince1970
+                    )
+                }
             } else {
                 // Unknown or corrupt token format: purge and revert to free
-                self.activeLicense = nil
-                self.currentTier = .free
+                self.storedVerifiedLicense = nil
                 try? storage.deleteLicenseToken()
+            }
+        }
+
+        refreshEntitlement()
+
+        self.entitlementWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.refreshEntitlement()
             }
         }
     }
 
-    /// Evaluates whether the requested feature is unlocked for the user.
+    /// Sets the runtime QA / developer entitlement override when permitted and re-evaluates tier state.
+    public func setEntitlementOverride(_ newOverride: BitzEntitlementOverride) {
+        guard isEntitlementOverrideAvailable else {
+            if entitlementOverride != .automatic {
+                entitlementOverride = .automatic
+                refreshEntitlement()
+            }
+            return
+        }
+        guard entitlementOverride != newOverride else { return }
+        entitlementOverride = newOverride
+        refreshEntitlement()
+    }
+
+    private struct ResolvedEntitlement {
+        let tier: BitzTier
+        let activeLicense: LicensePayload?
+        let isBetaAccessActive: Bool
+    }
+
+    /// Pure computation of effective tier/license/Beta state at `now` with no Keychain or `@Published` side effects.
+    private func resolveEntitlement(at now: Date) -> ResolvedEntitlement {
+        let validStoredLicense: LicensePayload? = {
+            guard let storedVerifiedLicense,
+                  !storedVerifiedLicense.isExpired(at: now),
+                  !Self.revokedLicenseIDs.contains(storedVerifiedLicense.licenseId) else {
+                return nil
+            }
+            return storedVerifiedLicense
+        }()
+
+        let effectiveOverride: BitzEntitlementOverride = isEntitlementOverrideAvailable ? entitlementOverride : .automatic
+
+        switch effectiveOverride {
+        case .simulateFreeTier:
+            return ResolvedEntitlement(tier: .free, activeLicense: nil, isBetaAccessActive: false)
+
+        case .simulatePaidPro:
+            let simulated = validStoredLicense ?? LicensePayload(
+                tier: "pro",
+                licenseId: "BTZ-QA-SIMULATED-PRO",
+                issuedAt: now.timeIntervalSince1970,
+                expiresAt: nil
+            )
+            return ResolvedEntitlement(tier: .pro, activeLicense: simulated, isBetaAccessActive: false)
+
+        case .automatic:
+            if let verified = validStoredLicense {
+                return ResolvedEntitlement(tier: verified.resolvedTier, activeLicense: verified, isBetaAccessActive: false)
+            } else if accessPolicy.isBetaWindowActive(at: now) {
+                return ResolvedEntitlement(tier: .pro, activeLicense: nil, isBetaAccessActive: true)
+            } else {
+                return ResolvedEntitlement(tier: .free, activeLicense: nil, isBetaAccessActive: false)
+            }
+        }
+    }
+
+    /// Re-evaluates license expiration, Beta sunset window, and QA overrides, purging expired keys and updating `@Published` properties.
+    public func refreshEntitlement() {
+        let now = clock()
+
+        if let storedVerifiedLicense,
+           storedVerifiedLicense.isExpired(at: now) || Self.revokedLicenseIDs.contains(storedVerifiedLicense.licenseId) {
+            self.storedVerifiedLicense = nil
+            try? storage.deleteLicenseToken()
+        }
+
+        let resolved = resolveEntitlement(at: now)
+        if activeLicense != resolved.activeLicense {
+            activeLicense = resolved.activeLicense
+        }
+        if isBetaAccessActive != resolved.isBetaAccessActive {
+            isBetaAccessActive = resolved.isBetaAccessActive
+        }
+        if currentTier != resolved.tier {
+            currentTier = resolved.tier
+        }
+    }
+
+    /// Pure read evaluating whether the requested feature is unlocked at the current time without mutating state.
     public func isFeatureUnlocked(_ feature: BitzFeature) -> Bool {
         if feature.requiredTier == .free {
             return true
         }
-
-        guard currentTier == .pro else {
-            return false
-        }
-
-        // If license payload is present and expired, deny Pro access
-        if let activeLicense, activeLicense.isExpired {
-            return false
-        }
-
-        return true
+        return resolveEntitlement(at: clock()).tier == .pro
     }
 
     /// Synchronous offline validation and activation of an Ed25519 license token.
@@ -92,25 +231,34 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
             throw LicensingError.invalidFormat
         }
 
-        let payload = try Self.validate(token: trimmedKey, publicKeyData: publicKeyData)
+        let payload = try Self.validate(token: trimmedKey, publicKeyData: publicKeyData, now: clock())
 
         // Persist token in secure storage
         try storage.saveLicenseToken(trimmedKey)
 
-        self.activeLicense = payload
-        self.currentTier = payload.resolvedTier
+        self.storedVerifiedLicense = payload
+        if entitlementOverride == .simulateFreeTier {
+            entitlementOverride = .automatic
+        }
+        refreshEntitlement()
     }
 
     /// Asynchronous validation supporting both offline BITZ1 tokens and remote Supabase keys (e.g. BTZ-BETA-XXXX-XXXX).
     public func activateLicense(key: String) async throws {
-        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard !trimmedKey.isEmpty else {
+        let trimmedRaw = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRaw.isEmpty else {
             throw LicensingError.invalidFormat
         }
 
-        if trimmedKey.hasPrefix("BITZ1.") {
-            try activateOfflineLicense(key: trimmedKey)
+        // Preserve original base64url casing for signed BITZ1 tokens.
+        if trimmedRaw.uppercased().hasPrefix("BITZ1.") {
+            try activateOfflineLicense(key: trimmedRaw)
             return
+        }
+
+        let normalizedKey = trimmedRaw.uppercased()
+        if Self.revokedLicenseIDs.contains(normalizedKey) {
+            throw LicensingError.revokedLicense
         }
 
         guard let backend = backendClient else {
@@ -118,41 +266,57 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
         }
 
         let deviceId = DeviceHardwareIdentifier.hashedDeviceID()
-        let result = try await backend.validate(licenseKey: trimmedKey, deviceId: deviceId)
+        let result = try await backend.validate(licenseKey: normalizedKey, deviceId: deviceId)
 
         guard result.valid else {
             let errorMsg = result.message ?? result.error ?? "Invalid or expired license key"
             throw LicensingError.storageFailed(errorMsg)
         }
 
+        let now = clock()
+        let resolvedLicenseId = result.licenseKey?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? normalizedKey
+        if Self.revokedLicenseIDs.contains(resolvedLicenseId) {
+            throw LicensingError.revokedLicense
+        }
+
         let expiresAtInterval = result.expiresAt?.timeIntervalSince1970
         let payload = LicensePayload(
             tier: result.tier ?? "pro",
-            licenseId: result.licenseKey ?? trimmedKey,
-            issuedAt: Date().timeIntervalSince1970,
+            licenseId: resolvedLicenseId,
+            issuedAt: now.timeIntervalSince1970,
             expiresAt: expiresAtInterval
         )
 
-        try storage.saveLicenseToken(trimmedKey)
-        self.activeLicense = payload
-        self.currentTier = payload.resolvedTier
+        if payload.isExpired(at: now) {
+            throw LicensingError.licenseExpired
+        }
+
+        try storage.saveLicenseToken(normalizedKey)
+        self.storedVerifiedLicense = payload
+        if entitlementOverride == .simulateFreeTier {
+            entitlementOverride = .automatic
+        }
+        refreshEntitlement()
         if let email = result.customerEmail {
             self.saveRegisteredEmail(email)
         }
     }
 
-    /// Deactivates the active license and reverts the user to Free tier.
+    /// Deactivates the active license, removes the token from Keychain, and releases remote seats when applicable.
     public func deactivateLicense() throws {
-        let currentLicenseId = activeLicense?.licenseId
+        let currentLicenseId = storedVerifiedLicense?.licenseId
         let backend = backendClient
 
         try storage.deleteLicenseToken()
-        UserDefaults.standard.removeObject(forKey: Self.emailDefaultsKey)
+        userDefaults.removeObject(forKey: Self.emailDefaultsKey)
         self.registeredEmail = nil
-        self.activeLicense = nil
-        self.currentTier = .free
+        self.storedVerifiedLicense = nil
+        if entitlementOverride == .simulatePaidPro {
+            entitlementOverride = .automatic
+        }
+        refreshEntitlement()
 
-        // Release device seat in remote backend for BTZ- keys
+        // Release device seat in remote backend for stored BTZ- keys
         if let currentLicenseId, currentLicenseId.hasPrefix("BTZ-"), let backend {
             Task {
                 let deviceId = DeviceHardwareIdentifier.hashedDeviceID()
@@ -165,11 +329,11 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
     public func saveRegisteredEmail(_ email: String) {
         let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !trimmed.isEmpty else { return }
-        UserDefaults.standard.set(trimmed, forKey: Self.emailDefaultsKey)
+        userDefaults.set(trimmed, forKey: Self.emailDefaultsKey)
         self.registeredEmail = trimmed
 
-        // Non-blocking background sync to remote backend if active license and client are present
-        if let backend = backendClient, let license = activeLicense {
+        // Non-blocking background sync to remote backend if a real stored license and client are present
+        if let backend = backendClient, let license = storedVerifiedLicense {
             Task {
                 _ = try? await backend.registerEmail(licenseKey: license.licenseId, customerEmail: trimmed)
             }
@@ -187,7 +351,7 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
         stopPeriodicValidationSchedule()
 
         // 1. Listen for system wake notifications (debounced by 20s to allow Wi-Fi re-connect)
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+        validationWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
             queue: .main
@@ -195,23 +359,32 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
             guard let self else { return }
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                self.refreshEntitlement()
                 try? await Task.sleep(nanoseconds: UInt64(wakeDebounce * 1_000_000_000))
-                if let last = self.lastValidationTime, Date().timeIntervalSince(last) < minCheckInterval {
+                if let last = self.lastValidationTime, self.clock().timeIntervalSince(last) < minCheckInterval {
                     return
                 }
                 await self.validateActiveLicenseRemotely()
             }
         }
 
-        // 2. Daily background check loop
+        // 2. Daily background check loop + periodic local expiration/sunset sweep
         validationTask = Task { [weak self] in
             // Initial 15s delay so app launch remains instantaneous
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             guard let self, !Task.isCancelled else { return }
             await self.validateActiveLicenseRemotely()
 
+            let localSweepInterval: TimeInterval = min(3_600, max(0.05, validationInterval))
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(validationInterval * 1_000_000_000))
+                var elapsed: TimeInterval = 0
+                while elapsed < validationInterval, !Task.isCancelled {
+                    let step = min(localSweepInterval, validationInterval - elapsed)
+                    try? await Task.sleep(nanoseconds: UInt64(step * 1_000_000_000))
+                    guard !Task.isCancelled else { return }
+                    elapsed += step
+                    self.refreshEntitlement()
+                }
                 guard !Task.isCancelled else { return }
                 await self.validateActiveLicenseRemotely()
             }
@@ -221,19 +394,27 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
     public func stopPeriodicValidationSchedule() {
         validationTask?.cancel()
         validationTask = nil
-        if let wakeObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
-            self.wakeObserver = nil
+        if let validationWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(validationWakeObserver)
+            self.validationWakeObserver = nil
         }
     }
 
-    /// Checks the active license with Supabase. Reverts to Free tier if expired or revoked.
+    /// Checks the active stored license with Supabase. Reverts to Free tier (or Beta fallback) if expired or revoked.
     public func validateActiveLicenseRemotely() async {
-        guard let license = activeLicense, currentTier == .pro else { return }
+        refreshEntitlement()
+        guard let license = storedVerifiedLicense else { return }
 
-        // Offline BITZ1 token: check local cryptographic expiration
-        if license.licenseId.hasPrefix("BITZ1.") {
-            if license.isExpired {
+        let now = clock()
+        if Self.revokedLicenseIDs.contains(license.licenseId) {
+            try? deactivateLicense()
+            return
+        }
+
+        // Offline BITZ1 token without a remote BTZ- license ID: check local expiration only
+        let storedToken = storage.loadLicenseToken()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if license.licenseId.hasPrefix("BITZ1.") || (storedToken.hasPrefix("BITZ1.") && !license.licenseId.hasPrefix("BTZ-")) {
+            if license.isExpired(at: now) {
                 try? deactivateLicense()
             }
             return
@@ -246,7 +427,7 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
         }
 
         guard let backend = backendClient else { return }
-        lastValidationTime = Date()
+        lastValidationTime = now
 
         let deviceId = DeviceHardwareIdentifier.hashedDeviceID()
         do {
@@ -254,12 +435,12 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
             if !result.valid {
                 // Key was revoked or expired in Supabase!
                 try? deactivateLicense()
-            } else if let expiresAt = result.expiresAt, Date() > expiresAt {
+            } else if let expiresAt = result.expiresAt, clock() > expiresAt {
                 try? deactivateLicense()
             }
         } catch {
             // Offline grace period: If network fails, do NOT immediately downgrade
-            if let expiresAt = license.expiresAt, Date().timeIntervalSince1970 > expiresAt {
+            if license.isExpired(at: clock()) {
                 try? deactivateLicense()
             }
         }
@@ -267,8 +448,11 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
 
     isolated deinit {
         validationTask?.cancel()
-        if let wakeObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        if let entitlementWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(entitlementWakeObserver)
+        }
+        if let validationWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(validationWakeObserver)
         }
     }
 
@@ -276,7 +460,11 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
 
     /// Validates a license token string against an Ed25519 public key.
     /// Token format: `BITZ1.<base64url_json_payload>.<base64url_signature>`
-    nonisolated public static func validate(token: String, publicKeyData: Data) throws -> LicensePayload {
+    nonisolated public static func validate(
+        token: String,
+        publicKeyData: Data,
+        now: Date = Date()
+    ) throws -> LicensePayload {
         let parts = token.components(separatedBy: ".")
         guard parts.count == 3 else {
             throw LicensingError.invalidFormat
@@ -313,7 +501,11 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
             throw LicensingError.invalidPayload
         }
 
-        guard !payload.isExpired else {
+        guard !revokedLicenseIDs.contains(payload.licenseId) else {
+            throw LicensingError.revokedLicense
+        }
+
+        guard !payload.isExpired(at: now) else {
             throw LicensingError.licenseExpired
         }
 

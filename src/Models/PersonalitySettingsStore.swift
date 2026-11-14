@@ -82,12 +82,23 @@ public final class PersonalitySettingsStore: ObservableObject {
         licensingService?.isFeatureUnlocked(.personality) ?? true
     }
 
-    /// Re-evaluates tier entitlement (e.g., after license deactivation) and turns off commentary if locked.
+    /// Re-evaluates tier entitlement (e.g., after license deactivation or QA override) and turns off commentary if locked.
+    /// Leaves `UserDefaults` untouched while `licensingService?.isSimulatingFreeTier == true` so switching back restores opt-in state.
     public func validateTierEntitlement() {
-        guard !isPersonalityUnlocked, isEnabled else { return }
-        isEnabled = false
-        userDefaults.set(false, forKey: Self.isEnabledKey)
-        onSettingsChanged?()
+        if !isPersonalityUnlocked {
+            guard isEnabled else { return }
+            isEnabled = false
+            if licensingService?.isSimulatingFreeTier != true {
+                userDefaults.set(false, forKey: Self.isEnabledKey)
+            }
+            onSettingsChanged?()
+        } else {
+            let storedEnabled = userDefaults.bool(forKey: Self.isEnabledKey)
+            if storedEnabled != isEnabled {
+                isEnabled = storedEnabled
+                onSettingsChanged?()
+            }
+        }
     }
 
     @discardableResult

@@ -89,8 +89,14 @@ public final class AgentMonitorService: ObservableObject {
 
     private static let customAgentsKey = "Bitz.AgentMonitor.CustomAgents"
     private static let agentDisabledPrefix = "Bitz.AgentMonitor.Disabled."
+    private static let primaryFreeAgentKey = "Bitz.AgentMonitor.PrimaryFreeAgentID"
     private static let popupsEnabledKey = "Bitz.AgentMonitor.PopupsEnabled"
     private static let signalSettingsKey = "Bitz.AgentMonitor.SignalSettings"
+
+    /// Whether Multi-Agent Swarm (monitoring 2+ agents simultaneously) is unlocked.
+    public var isMultiAgentSwarmUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.multiAgentSwarm) ?? true
+    }
 
     public init(
         adapters: [AgentAdapter] = [],
@@ -111,7 +117,7 @@ public final class AgentMonitorService: ObservableObject {
         loadCatalog()
     }
 
-    /// Loads built-in and user-custom agent definitions.
+    /// Loads built-in and user-custom agent definitions, clamping to at most 1 enabled agent when `.multiAgentSwarm` is locked (#144).
     public func loadCatalog() {
         var merged: [AgentDefinition] = []
         for builtIn in AgentDefinition.builtInCatalog {
@@ -130,6 +136,27 @@ public final class AgentMonitorService: ObservableObject {
                 merged.append(def)
             }
         }
+
+        if !isMultiAgentSwarmUnlocked {
+            let storedPrimary = userDefaults.string(forKey: Self.primaryFreeAgentKey)
+            let chosenPrimaryID: String
+            if let storedPrimary {
+                // An empty string means the user explicitly toggled off their single Free-tier agent.
+                chosenPrimaryID = storedPrimary
+            } else {
+                let activeCandidate = activeAgents.sorted().first { activeID in
+                    merged.contains { $0.id == activeID && $0.isEnabled }
+                }
+                let fallbackCandidate = merged.first(where: { $0.isEnabled })?.id ?? ""
+                chosenPrimaryID = activeCandidate ?? fallbackCandidate
+                userDefaults.set(chosenPrimaryID, forKey: Self.primaryFreeAgentKey)
+            }
+
+            for index in merged.indices {
+                merged[index].isEnabled = merged[index].isEnabled && (merged[index].id == chosenPrimaryID)
+            }
+        }
+
         self.catalog = merged
     }
 
@@ -149,44 +176,183 @@ public final class AgentMonitorService: ObservableObject {
         if let encoded = try? JSONEncoder().encode(existingCustom) {
             userDefaults.set(encoded, forKey: Self.customAgentsKey)
         }
+        if !isMultiAgentSwarmUnlocked {
+            userDefaults.set(id, forKey: Self.primaryFreeAgentKey)
+        }
         loadCatalog()
+        pruneStateForDisabledAgents()
     }
 
     /// Removes a custom agent definition by ID.
     public func removeCustomAgent(id: String) {
+        let removedDisplayName = catalog.first(where: { $0.id == id })?.displayName
         var existingCustom = loadStoredCustomAgents()
         existingCustom.removeAll { $0.id == id }
         if let encoded = try? JSONEncoder().encode(existingCustom) {
             userDefaults.set(encoded, forKey: Self.customAgentsKey)
         }
+        if userDefaults.string(forKey: Self.primaryFreeAgentKey) == id {
+            userDefaults.removeObject(forKey: Self.primaryFreeAgentKey)
+        }
         loadCatalog()
+        clearAgentState(id: id, displayNameHint: removedDisplayName)
+        pruneStateForDisabledAgents()
     }
 
     /// Enables or disables an agent definition.
     public func setAgentEnabled(id: String, isEnabled: Bool) {
         userDefaults.set(!isEnabled, forKey: Self.agentDisabledPrefix + id)
+        if !isMultiAgentSwarmUnlocked {
+            if isEnabled {
+                userDefaults.set(id, forKey: Self.primaryFreeAgentKey)
+            } else if userDefaults.string(forKey: Self.primaryFreeAgentKey) == id {
+                userDefaults.set("", forKey: Self.primaryFreeAgentKey)
+            }
+        }
         loadCatalog()
         if !isEnabled {
-            activeSessionsByAgent.removeValue(forKey: id)
-            syncPublishedActiveState()
-            if activePopup?.agentName == catalog.first(where: { $0.id == id })?.displayName {
-                activePopup = nil
+            clearAgentState(id: id)
+        }
+        pruneStateForDisabledAgents()
+    }
+
+    /// Re-evaluates Multi-Agent Swarm entitlement after a tier change (`#144`).
+    public func validateTierEntitlement() {
+        if isMultiAgentSwarmUnlocked {
+            userDefaults.removeObject(forKey: Self.primaryFreeAgentKey)
+        } else {
+            let currentPrimary = userDefaults.string(forKey: Self.primaryFreeAgentKey)
+            if currentPrimary == nil || currentPrimary?.isEmpty == true {
+                userDefaults.removeObject(forKey: Self.primaryFreeAgentKey)
             }
-            sessions = sessions.filter { $0.value.agentID != id }
-            runawaySinceByAgent.removeValue(forKey: id)
-            runawayFiredByAgent.remove(id)
-            contextReadings = contextReadings.filter { $0.value.agentID != id }
-            if latestContext?.agentID == id {
-                latestContext = nil
-                latestContextStateKey = nil
+        }
+        loadCatalog()
+        pruneStateForDisabledAgents()
+        clampActiveSessionsToSinglePairIfLocked()
+    }
+
+    private func pruneStateForDisabledAgents() {
+        let enabledIDs = Set(catalog.filter(\.isEnabled).map(\.id))
+        var trackedIDs = Set(activeSessionsByAgent.keys)
+        for session in sessions.values {
+            trackedIDs.insert(session.agentID)
+        }
+        for reading in contextReadings.values {
+            trackedIDs.insert(reading.agentID)
+        }
+        if let latestID = latestContext?.agentID {
+            trackedIDs.insert(latestID)
+        }
+        if let warningID = activeWarning?.agentID {
+            trackedIDs.insert(warningID)
+        }
+        for id in trackedIDs where !enabledIDs.contains(id) {
+            clearAgentState(id: id)
+        }
+    }
+
+    private func clampActiveSessionsToSinglePairIfLocked() {
+        guard !isMultiAgentSwarmUnlocked else { return }
+
+        let enabledIDs = Set(catalog.filter(\.isEnabled).map(\.id))
+        var candidates: [(agentID: String, subkey: String, stateKey: String, isEnabled: Bool, lastActivity: Date)] = []
+        for (agentID, subkeys) in activeSessionsByAgent {
+            for subkey in subkeys {
+                let sessionID: String? = (subkey == Self.defaultSessionSubkey) ? nil : subkey
+                let stateKey = Self.makeStateKey(agentID: agentID, sessionID: sessionID)
+                candidates.append((
+                    agentID: agentID,
+                    subkey: subkey,
+                    stateKey: stateKey,
+                    isEnabled: enabledIDs.contains(agentID),
+                    lastActivity: sessions[stateKey]?.lastActivity ?? .distantPast
+                ))
             }
-            if activeWarning?.agentID == id {
-                acknowledgeWarning()
-            } else if approvalOverrideAgentID == id {
-                approvalOverrideAgentID = nil
-                approvalOverrideStateKey = nil
-                presentWarningBubble()
+        }
+
+        if let kept = candidates.sorted(by: { lhs, rhs in
+            if lhs.isEnabled != rhs.isEnabled { return lhs.isEnabled }
+            if lhs.lastActivity != rhs.lastActivity { return lhs.lastActivity > rhs.lastActivity }
+            if lhs.agentID != rhs.agentID { return lhs.agentID < rhs.agentID }
+            return lhs.subkey < rhs.subkey
+        }).first {
+            activeSessionsByAgent = [kept.agentID: [kept.subkey]]
+            pruneOtherSessionState(keepingStateKey: kept.stateKey)
+        } else {
+            activeSessionsByAgent.removeAll()
+            let remainingKeys = Set(sessions.keys).union(contextReadings.keys)
+            if let keptKey = remainingKeys.sorted(by: { lhs, rhs in
+                let lhsEnabled = enabledIDs.contains(sessions[lhs]?.agentID ?? contextReadings[lhs]?.agentID ?? "")
+                let rhsEnabled = enabledIDs.contains(sessions[rhs]?.agentID ?? contextReadings[rhs]?.agentID ?? "")
+                if lhsEnabled != rhsEnabled { return lhsEnabled }
+                let lhsTime = sessions[lhs]?.lastActivity ?? .distantPast
+                let rhsTime = sessions[rhs]?.lastActivity ?? .distantPast
+                if lhsTime != rhsTime { return lhsTime > rhsTime }
+                return lhs < rhs
+            }).first {
+                pruneOtherSessionState(keepingStateKey: keptKey)
             }
+        }
+
+        syncPublishedActiveState()
+    }
+
+    private func pruneOtherSessionState(keepingStateKey keptStateKey: String) {
+        let allKeys = Set(sessions.keys).union(contextReadings.keys)
+        for stateKey in allKeys where stateKey != keptStateKey {
+            clearSessionState(stateKey: stateKey)
+        }
+        if latestContext == nil, let keptReading = contextReadings[keptStateKey] {
+            latestContext = keptReading
+            latestContextStateKey = keptStateKey
+        }
+    }
+
+    private func clearSessionState(stateKey: String) {
+        sessions.removeValue(forKey: stateKey)
+        contextReadings.removeValue(forKey: stateKey)
+        if latestContextStateKey == stateKey {
+            latestContext = nil
+            latestContextStateKey = nil
+        }
+        if activeWarningStateKey == stateKey {
+            acknowledgeWarning()
+        } else if approvalOverrideStateKey == stateKey {
+            approvalOverrideAgentID = nil
+            approvalOverrideStateKey = nil
+            presentWarningBubble()
+        }
+        if approvalPopupStateKey == stateKey {
+            approvalPopupAgentID = nil
+            approvalPopupStateKey = nil
+        }
+    }
+
+    private func clearAgentState(id: String, displayNameHint: String? = nil) {
+        let resolvedDisplayName = displayNameHint ?? catalog.first(where: { $0.id == id })?.displayName
+        activeSessionsByAgent.removeValue(forKey: id)
+        syncPublishedActiveState()
+        if let resolvedDisplayName, activePopup?.agentName == resolvedDisplayName {
+            activePopup = nil
+        }
+        sessions = sessions.filter { $0.value.agentID != id }
+        runawaySinceByAgent.removeValue(forKey: id)
+        runawayFiredByAgent.remove(id)
+        contextReadings = contextReadings.filter { $0.value.agentID != id }
+        if latestContext?.agentID == id {
+            latestContext = nil
+            latestContextStateKey = nil
+        }
+        if activeWarning?.agentID == id {
+            acknowledgeWarning()
+        } else if approvalOverrideAgentID == id {
+            approvalOverrideAgentID = nil
+            approvalOverrideStateKey = nil
+            presentWarningBubble()
+        }
+        if approvalPopupAgentID == id {
+            approvalPopupAgentID = nil
+            approvalPopupStateKey = nil
         }
     }
 
@@ -278,6 +444,16 @@ public final class AgentMonitorService: ObservableObject {
 
     /// Processes an incoming AgentEvent and evaluates popup display rules.
     public func handleEvent(_ event: AgentEvent) {
+        processEvent(event, bypassCatalogGate: false)
+    }
+
+    /// Processes a user-triggered simulated event (e.g. Advanced settings QA buttons),
+    /// bypassing Free-tier catalog/multi-agent locks so alert & audio testing always works (`#144`).
+    public func handleSimulatedEvent(_ event: AgentEvent) {
+        processEvent(event, bypassCatalogGate: true)
+    }
+
+    private func processEvent(_ event: AgentEvent, bypassCatalogGate: Bool) {
         let now = clock()
 
         // Discard events older than 60 seconds (NFR-004)
@@ -285,10 +461,22 @@ public final class AgentMonitorService: ObservableObject {
             return
         }
 
-        // Verify if agent is enabled in catalog
-        guard let agentDef = catalog.first(where: { $0.id == event.agentID }), agentDef.isEnabled else {
-            return
+        // Verify if agent is enabled in catalog unless explicitly bypassed by user simulation
+        let agentDef = catalog.first(where: { $0.id == event.agentID })
+        let isAgentEnabled = agentDef?.isEnabled ?? false
+        if !bypassCatalogGate {
+            guard isAgentEnabled else {
+                return
+            }
+
+            // When Multi-Agent Swarm is locked, strictly ignore events from a 2nd concurrent agent while a 1st agent is active (#144)
+            if !isMultiAgentSwarmUnlocked, !activeAgents.isEmpty, !activeAgents.contains(event.agentID) {
+                return
+            }
         }
+
+        // Do not overwrite/pollute active-session tracking with simulated events for disabled agents
+        let tracksSessionState = !bypassCatalogGate || isAgentEnabled
 
         let id = event.agentID
         let name = event.agentName
@@ -299,9 +487,13 @@ public final class AgentMonitorService: ObservableObject {
         // Popup priority while a warning is active: data-model.md "Warning slot".
         switch event.kind {
         case .started:
-            registerActiveSession(agentID: id, subkey: subkey)
+            if tracksSessionState {
+                registerActiveSession(agentID: id, subkey: subkey)
+            }
         case .working:
-            registerActiveSession(agentID: id, subkey: subkey)
+            if tracksSessionState {
+                registerActiveSession(agentID: id, subkey: subkey)
+            }
             session.turnActive = true
             session.awaitingApproval = false
             session.lastActivity = now
@@ -313,7 +505,9 @@ public final class AgentMonitorService: ObservableObject {
                 restoreWarningBubble(ifOverriddenByAgentID: id, stateKey: stateKey)
             }
         case .almostDone:
-            registerActiveSession(agentID: id, subkey: subkey)
+            if tracksSessionState {
+                registerActiveSession(agentID: id, subkey: subkey)
+            }
             session.lastActivity = now
             if activeWarning == nil {
                 if signalSettings.almostDoneEnabled {
@@ -324,7 +518,9 @@ public final class AgentMonitorService: ObservableObject {
                 restoreWarningBubble(ifOverriddenByAgentID: id, stateKey: stateKey)
             }
         case .needsApproval:
-            registerActiveSession(agentID: id, subkey: subkey)
+            if tracksSessionState {
+                registerActiveSession(agentID: id, subkey: subkey)
+            }
             session.awaitingApproval = true
             if matchesActiveWarning(agentID: id, stateKey: stateKey) {
                 acknowledgeWarning()
@@ -338,7 +534,9 @@ public final class AgentMonitorService: ObservableObject {
             // Approval popup persists indefinitely until next event or manual action
             displayPopupIfEnabled(text: text, kind: .needsApproval, agentName: name, durationSeconds: nil)
         case .done:
-            unregisterActiveSession(agentID: id, sessionID: event.sessionID, isProcessPresence: event.isProcessPresence)
+            if tracksSessionState {
+                unregisterActiveSession(agentID: id, sessionID: event.sessionID, isProcessPresence: event.isProcessPresence)
+            }
             if event.isProcessPresence || activeSessionsByAgent[id] == nil {
                 runawaySinceByAgent.removeValue(forKey: id)
                 runawayFiredByAgent.remove(id)
@@ -358,7 +556,9 @@ public final class AgentMonitorService: ObservableObject {
                 restoreWarningBubble(ifOverriddenByAgentID: id, stateKey: stateKey)
             }
         case .failed:
-            unregisterActiveSession(agentID: id, sessionID: event.sessionID, isProcessPresence: event.isProcessPresence)
+            if tracksSessionState {
+                unregisterActiveSession(agentID: id, sessionID: event.sessionID, isProcessPresence: event.isProcessPresence)
+            }
             if event.isProcessPresence || activeSessionsByAgent[id] == nil {
                 runawaySinceByAgent.removeValue(forKey: id)
                 runawayFiredByAgent.remove(id)
@@ -395,13 +595,15 @@ public final class AgentMonitorService: ObservableObject {
             if let pending = event.pendingTools { session.pendingTools = pending }
             if let turnActive = event.turnActive {
                 session.turnActive = turnActive
-                if turnActive {
-                    registerActiveSession(agentID: id, subkey: subkey)
-                } else if !session.awaitingApproval {
-                    unregisterActiveSession(agentID: id, sessionID: event.sessionID, isProcessPresence: false)
+                if tracksSessionState {
+                    if turnActive {
+                        registerActiveSession(agentID: id, subkey: subkey)
+                    } else if !session.awaitingApproval {
+                        unregisterActiveSession(agentID: id, sessionID: event.sessionID, isProcessPresence: false)
+                    }
                 }
             }
-            if let tokens = event.contextTokens {
+            if let tokens = event.contextTokens, tracksSessionState {
                 let reading = AgentContextReading(agentID: id, agentName: name, tokens: tokens,
                                                   windowTokens: signalSettings.contextWindow(for: id))
                 contextReadings[stateKey] = reading
@@ -426,7 +628,7 @@ public final class AgentMonitorService: ObservableObject {
                 evaluateRunawayCPU(agentID: id, agentName: name, cpuPercent: cpuPercent, stateKey: stateKey, now: now)
             }
         }
-        if event.kind != .usage || !event.isProcessPresence || sessions[stateKey] != nil {
+        if tracksSessionState && (event.kind != .usage || !event.isProcessPresence || sessions[stateKey] != nil) {
             sessions[stateKey] = session
         }
         onEventHandled?(event)
@@ -494,8 +696,11 @@ public final class AgentMonitorService: ObservableObject {
     }
 
     private func registerActiveSession(agentID: String, subkey: String) {
-        if let licensingService, !licensingService.isFeatureUnlocked(.multiAgentSwarm) {
-            // Free tier: allow at most 1 active simultaneously monitored session across all agents.
+        if !isMultiAgentSwarmUnlocked {
+            // Free tier: allow at most 1 active simultaneously monitored (agentID, subkey) pair across all agents (#144, #153).
+            let sessionID: String? = (subkey == Self.defaultSessionSubkey) ? nil : subkey
+            let keptStateKey = Self.makeStateKey(agentID: agentID, sessionID: sessionID)
+            pruneOtherSessionState(keepingStateKey: keptStateKey)
             activeSessionsByAgent = [agentID: [subkey]]
         } else {
             activeSessionsByAgent[agentID, default: []].insert(subkey)
