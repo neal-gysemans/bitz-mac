@@ -62,6 +62,16 @@ public struct AgentsSettingsTabView: View {
 
                     Toggle("Usage Limit Warnings (Claude Code)", isOn: $agentMonitor.signalSettings.rateLimitWarningEnabled)
 
+                    Toggle("Runaway CPU Warnings", isOn: $agentMonitor.signalSettings.runawayCPUWarningEnabled)
+                    Stepper("Warn above \(agentMonitor.signalSettings.runawayCPUPercentThreshold)% CPU",
+                            value: $agentMonitor.signalSettings.runawayCPUPercentThreshold, in: 50...400, step: 10)
+                        .disabled(!agentMonitor.signalSettings.runawayCPUWarningEnabled)
+                        .padding(.leading, 20)
+                    Stepper("Sustained for \(agentMonitor.signalSettings.runawayCPUDurationMinutes) min",
+                            value: $agentMonitor.signalSettings.runawayCPUDurationMinutes, in: 1...15)
+                        .disabled(!agentMonitor.signalSettings.runawayCPUWarningEnabled)
+                        .padding(.leading, 20)
+
                     hint("Turning off Agent Speech Bubbles hides bubbles only; the amber visor and context gauge keep working.")
 
                     Divider()

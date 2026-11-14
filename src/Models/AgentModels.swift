@@ -112,6 +112,7 @@ extension AgentEvent {
         public static let owningPID = "owningPID"
         public static let bundleID = "bundleID"
         public static let workingDir = "workingDir"
+        public static let cpuPercent = "cpuPercent"
     }
 
     /// Latest turn's input tokens; `nil` when absent, non-numeric or negative.
@@ -145,6 +146,18 @@ extension AgentEvent {
     public var bundleID: String? { metadata?[MetadataKey.bundleID] }
     public var workingDir: String? { metadata?[MetadataKey.workingDir] }
 
+    /// Sampled process CPU percentage (`100.0` = 1 full core); `nil` when absent, negative, non-finite, or above `100_000%`.
+    public var cpuPercent: Double? {
+        guard let raw = metadata?[MetadataKey.cpuPercent],
+              let value = Double(raw),
+              value.isFinite,
+              value >= 0,
+              value <= 100_000.0 else {
+            return nil
+        }
+        return value
+    }
+
     public var warningReason: AgentWarningReason {
         metadata?[MetadataKey.reason].flatMap { AgentWarningReason(rawValue: $0) } ?? .reported
     }
@@ -162,6 +175,8 @@ public enum AgentWarningReason: String, Codable, Sendable, CaseIterable {
     case stall
     /// Usage limit hit (Claude Code `rate_limit` / HTTP 429 log line).
     case rateLimit
+    /// Process CPU stayed above the configured threshold for the sustained window.
+    case runawayCPU
     /// Raised by an agent or script through the drop-box; has no toggle.
     case reported
 }
@@ -223,10 +238,15 @@ public struct AgentSignalSettings: Codable, Sendable, Equatable {
     public var loopWarningEnabled = true
     public var stallWarningEnabled = true
     public var rateLimitWarningEnabled = true
+    public var runawayCPUWarningEnabled = true
     /// 50...99
     public var contextThresholdPercent = 90
     /// 1...30
     public var stallTimeoutMinutes = 3
+    /// 50...400 (100 = 1 full core)
+    public var runawayCPUPercentThreshold = 95
+    /// 1...15
+    public var runawayCPUDurationMinutes = 2
     /// Session logs don't state the model's window, so it is a per-agent setting.
     public var contextWindowTokens: [String: Int] = ["claude": 200_000, "antigravity": 1_000_000]
 
@@ -241,8 +261,11 @@ public struct AgentSignalSettings: Codable, Sendable, Equatable {
         loopWarningEnabled = try container.decodeIfPresent(Bool.self, forKey: .loopWarningEnabled) ?? defaults.loopWarningEnabled
         stallWarningEnabled = try container.decodeIfPresent(Bool.self, forKey: .stallWarningEnabled) ?? defaults.stallWarningEnabled
         rateLimitWarningEnabled = try container.decodeIfPresent(Bool.self, forKey: .rateLimitWarningEnabled) ?? defaults.rateLimitWarningEnabled
+        runawayCPUWarningEnabled = try container.decodeIfPresent(Bool.self, forKey: .runawayCPUWarningEnabled) ?? defaults.runawayCPUWarningEnabled
         contextThresholdPercent = try container.decodeIfPresent(Int.self, forKey: .contextThresholdPercent) ?? defaults.contextThresholdPercent
         stallTimeoutMinutes = try container.decodeIfPresent(Int.self, forKey: .stallTimeoutMinutes) ?? defaults.stallTimeoutMinutes
+        runawayCPUPercentThreshold = try container.decodeIfPresent(Int.self, forKey: .runawayCPUPercentThreshold) ?? defaults.runawayCPUPercentThreshold
+        runawayCPUDurationMinutes = try container.decodeIfPresent(Int.self, forKey: .runawayCPUDurationMinutes) ?? defaults.runawayCPUDurationMinutes
         contextWindowTokens = try container.decodeIfPresent([String: Int].self, forKey: .contextWindowTokens) ?? defaults.contextWindowTokens
     }
 
@@ -256,6 +279,7 @@ public struct AgentSignalSettings: Codable, Sendable, Equatable {
         case .loop: return loopWarningEnabled
         case .stall: return stallWarningEnabled
         case .rateLimit: return rateLimitWarningEnabled
+        case .runawayCPU: return runawayCPUWarningEnabled
         case .reported: return true
         }
     }
@@ -264,6 +288,8 @@ public struct AgentSignalSettings: Codable, Sendable, Equatable {
         var copy = self
         copy.contextThresholdPercent = min(99, max(50, contextThresholdPercent))
         copy.stallTimeoutMinutes = min(30, max(1, stallTimeoutMinutes))
+        copy.runawayCPUPercentThreshold = min(400, max(50, runawayCPUPercentThreshold))
+        copy.runawayCPUDurationMinutes = min(15, max(1, runawayCPUDurationMinutes))
         copy.contextWindowTokens = contextWindowTokens.filter { $0.value > 0 }
         return copy
     }

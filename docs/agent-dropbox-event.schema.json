@@ -35,7 +35,7 @@
     "metadata": {
       "type": "object",
       "additionalProperties": { "type": ["string", "number", "boolean"] },
-      "description": "Optional details. Keys: reason (context|loop|stall|reported), contextTokens, pendingTools, turnActive, seed, source. pendingTools, turnActive, seed and source are written by Bitz's own adapters; the drop-box does not strip them, so a script that sends them is trusted as-is."
+      "description": "Optional details. Keys: reason (context|loop|stall|rateLimit|runawayCPU|reported), contextTokens, pendingTools, turnActive, seed, source, cpuPercent. pendingTools, turnActive, seed, source and cpuPercent are written by Bitz's own adapters; the drop-box does not strip them, so a script that sends them is trusted as-is."
     }
   },
   "additionalProperties": false

@@ -41,6 +41,10 @@ public final class AgentMonitorService: ObservableObject {
             if let data = try? JSONEncoder().encode(signalSettings) {
                 userDefaults.set(data, forKey: Self.signalSettingsKey)
             }
+            if !signalSettings.runawayCPUWarningEnabled {
+                runawaySinceByAgent.removeAll()
+                runawayFiredByAgent.removeAll()
+            }
             recomputeContextReadings()
         }
     }
@@ -67,6 +71,8 @@ public final class AgentMonitorService: ObservableObject {
     private static let defaultSessionSubkey = "__default__"
     private var activeSessionsByAgent: [String: Set<String>] = [:]
     private var sessions: [String: SessionState] = [:]
+    private var runawaySinceByAgent: [String: Date] = [:]
+    private var runawayFiredByAgent: Set<String> = []
     private var contextReadings: [String: AgentContextReading] = [:]
     private var latestContextStateKey: String? = nil
     private var activeWarningStateKey: String? = nil
@@ -167,6 +173,8 @@ public final class AgentMonitorService: ObservableObject {
                 activePopup = nil
             }
             sessions = sessions.filter { $0.value.agentID != id }
+            runawaySinceByAgent.removeValue(forKey: id)
+            runawayFiredByAgent.remove(id)
             contextReadings = contextReadings.filter { $0.value.agentID != id }
             if latestContext?.agentID == id {
                 latestContext = nil
@@ -248,6 +256,8 @@ public final class AgentMonitorService: ObservableObject {
         activeSessionsByAgent.removeAll()
         syncPublishedActiveState()
         sessions.removeAll()
+        runawaySinceByAgent.removeAll()
+        runawayFiredByAgent.removeAll()
         contextReadings.removeAll()
         latestContext = nil
         latestContextStateKey = nil
@@ -329,6 +339,10 @@ public final class AgentMonitorService: ObservableObject {
             displayPopupIfEnabled(text: text, kind: .needsApproval, agentName: name, durationSeconds: nil)
         case .done:
             unregisterActiveSession(agentID: id, sessionID: event.sessionID, isProcessPresence: event.isProcessPresence)
+            if event.isProcessPresence || activeSessionsByAgent[id] == nil {
+                runawaySinceByAgent.removeValue(forKey: id)
+                runawayFiredByAgent.remove(id)
+            }
             // App presence (Claude desktop app shares the `claude` ID with Claude Code) never ends a turn or clears a warning.
             if !event.isProcessPresence {
                 session.turnActive = false
@@ -345,6 +359,10 @@ public final class AgentMonitorService: ObservableObject {
             }
         case .failed:
             unregisterActiveSession(agentID: id, sessionID: event.sessionID, isProcessPresence: event.isProcessPresence)
+            if event.isProcessPresence || activeSessionsByAgent[id] == nil {
+                runawaySinceByAgent.removeValue(forKey: id)
+                runawayFiredByAgent.remove(id)
+            }
             if !event.isProcessPresence {
                 session.turnActive = false
                 session.awaitingApproval = false
@@ -369,9 +387,11 @@ public final class AgentMonitorService: ObservableObject {
                 restoreWarningBubble(ifOverriddenByAgentID: id, stateKey: stateKey)
             }
         case .usage:
-            session.tracksLog = true
-            session.lastActivity = now
-            session.stallFired = false
+            if !event.isProcessPresence {
+                session.tracksLog = true
+                session.lastActivity = now
+                session.stallFired = false
+            }
             if let pending = event.pendingTools { session.pendingTools = pending }
             if let turnActive = event.turnActive {
                 session.turnActive = turnActive
@@ -402,8 +422,13 @@ public final class AgentMonitorService: ObservableObject {
                     session.contextFired = false
                 }
             }
+            if let cpuPercent = event.cpuPercent {
+                evaluateRunawayCPU(agentID: id, agentName: name, cpuPercent: cpuPercent, stateKey: stateKey, now: now)
+            }
         }
-        sessions[stateKey] = session
+        if event.kind != .usage || !event.isProcessPresence || sessions[stateKey] != nil {
+            sessions[stateKey] = session
+        }
         onEventHandled?(event)
     }
 
@@ -429,6 +454,43 @@ public final class AgentMonitorService: ObservableObject {
     public func handleSystemWake() {
         let now = clock()
         for key in sessions.keys { sessions[key]?.lastActivity = now }
+        for key in runawaySinceByAgent.keys { runawaySinceByAgent[key] = now }
+    }
+
+    private func evaluateRunawayCPU(agentID: String, agentName: String, cpuPercent: Double, stateKey: String, now: Date) {
+        guard signalSettings.runawayCPUWarningEnabled else {
+            runawaySinceByAgent.removeValue(forKey: agentID)
+            runawayFiredByAgent.remove(agentID)
+            return
+        }
+
+        let threshold = Double(signalSettings.runawayCPUPercentThreshold)
+        guard cpuPercent >= threshold else {
+            runawaySinceByAgent.removeValue(forKey: agentID)
+            runawayFiredByAgent.remove(agentID)
+            return
+        }
+
+        let since = runawaySinceByAgent[agentID] ?? now
+        if runawaySinceByAgent[agentID] == nil {
+            runawaySinceByAgent[agentID] = now
+        }
+
+        let requiredDuration = Double(signalSettings.runawayCPUDurationMinutes) * 60.0
+        guard now.timeIntervalSince(since) >= requiredDuration else { return }
+        guard !runawayFiredByAgent.contains(agentID) else { return }
+
+        runawayFiredByAgent.insert(agentID)
+        let roundedCPU = Int(min(max(cpuPercent, 0.0), 100_000.0).rounded())
+        raiseWarning(
+            AgentWarning(
+                agentID: agentID,
+                agentName: agentName,
+                reason: .runawayCPU,
+                text: "⚠️ \(agentName) is using \(roundedCPU)% CPU for \(signalSettings.runawayCPUDurationMinutes)+ min (possible runaway process)."
+            ),
+            stateKey: stateKey
+        )
     }
 
     private func registerActiveSession(agentID: String, subkey: String) {
