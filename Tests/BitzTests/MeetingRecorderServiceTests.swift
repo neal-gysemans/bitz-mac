@@ -1985,6 +1985,60 @@ final class MeetingRecorderServiceTests: XCTestCase {
         await service.transcribeAgain()
         XCTAssertTrue(service.lastCompletedResult?.warning?.contains(MeetingBubble.micOnlyWarning) ?? false)
     }
+
+    func testTranscribeAgainWithCustomLocaleIdentifier() async throws {
+        let transcription = MockMeetingTranscriptionService(
+            segments: [
+                MeetingTranscriptSegment(text: "Hallo", startTime: 0.5, endTime: 1.0, confidence: 0.95),
+                MeetingTranscriptSegment(text: "team", startTime: 1.0, endTime: 1.5, confidence: 0.95)
+            ],
+            fullText: "Hallo team dit is een Nederlandse transcriptie."
+        )
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), transcription: transcription)
+        await service.startRecording()
+        await service.stopRecording()
+
+        let initialResult = try XCTUnwrap(service.lastCompletedResult)
+        XCTAssertNotNil(initialResult)
+        XCTAssertEqual(service.settingsStore.transcriptionLocaleIdentifier, nil)
+
+        // Transcribe Again with specific Dutch locale without updating default (#148)
+        await service.transcribeAgain(localeIdentifier: "nl-NL", updateDefaultLocale: false)
+        let retranscribed = try XCTUnwrap(service.lastCompletedResult)
+        XCTAssertNotNil(retranscribed.transcriptTextURL)
+        let metadata = try XCTUnwrap(MeetingRecorderService.recoveryMetadata(at: retranscribed.metadataFileURL, sessionDir: retranscribed.sessionDirectoryURL))
+        XCTAssertEqual(metadata.transcriptLocale, "nl-NL")
+        XCTAssertEqual(service.settingsStore.transcriptionLocaleIdentifier, nil, "Default locale remains nil when updateDefaultLocale is false")
+
+        // Transcribe Again with English locale and update default
+        await service.transcribeAgain(localeIdentifier: "en-US", updateDefaultLocale: true)
+        XCTAssertEqual(service.settingsStore.transcriptionLocaleIdentifier, "en-US", "Default locale is updated when updateDefaultLocale is true")
+
+        // Transcribe Again with forceAutomatic overrides the saved default without mutating it
+        await service.transcribeAgain(forceAutomatic: true)
+        let automaticMeta = try XCTUnwrap(MeetingRecorderService.recoveryMetadata(at: retranscribed.metadataFileURL, sessionDir: retranscribed.sessionDirectoryURL))
+        XCTAssertEqual(automaticMeta.transcriptLocale, "en-US", "FakeTranscriptionService falls back to en-US for Automatic (nil) locale")
+        XCTAssertEqual(service.settingsStore.transcriptionLocaleIdentifier, "en-US", "forceAutomatic keeps saved default untouched when updateDefaultLocale is false")
+    }
+
+    @MainActor
+    func testStartRecordingSnapshotsLocaleBeforeSettingsChange() async throws {
+        let transcription = MockMeetingTranscriptionService(
+            segments: [MeetingTranscriptSegment(text: "Hallo", startTime: 0.5, endTime: 1.0, confidence: 0.95)],
+            fullText: "Hallo"
+        )
+        let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), transcription: transcription)
+        service.settingsStore.setTranscriptionLocaleIdentifier("nl-NL")
+
+        await service.startRecording()
+        // Changing the setting after startRecording must not alter the in-flight meeting's locale
+        service.settingsStore.setTranscriptionLocaleIdentifier("en-US")
+        await service.stopRecording()
+
+        let result = try XCTUnwrap(service.lastCompletedResult)
+        let metadata = try XCTUnwrap(MeetingRecorderService.recoveryMetadata(at: result.metadataFileURL, sessionDir: result.sessionDirectoryURL))
+        XCTAssertEqual(metadata.transcriptLocale, "nl-NL")
+    }
 }
 
 /// Stands in for `Task.sleep` in bubble auto-hide: records each requested delay and returns only when released.

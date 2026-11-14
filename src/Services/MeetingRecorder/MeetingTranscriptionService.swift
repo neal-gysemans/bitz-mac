@@ -1,12 +1,24 @@
+#if canImport(AppKit)
+import AppKit
+#endif
 @preconcurrency import AVFoundation
 import Foundation
 import Speech
+
+// MARK: - On-Device Model Status
+
+public enum OnDeviceModelStatus: String, Equatable, Sendable {
+    case ready
+    case needsDownload
+    case unsupported
+}
 
 // MARK: - Meeting Transcription Errors
 
 public enum MeetingTranscriptionError: Error, LocalizedError, Equatable, Sendable {
     case recognizerUnavailable(String)
     case onDeviceRecognitionUnsupported(String)
+    case missingOnDeviceAsset(locale: String, languageDisplayName: String)
     case recognitionFailed(String)
     case timedOut(TimeInterval)
 
@@ -16,6 +28,8 @@ public enum MeetingTranscriptionError: Error, LocalizedError, Equatable, Sendabl
             return "Speech recognizer is unavailable for locale '\(locale)'."
         case .onDeviceRecognitionUnsupported(let locale):
             return "On-device speech recognition is not supported for locale '\(locale)'."
+        case .missingOnDeviceAsset(let locale, let languageDisplayName):
+            return "On-device speech model for '\(languageDisplayName)' (\(locale)) is not downloaded in macOS. Please download it in System Settings → Keyboard → Dictation."
         case .recognitionFailed(let reason):
             return "Speech transcription failed: \(reason)"
         case .timedOut(let seconds):
@@ -63,12 +77,69 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
         return nsError.domain == "kAFAssistantErrorDomain" && nsError.code == 1110
     }
 
+    /// Probed on macOS 26: missing Assistant/Dictation asset errors (e.g. "No Assistant asset for language nl-NL").
+    public static func isMissingAssetError(_ error: Error) -> Bool {
+        if let transcriptionError = error as? MeetingTranscriptionError,
+           case .missingOnDeviceAsset = transcriptionError {
+            return true
+        }
+        let nsError = error as NSError
+        let desc = nsError.localizedDescription.lowercased()
+        if nsError.domain == "kAFAssistantErrorDomain" {
+            if desc.contains("asset") || desc.contains("download") || desc.contains("not found") || desc.contains("not installed") || nsError.code == 1700 || nsError.code == 1107 {
+                return true
+            }
+        }
+        if desc.contains("no assistant asset") || (desc.contains("asset") && (desc.contains("language") || desc.contains("not downloaded") || desc.contains("missing"))) {
+            return true
+        }
+        return false
+    }
+
+    private static func isLocaleSupported(_ locale: Locale, in supportedLocales: Set<Locale>) -> Bool {
+        let targetID = locale.identifier(.bcp47)
+        let targetLang = locale.language.languageCode?.identifier
+        return supportedLocales.contains {
+            $0.identifier(.bcp47) == targetID || (targetLang != nil && $0.language.languageCode?.identifier == targetLang)
+        }
+    }
+
+    /// Probes whether the on-device asset for a locale is downloaded, needs downloading, or is unsupported.
+    public static func checkOnDeviceAssetStatus(
+        for locale: Locale,
+        supportedLocales: Set<Locale> = SFSpeechRecognizer.supportedLocales(),
+        supportsOnDevice: (Locale) -> Bool = { SFSpeechRecognizer(locale: $0)?.supportsOnDeviceRecognition ?? false },
+        isAvailable: (Locale) -> Bool = { SFSpeechRecognizer(locale: $0)?.isAvailable ?? false }
+    ) -> OnDeviceModelStatus {
+        guard isLocaleSupported(locale, in: supportedLocales) else { return .unsupported }
+        guard supportsOnDevice(locale) && isAvailable(locale) else { return .needsDownload }
+        return .ready
+    }
+
+#if canImport(AppKit)
+    @MainActor
+    @discardableResult
+    public static func openDictationSettings(
+        openURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> Bool {
+        invalidateCachedLocaleOptions()
+        let dictationURLs = [
+            URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Dictation"),
+            URL(string: "x-apple.systempreferences:com.apple.preference.keyboard?Dictation"),
+            URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension"),
+            URL(string: "x-apple.systempreferences:com.apple.preference.keyboard")
+        ].compactMap { $0 }
+        return dictationURLs.contains(where: openURL)
+    }
+#endif
+
     /// Pure handling of one recognition callback (or the timeout, passed as `MeetingTranscriptionError.timedOut`):
     /// adds the result's utterance to `utterances`, then decides whether the task continues or finishes, and how.
     static func recognitionStep(
         result: (segments: [MeetingTranscriptSegment], text: String, isFinal: Bool)?,
         error: Error?,
-        utterances: UtteranceAccumulator
+        utterances: UtteranceAccumulator,
+        resolvedLocaleID: String? = nil
     ) -> RecognitionStep {
         if let result {
             utterances.add(segments: result.segments, formattedString: result.text)
@@ -79,6 +150,15 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
         // An empty or silent recording is an empty transcript, not a failure
         if isNoSpeechError(error) {
             return .finishSuccess
+        }
+        // Check for missing on-device speech asset
+        if isMissingAssetError(error) {
+            let localeID = resolvedLocaleID ?? "current"
+            let displayName = Locale.current.localizedString(forIdentifier: localeID) ?? localeID
+            let missingError = MeetingTranscriptionError.missingOnDeviceAsset(locale: localeID, languageDisplayName: displayName)
+            return utterances.isEmpty
+                ? .finishFailure(missingError)
+                : .finishPartial(warning: "Transcript may be incomplete: \(missingError.localizedDescription)")
         }
         // Keep what was recognized before the failure or timeout instead of losing the whole meeting
         if let timedOut = error as? MeetingTranscriptionError, case .timedOut = timedOut {
@@ -123,18 +203,77 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
             let locale = Locale(identifier: id)
             if supportsOnDevice(locale) { return locale }
         }
+
+        if isLocaleSupported(base, in: supportedLocales) {
+            let displayName = Locale.current.localizedString(forIdentifier: base.identifier) ?? base.identifier
+            throw MeetingTranscriptionError.missingOnDeviceAsset(locale: base.identifier, languageDisplayName: displayName)
+        }
         throw MeetingTranscriptionError.onDeviceRecognitionUnsupported(base.identifier)
     }
 
-    /// On-device transcription languages for the Settings picker, sorted by display name.
+    private static let cachedLocaleOptionsLock = NSLock()
+    nonisolated(unsafe) private static var _cachedLocaleOptions: [(id: String, label: String)]?
+    nonisolated(unsafe) private static var _cachedLocaleOptionsUpdatedAt: Date?
+    nonisolated(unsafe) private static var _isRefreshingLocaleOptions = false
+
+    /// Returns cached on-device transcription languages (ordered by user preference, then name),
+    /// refreshing off-main if the cache is older than 10 seconds.
+    public static func cachedOnDeviceLocaleOptions() -> [(id: String, label: String)] {
+        let snapshot: (options: [(id: String, label: String)]?, needsBackgroundRefresh: Bool) = cachedLocaleOptionsLock.withLock {
+            guard let cached = _cachedLocaleOptions else { return (nil, false) }
+            let stale = _cachedLocaleOptionsUpdatedAt.map { Date().timeIntervalSince($0) > 10 } ?? true
+            let shouldRefresh = stale && !_isRefreshingLocaleOptions
+            if shouldRefresh { _isRefreshingLocaleOptions = true }
+            return (cached, shouldRefresh)
+        }
+        if snapshot.needsBackgroundRefresh {
+            Task.detached(priority: .utility) {
+                _ = onDeviceLocaleOptions()
+            }
+        }
+        if let options = snapshot.options {
+            return options
+        }
+        return onDeviceLocaleOptions()
+    }
+
+    /// Clears the cached locale options so subsequent lookups re-query the system (e.g. after adding a language in macOS Settings).
+    public static func invalidateCachedLocaleOptions() {
+        cachedLocaleOptionsLock.withLock {
+            _cachedLocaleOptions = nil
+            _cachedLocaleOptionsUpdatedAt = nil
+        }
+    }
+
+    /// Locale identifiers enabled in macOS Dictation preferences.
+    public static func dictationLocaleIdentifiers(
+        prefs: [String: Any]? = UserDefaults.standard.persistentDomain(forName: "com.apple.speech.recognition.AppleSpeechRecognition.prefs")
+    ) -> [String] {
+        guard let dict = prefs?["VisibleNetworkSRLocaleIdentifiers"] as? [String: Any] else {
+            return []
+        }
+        return dict.compactMap { key, value in
+            (value as? NSNumber)?.boolValue == true ? key.replacingOccurrences(of: "_", with: "-") : nil
+        }.sorted()
+    }
+
+    /// On-device transcription languages for the Settings picker, sorted by display name, refreshing the cache.
     public static func onDeviceLocaleOptions() -> [(id: String, label: String)] {
-        orderedLocaleOptions(
+        let dictationLocales = dictationLocaleIdentifiers()
+        let preferred = Locale.preferredLanguages + dictationLocales.filter { !Locale.preferredLanguages.contains($0) }
+        let options = orderedLocaleOptions(
             SFSpeechRecognizer.supportedLocales()
                 .filter { SFSpeechRecognizer(locale: $0)?.supportsOnDeviceRecognition ?? false }
                 .map(\.identifier),
-            preferredLanguages: Locale.preferredLanguages,
+            preferredLanguages: preferred,
             displayLocale: .current
         )
+        cachedLocaleOptionsLock.withLock {
+            _cachedLocaleOptions = options
+            _cachedLocaleOptionsUpdatedAt = Date()
+            _isRefreshingLocaleOptions = false
+        }
+        return options
     }
 
     /// Picker entries after "Automatic": the user's preferred languages first (in their order, preferred variants in the
@@ -185,7 +324,14 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
         locale: Locale? = nil
     ) async throws -> MeetingTranscript {
         let chosenLocale = try Self.resolveOnDeviceLocale(requested: locale)
-        guard let recognizer = SFSpeechRecognizer(locale: chosenLocale), recognizer.isAvailable else {
+        guard let recognizer = SFSpeechRecognizer(locale: chosenLocale) else {
+            throw MeetingTranscriptionError.recognizerUnavailable(chosenLocale.identifier)
+        }
+        guard recognizer.isAvailable else {
+            if recognizer.supportsOnDeviceRecognition {
+                let displayName = Locale.current.localizedString(forIdentifier: chosenLocale.identifier) ?? chosenLocale.identifier
+                throw MeetingTranscriptionError.missingOnDeviceAsset(locale: chosenLocale.identifier, languageDisplayName: displayName)
+            }
             throw MeetingTranscriptionError.recognizerUnavailable(chosenLocale.identifier)
         }
 
@@ -230,11 +376,11 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
                             isFinal: result.isFinal
                         )
                     }
-                    finish(Self.recognitionStep(result: utterance, error: error, utterances: utterances))
+                    finish(Self.recognitionStep(result: utterance, error: error, utterances: utterances, resolvedLocaleID: resolvedLocaleID))
                 }
                 state.attach(task)
                 DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
-                    finish(Self.recognitionStep(result: nil, error: MeetingTranscriptionError.timedOut(timeout), utterances: utterances))
+                    finish(Self.recognitionStep(result: nil, error: MeetingTranscriptionError.timedOut(timeout), utterances: utterances, resolvedLocaleID: resolvedLocaleID))
                 }
             }
         } onCancel: {

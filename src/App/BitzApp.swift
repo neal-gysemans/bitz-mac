@@ -417,6 +417,9 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         Task { [meetingRecorder] in
             await meetingRecorder.runLaunchMaintenance()
         }
+        Task.detached(priority: .utility) {
+            _ = SpeechFrameworkTranscriptionService.onDeviceLocaleOptions()
+        }
         if shouldOpenSettingsOnLaunch() {
             showSettingsWindow()
         }
@@ -470,6 +473,12 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             )
             await self.personalityService.tick(context: context, isBubbleIdle: isBubbleIdle, bypassRateLimit: bypassRateLimit)
             self.engine.setIdleCommentaryText(self.personalityService.activeCommentary)
+        }
+    }
+
+    public func applicationDidBecomeActive(_ notification: Notification) {
+        Task.detached(priority: .utility) {
+            _ = SpeechFrameworkTranscriptionService.onDeviceLocaleOptions()
         }
     }
 
@@ -1140,6 +1149,39 @@ struct BitzMenuBarContentView: View {
                 .keyboardShortcut(meetingSettings.recordingHotkey.menuShortcut)
             }
 
+            let rawLocaleOptions = SpeechFrameworkTranscriptionService.cachedOnDeviceLocaleOptions()
+            let localeOptions = AudioSettingsTabView.languageOptions(
+                selected: meetingSettings.transcriptionLocaleIdentifier,
+                loaded: rawLocaleOptions
+            )
+            let currentLanguageLabel = meetingSettings.transcriptionLocaleIdentifier.map { id in
+                localeOptions.first { $0.id == id }?.label
+                    ?? Locale.current.localizedString(forIdentifier: id)
+                    ?? id
+            } ?? "Automatic"
+
+            let isLanguageLocked = meetingRecorder.hasUnfinalizedRecording || meetingRecorder.isTranscribing
+
+            Menu("Meeting Language (\(currentLanguageLabel))") {
+                Toggle("Automatic", isOn: Binding(
+                    get: { meetingSettings.transcriptionLocaleIdentifier == nil },
+                    set: { if $0 { meetingSettings.setTranscriptionLocaleIdentifier(nil) } }
+                ))
+                .disabled(isLanguageLocked)
+
+                if !localeOptions.isEmpty {
+                    Divider()
+
+                    ForEach(localeOptions, id: \.id) { option in
+                        Toggle(option.label, isOn: Binding(
+                            get: { meetingSettings.transcriptionLocaleIdentifier == option.id },
+                            set: { if $0 { meetingSettings.setTranscriptionLocaleIdentifier(option.id) } }
+                        ))
+                        .disabled(isLanguageLocked)
+                    }
+                }
+            }
+
             if let lastRecording = meetingRecorder.lastCompletedResult {
                 Button("Reveal Last Recording in Finder") {
                     meetingRecorder.revealInFinder(lastRecording.sessionDirectoryURL)
@@ -1147,6 +1189,26 @@ struct BitzMenuBarContentView: View {
             }
 
             if meetingRecorder.canTranscribeAgain {
+                Menu("Transcribe Last Recording Again As…") {
+                    Button("Automatic (System)") {
+                        Task {
+                            await meetingRecorder.transcribeAgain(forceAutomatic: true)
+                        }
+                    }
+
+                    if !rawLocaleOptions.isEmpty {
+                        Divider()
+
+                        ForEach(rawLocaleOptions, id: \.id) { option in
+                            Button(option.label) {
+                                Task {
+                                    await meetingRecorder.transcribeAgain(localeIdentifier: option.id)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Button("Transcribe Last Recording Again") {
                     Task {
                         await meetingRecorder.transcribeAgain()

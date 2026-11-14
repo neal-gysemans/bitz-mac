@@ -314,6 +314,8 @@ public struct MeetingRecordingResult: Equatable, Sendable {
     public let transcriptSkipReason: MeetingTranscriptSkipReason?
     /// Why transcription failed and no transcript exists (nil when it succeeded, was skipped or never ran).
     public let transcriptError: String?
+    /// True when transcription failed specifically because the on-device speech model asset is not downloaded.
+    public let transcriptMissingAsset: Bool
 
     public init(
         sessionID: String,
@@ -325,7 +327,8 @@ public struct MeetingRecordingResult: Equatable, Sendable {
         durationSeconds: TimeInterval,
         warning: String? = nil,
         transcriptSkipReason: MeetingTranscriptSkipReason? = nil,
-        transcriptError: String? = nil
+        transcriptError: String? = nil,
+        transcriptMissingAsset: Bool = false
     ) {
         self.sessionID = sessionID
         self.sessionDirectoryURL = sessionDirectoryURL
@@ -337,6 +340,7 @@ public struct MeetingRecordingResult: Equatable, Sendable {
         self.warning = warning
         self.transcriptSkipReason = transcriptSkipReason
         self.transcriptError = transcriptError
+        self.transcriptMissingAsset = transcriptMissingAsset
     }
 }
 

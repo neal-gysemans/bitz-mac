@@ -1,0 +1,30 @@
+{
+  "accept_commit": "e62431d93b9fa3aac81151e792f1b0ba8868e050",
+  "acceptance_history": [
+    {
+      "accept_commit": "e62431d93b9fa3aac81151e792f1b0ba8868e050",
+      "acceptance_mode": "pr",
+      "accepted_at": "2026-11-12T18:30:46.381826+00:00",
+      "accepted_by": "akram",
+      "accepted_from_commit": "5d7681adacdf5b53e4941fa2c65345203a43fc2e"
+    }
+  ],
+  "acceptance_mode": "pr",
+  "accepted_at": "2026-11-12T18:30:46.381826+00:00",
+  "accepted_by": "akram",
+  "accepted_from_commit": "5d7681adacdf5b53e4941fa2c65345203a43fc2e",
+  "created_at": "2026-11-12T17:29:07.345922+00:00",
+  "flattened": false,
+  "friendly_name": "Multilingual Meeting Transcription (Quick Switcher & Offline Model Setup)",
+  "mission_id": "01M78CWPZ7EAS9YK0DHE8NCSHS",
+  "mission_number": null,
+  "mission_slug": "multilingual-transcription-01M78CWP",
+  "mission_type": "software-dev",
+  "pr_bound": true,
+  "purpose_context": "This mission delivers GitHub Issue #148 by adding a Menu Bar quick language switcher for meetings, model availability indicators with 1-click Dictation deep linking in Settings > Audio, and 'Transcribe Last Recording Again As...' language picker, while preserving 0% idle CPU and zero polling.",
+  "purpose_tldr": "Provide zero-friction Menu Bar language switching, offline Dictation model status & setup deep link in Settings, and choose-language re-transcription",
+  "slug": "multilingual-transcription-01M78CWP",
+  "status_phase": "1",
+  "target_branch": "feat/issue-148-multilingual-transcription",
+  "topology": "single_branch"
+}

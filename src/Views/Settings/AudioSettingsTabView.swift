@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Settings tab for configuring Cyber Audio features: master toggle, output volume,
 /// individual sound event toggles with preview triggers, environment suppression rules,
@@ -10,8 +11,15 @@ public struct AudioSettingsTabView: View {
     @ObservedObject public var meetingRecorder: MeetingRecorderService
     public var licensingService: (any LicensingServiceProtocol)?
     @ObservedObject public var characterStore: AvatarCharacterStore
+    enum SpeechModelNotice: Equatable {
+        case ready
+        case needsDownload(title: String)
+        case unsupported
+    }
+
     /// Built once in `.onAppear` (probing recognizers is not free), never in `body`.
     @State private var transcriptionLocaleOptions: [(id: String, label: String)] = []
+    @State private var speechModelNotice: SpeechModelNotice?
     /// `syncWarning` reads the file system, so it runs when a folder changes, never in `body`.
     @State private var recordingsFolderWarning: String?
     @State private var exportFolderWarning: String?
@@ -55,15 +63,68 @@ public struct AudioSettingsTabView: View {
             Task { await meetingRecorder.refreshPermissions() }
             updateRecordingsFolderWarning()
             updateExportFolderWarning()
-            // Probing ~60 recognizers takes ~0.2 s, so build the list off the main thread
-            Task {
-                transcriptionLocaleOptions = await Task.detached(priority: .utility) {
-                    SpeechFrameworkTranscriptionService.onDeviceLocaleOptions()
-                }.value
-            }
+            loadTranscriptionLocaleOptions()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loadTranscriptionLocaleOptions()
+        }
+        .onChange(of: meetingSettings.transcriptionLocaleIdentifier) { loadSpeechModelNotice() }
         .onChange(of: meetingSettings.meetingsRootDirectoryURL) { updateRecordingsFolderWarning() }
         .onChange(of: meetingSettings.transcriptExportDirectoryURL) { updateExportFolderWarning() }
+    }
+
+    private func loadTranscriptionLocaleOptions() {
+        let selectedID = meetingSettings.transcriptionLocaleIdentifier
+        // Probing ~60 recognizers takes ~0.2 s, so build the list off the main thread
+        Task {
+            let (options, notice) = await Task.detached(priority: .utility) {
+                (
+                    SpeechFrameworkTranscriptionService.onDeviceLocaleOptions(),
+                    Self.resolveSpeechModelNotice(localeID: selectedID)
+                )
+            }.value
+            transcriptionLocaleOptions = options
+            if meetingSettings.transcriptionLocaleIdentifier == selectedID {
+                speechModelNotice = notice
+            }
+        }
+    }
+
+    private func loadSpeechModelNotice() {
+        let selectedID = meetingSettings.transcriptionLocaleIdentifier
+        Task {
+            let notice = await Task.detached(priority: .utility) {
+                Self.resolveSpeechModelNotice(localeID: selectedID)
+            }.value
+            if meetingSettings.transcriptionLocaleIdentifier == selectedID {
+                speechModelNotice = notice
+            }
+        }
+    }
+
+    nonisolated static func resolveSpeechModelNotice(localeID: String?) -> SpeechModelNotice? {
+        if let localeID {
+            switch SpeechFrameworkTranscriptionService.checkOnDeviceAssetStatus(for: Locale(identifier: localeID)) {
+            case .ready:
+                return .ready
+            case .needsDownload:
+                return .needsDownload(title: "On-device speech model is not downloaded in macOS.")
+            case .unsupported:
+                return .unsupported
+            }
+        }
+        do {
+            let resolved = try SpeechFrameworkTranscriptionService.resolveOnDeviceLocale(requested: nil)
+            if SpeechFrameworkTranscriptionService.checkOnDeviceAssetStatus(for: resolved) == .needsDownload {
+                let langName = Locale.current.localizedString(forIdentifier: resolved.identifier) ?? resolved.identifier
+                return .needsDownload(title: "Automatic model (\(langName)) is not downloaded in macOS.")
+            }
+            return nil
+        } catch let MeetingTranscriptionError.missingOnDeviceAsset(_, langName) {
+            return .needsDownload(title: "Automatic model (\(langName)) is not downloaded in macOS.")
+        } catch {
+            return nil
+        }
     }
 
     private func updateRecordingsFolderWarning() {
@@ -283,7 +344,47 @@ public struct AudioSettingsTabView: View {
                 }
                 .font(.subheadline)
 
-                caption("Transcription uses one language per recording, so pick the meeting's language.", enabled: true)
+                HStack(spacing: 4) {
+                    Text("Don't see your language?")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        SpeechFrameworkTranscriptionService.openDictationSettings()
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("Add in macOS Settings…")
+                            Image(systemName: "arrow.up.forward.app")
+                                .imageScale(.small)
+                        }
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
+
+                caption("Transcription uses one language per recording. Only languages with a downloaded macOS Dictation model appear here — turn Dictation ON and add your language in System Settings → Keyboard to download it.", enabled: true)
+
+                switch speechModelNotice {
+                case .ready:
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text("On-device speech model is installed on this Mac.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                case .needsDownload(let title):
+                    missingSpeechModelNotice(title: title)
+                case .unsupported:
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle.fill")
+                            .foregroundStyle(.secondary)
+                        Text("On-device speech recognition is not supported for this locale.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                case nil:
+                    EmptyView()
+                }
 
                 Toggle("Copy transcript path to clipboard", isOn: Binding(
                     get: { meetingSettings.copyTranscriptPathToClipboard },
@@ -343,6 +444,24 @@ public struct AudioSettingsTabView: View {
     private func chooseExportFolder() {
         if let url = chooseFolder(message: "Select a folder that also receives a copy of each meeting transcript") {
             meetingSettings.setTranscriptExportDirectoryURL(url)
+        }
+    }
+
+    private func missingSpeechModelNotice(title: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            caption("In System Settings → Keyboard, turn Dictation ON and add the language. If macOS doesn't download it right away, start Dictation once in Notes or any text field with that language selected.", enabled: true)
+            Button("Download in macOS Dictation Settings…") {
+                SpeechFrameworkTranscriptionService.openDictationSettings()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
     }
 

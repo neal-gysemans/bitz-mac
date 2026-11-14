@@ -203,4 +203,60 @@ final class AudioSettingsViewsTests: XCTestCase {
         XCTAssertEqual(spyPlayer.playedCharacterReactions, [.hoverDrone, .cyberBunny])
         XCTAssertEqual(charStore.selectedCharacter, .cyberCat)
     }
+
+    /// #148: Transcription Model Status & Dictation Deep Link
+    func testTranscriptionModelStatusAndDeepLink() {
+        let suiteName = "AudioSettingsModelStatusTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        let meetingSettings = MeetingSettingsStore(userDefaults: defaults)
+        let recorder = MeetingRecorderService(settingsStore: meetingSettings)
+        let charStore = AvatarCharacterStore(userDefaults: defaults)
+        let spyPlayer = SpyCyberAudioPlayer()
+
+        let view = AudioSettingsTabView(
+            settingsStore: store,
+            audioPlayer: spyPlayer,
+            meetingRecorder: recorder,
+            characterStore: charStore
+        )
+
+        // Automatic initially: evaluate body without crash
+        _ = view.body
+
+        // Set to a specific language (e.g. Dutch)
+        meetingSettings.setTranscriptionLocaleIdentifier("nl-NL")
+        XCTAssertEqual(meetingSettings.transcriptionLocaleIdentifier, "nl-NL")
+
+        let rendered = String(describing: view.body)
+        XCTAssertTrue(rendered.contains("Language") || rendered.contains("Transcription"))
+        XCTAssertTrue(rendered.contains("Don't see your language?") || rendered.contains("macOS Settings"))
+
+        // Verify languageOptions prepends the saved language when not present in loaded
+        let merged = AudioSettingsTabView.languageOptions(
+            selected: "nl-NL",
+            loaded: [(id: "en-US", label: "English (US)")]
+        )
+        XCTAssertEqual(merged.map(\.id), ["nl-NL", "en-US"])
+
+        // Verify resolveSpeechModelNotice classifies unsupported locale and valid locales deterministically
+        XCTAssertEqual(
+            AudioSettingsTabView.resolveSpeechModelNotice(localeID: "xx-YY"),
+            .unsupported
+        )
+
+        // Verify 1-click Dictation deep link (FR-006) invokes URL opener with Keyboard Dictation extension URL
+        var openedURLs: [URL] = []
+        let didOpen = SpeechFrameworkTranscriptionService.openDictationSettings { url in
+            openedURLs.append(url)
+            return true
+        }
+        XCTAssertTrue(didOpen)
+        XCTAssertEqual(
+            openedURLs.first?.absoluteString,
+            "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Dictation"
+        )
+    }
 }

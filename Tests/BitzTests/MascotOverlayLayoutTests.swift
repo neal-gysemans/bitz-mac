@@ -300,6 +300,41 @@ final class MascotOverlayLayoutTests: XCTestCase {
         try assertBubbleFitsItsWindow(bubble)
     }
 
+    func testMissingModelMeetingBubbleWithFourActionsFitsInsideWindow() async throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        let meetingDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bitz-layout-missing-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: meetingDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: meetingDir) }
+
+        let meetingSettings = MeetingSettingsStore(userDefaults: defaults)
+        meetingSettings.setMeetingsRootDirectoryURL(meetingDir)
+        var failing = MockMeetingTranscriptionService()
+        failing.error = MeetingTranscriptionError.missingOnDeviceAsset(locale: "nl-BE", languageDisplayName: "Dutch (Belgium)")
+        let recorder = MeetingRecorderService(
+            settingsStore: meetingSettings,
+            captureEngine: MockMeetingAudioCaptureEngine(),
+            transcriptionService: failing,
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .authorized)
+            )
+        )
+        await recorder.startRecording()
+        await recorder.stopRecording()
+        XCTAssertEqual(recorder.bubble?.actions, [.openDictationSettings, .transcribeAgain, .openInFinder, .dismiss])
+
+        let bubble = SpeechBubbleView(
+            engine: fixture.engine,
+            scaleStore: fixture.scaleStore,
+            agentMonitor: fixture.agentMonitor,
+            updateStore: fixture.updateStore,
+            telemetryDashboard: fixture.telemetryDashboard,
+            telemetrySettings: fixture.telemetrySettings,
+            meetingRecorder: recorder
+        )
+        try assertBubbleFitsItsWindow(bubble)
+    }
+
     /// The bubble window takes the hosting view's fitting size, so drawing must stay within it.
     private func assertBubbleFitsItsWindow(
         _ view: SpeechBubbleView,

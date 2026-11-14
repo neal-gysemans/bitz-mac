@@ -53,6 +53,15 @@ final class MeetingTranscriptionTests: XCTestCase {
         XCTAssertEqual(try resolve(nil, onDevice: ["en-AU", "en-US", "nl-BE"]), "en-US", "en-US is tried first among English variants")
         XCTAssertEqual(try resolve(nil, current: "fr_BE", onDevice: ["nl-BE"]), "nl-BE", "Automatic then tries preferred languages")
         XCTAssertThrowsError(try resolve("en-GB", onDevice: []))
+
+        do {
+            _ = try resolve("nl-NL", onDevice: [])
+            XCTFail("Should throw missingOnDeviceAsset")
+        } catch let MeetingTranscriptionError.missingOnDeviceAsset(locale, _) {
+            XCTAssertEqual(locale, "nl-NL")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 
     // MARK: - Utterance accumulation (one recognition result per utterance)
@@ -195,5 +204,96 @@ final class MeetingTranscriptionTests: XCTestCase {
             .finishPartial(warning: "Transcript may be incomplete: transcription timed out")
         )
         XCTAssertEqual(step(error: timeout).step, .finishFailure(timeout))
+    }
+
+    // MARK: - On-Device Asset Status & Error Classification (#148)
+
+    func testCheckOnDeviceAssetStatus() {
+        let fake = Locale(identifier: "xx-YY")
+        let unsupported = SpeechFrameworkTranscriptionService.checkOnDeviceAssetStatus(
+            for: fake,
+            supportedLocales: [],
+            supportsOnDevice: { _ in false },
+            isAvailable: { _ in false }
+        )
+        XCTAssertEqual(unsupported, .unsupported)
+
+        let dutch = Locale(identifier: "nl-NL")
+        let needsDownload = SpeechFrameworkTranscriptionService.checkOnDeviceAssetStatus(
+            for: dutch,
+            supportedLocales: [dutch],
+            supportsOnDevice: { _ in false },
+            isAvailable: { _ in false }
+        )
+        XCTAssertEqual(needsDownload, .needsDownload)
+
+        let ready = SpeechFrameworkTranscriptionService.checkOnDeviceAssetStatus(
+            for: dutch,
+            supportedLocales: [dutch],
+            supportsOnDevice: { _ in true },
+            isAvailable: { _ in true }
+        )
+        XCTAssertEqual(ready, .ready)
+    }
+
+    func testIsMissingAssetErrorClassification() {
+        let assistantError = NSError(domain: "kAFAssistantErrorDomain", code: 1700, userInfo: [NSLocalizedDescriptionKey: "No Assistant asset for language nl-NL"])
+        XCTAssertTrue(SpeechFrameworkTranscriptionService.isMissingAssetError(assistantError))
+
+        let code1107Error = NSError(domain: "kAFAssistantErrorDomain", code: 1107, userInfo: [NSLocalizedDescriptionKey: "Asset missing"])
+        XCTAssertTrue(SpeechFrameworkTranscriptionService.isMissingAssetError(code1107Error))
+
+        let textError = NSError(domain: "SpeechError", code: 1, userInfo: [NSLocalizedDescriptionKey: "No Assistant asset for language nl-NL"])
+        XCTAssertTrue(SpeechFrameworkTranscriptionService.isMissingAssetError(textError))
+
+        let unrelatedError = NSError(domain: "Network", code: -1009, userInfo: [NSLocalizedDescriptionKey: "The Internet connection appears to be offline."])
+        XCTAssertFalse(SpeechFrameworkTranscriptionService.isMissingAssetError(unrelatedError))
+
+        let enumError = MeetingTranscriptionError.missingOnDeviceAsset(locale: "nl-NL", languageDisplayName: "Dutch")
+        XCTAssertTrue(SpeechFrameworkTranscriptionService.isMissingAssetError(enumError))
+        XCTAssertTrue(enumError.localizedDescription.contains("Dutch"))
+        XCTAssertTrue(enumError.localizedDescription.contains("nl-NL"))
+        XCTAssertTrue(enumError.localizedDescription.contains("Dictation"))
+    }
+
+    func testMissingAssetErrorYieldsMissingOnDeviceAssetStep() {
+        let assetError = NSError(domain: "kAFAssistantErrorDomain", code: 1700, userInfo: [NSLocalizedDescriptionKey: "No Assistant asset for language nl-NL"])
+        let utterances = UtteranceAccumulator()
+        let step = SpeechFrameworkTranscriptionService.recognitionStep(
+            result: nil,
+            error: assetError,
+            utterances: utterances,
+            resolvedLocaleID: "nl-NL"
+        )
+        let expectedError = MeetingTranscriptionError.missingOnDeviceAsset(
+            locale: "nl-NL",
+            languageDisplayName: Locale.current.localizedString(forIdentifier: "nl-NL") ?? "nl-NL"
+        )
+        XCTAssertEqual(step, .finishFailure(expectedError))
+    }
+
+    func testInvalidateCachedLocaleOptions() {
+        let options1 = SpeechFrameworkTranscriptionService.cachedOnDeviceLocaleOptions()
+        XCTAssertFalse(options1.isEmpty)
+
+        // Invalidating resets the cache and subsequent fetch succeeds
+        SpeechFrameworkTranscriptionService.invalidateCachedLocaleOptions()
+        let options2 = SpeechFrameworkTranscriptionService.cachedOnDeviceLocaleOptions()
+        XCTAssertEqual(options1.count, options2.count)
+    }
+
+    func testDictationLocaleIdentifiersFiltersDisabledAndSorts() {
+        let prefs: [String: Any] = [
+            "VisibleNetworkSRLocaleIdentifiers": [
+                "nl_BE": 1,
+                "fr_FR": 0,
+                "de_DE": true
+            ]
+        ]
+        XCTAssertEqual(
+            SpeechFrameworkTranscriptionService.dictationLocaleIdentifiers(prefs: prefs),
+            ["de-DE", "nl-BE"]
+        )
+        XCTAssertEqual(SpeechFrameworkTranscriptionService.dictationLocaleIdentifiers(prefs: nil), [])
     }
 }

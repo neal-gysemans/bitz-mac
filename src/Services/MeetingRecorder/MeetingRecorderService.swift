@@ -47,6 +47,7 @@ public final class MeetingRecorderService: ObservableObject {
     /// Held from start until the stop's last metadata write, so another Bitz instance's recovery leaves the session alone.
     private var activeSessionLock: MeetingSessionLock?
     private var activeStartedAt: Date?
+    private var activeTranscriptionLocaleIdentifier: String?
     private var activeDetectedApps: [String] = []
     private var activeCaptureWarning: String?
     /// Sources still recording; an interruption removes its source so the bubble says what is left.
@@ -243,6 +244,7 @@ public final class MeetingRecorderService: ObservableObject {
             activeSessionDirectoryURL = sessionDir
             activeSessionLock = sessionLock
             activeStartedAt = startDate
+            activeTranscriptionLocaleIdentifier = settingsStore.transcriptionLocaleIdentifier
             Self.restrictToOwner(
                 sessionDir.appendingPathComponent(MeetingTrackWriter.micFileName),
                 sessionDir.appendingPathComponent(MeetingTrackWriter.systemFileName)
@@ -348,8 +350,10 @@ public final class MeetingRecorderService: ObservableObject {
 
         onPlaySound?(.meetingRecordingSaved)
 
+        let snapshotLocaleID = activeTranscriptionLocaleIdentifier
         var transcriptURLs: (txtURL: URL, jsonURL: URL)?
         var transcriptError: String?
+        var transcriptMissingAsset = false
         if shouldTranscribe {
             transcriptURLs = await transcribeSession(
                 sessionDir,
@@ -357,7 +361,10 @@ public final class MeetingRecorderService: ObservableObject {
                 metadata: &metadata,
                 metadataURL: metadataURL,
                 warnings: &warnings,
-                transcriptError: &transcriptError
+                transcriptError: &transcriptError,
+                transcriptMissingAsset: &transcriptMissingAsset,
+                localeOverride: snapshotLocaleID.map(Locale.init(identifier:)),
+                forceAutomatic: snapshotLocaleID == nil
             )
         }
         // After transcription's metadata write: until then a track it may be reading (failed mix) stays protected
@@ -374,12 +381,14 @@ public final class MeetingRecorderService: ObservableObject {
             durationSeconds: duration,
             warning: warnings.isEmpty ? nil : warnings.joined(separator: " "),
             transcriptSkipReason: skipReason,
-            transcriptError: transcriptError
+            transcriptError: transcriptError,
+            transcriptMissingAsset: transcriptMissingAsset
         ))
 
         activeSessionID = nil
         activeSessionDirectoryURL = nil
         activeStartedAt = nil
+        activeTranscriptionLocaleIdentifier = nil
         activeDetectedApps = []
         activeCaptureWarning = nil
         activeSources = []
@@ -396,7 +405,9 @@ public final class MeetingRecorderService: ObservableObject {
 
     /// Transcribe Again (D6): re-runs transcription and export on the last recording's session folder, overwriting its
     /// transcript files and updating its metadata. Runs even with auto-transcribe off, since the user asked for it.
-    public func transcribeAgain() async {
+    /// Can be passed an explicit `localeIdentifier` (e.g. `nl-NL`) to re-transcribe in another language (#148),
+    /// or `forceAutomatic: true` to explicitly override a saved default language back to Automatic (System).
+    public func transcribeAgain(localeIdentifier: String? = nil, forceAutomatic: Bool = false, updateDefaultLocale: Bool = false) async {
         guard canTranscribeAgain, let last = lastCompletedResult else { return }
         guard isMeetingRecorderUnlocked else {
             failureOpensProTab = true
@@ -406,6 +417,9 @@ public final class MeetingRecorderService: ObservableObject {
                 message: "Meeting Recorder requires Bitz Pro."
             )
             return
+        }
+        if updateDefaultLocale {
+            settingsStore.setTranscriptionLocaleIdentifier(forceAutomatic ? nil : localeIdentifier)
         }
         failureOpensProTab = false
         // Set before the first await, so a double click or a start in between is refused
@@ -425,6 +439,8 @@ public final class MeetingRecorderService: ObservableObject {
         var warnings: [String] = []
         var transcriptURLs: (txtURL: URL, jsonURL: URL)?
         var transcriptError: String?
+        var transcriptMissingAsset = false
+        let localeOverride = localeIdentifier.map(Locale.init(identifier:))
         if permissionState.canTranscribe {
             if var metadata = Self.recoveryMetadata(at: metadataURL, sessionDir: sessionDir) {
                 transcriptURLs = await transcribeSession(
@@ -433,7 +449,10 @@ public final class MeetingRecorderService: ObservableObject {
                     metadata: &metadata,
                     metadataURL: metadataURL,
                     warnings: &warnings,
-                    transcriptError: &transcriptError
+                    transcriptError: &transcriptError,
+                    transcriptMissingAsset: &transcriptMissingAsset,
+                    localeOverride: localeOverride,
+                    forceAutomatic: forceAutomatic
                 )
             } else {
                 transcriptError = MeetingBubble.metadataUnreadableError
@@ -450,7 +469,8 @@ public final class MeetingRecorderService: ObservableObject {
             durationSeconds: last.durationSeconds,
             warning: warnings.isEmpty ? nil : warnings.joined(separator: " "),
             transcriptSkipReason: permissionState.canTranscribe ? nil : .speechRecognitionNotAllowed,
-            transcriptError: transcriptError
+            transcriptError: transcriptError,
+            transcriptMissingAsset: transcriptMissingAsset
         ))
     }
 
@@ -470,7 +490,10 @@ public final class MeetingRecorderService: ObservableObject {
         metadata: inout MeetingRecordingMetadata,
         metadataURL: URL,
         warnings: inout [String],
-        transcriptError: inout String?
+        transcriptError: inout String?,
+        transcriptMissingAsset: inout Bool,
+        localeOverride: Locale? = nil,
+        forceAutomatic: Bool = false
     ) async -> (txtURL: URL, jsonURL: URL)? {
         let sessionID = sessionDir.lastPathComponent
         state = .transcribing
@@ -483,7 +506,7 @@ public final class MeetingRecorderService: ObservableObject {
         let previousTxtURL = sessionDir.appendingPathComponent("transcript.txt")
         let previousJSONURL = sessionDir.appendingPathComponent("transcript.json")
         let previousTranscript = try? Data(contentsOf: previousTxtURL)
-        func giveUp(_ message: String, keptWarning: String) -> (txtURL: URL, jsonURL: URL)? {
+        func giveUp(_ message: String, keptWarning: String, isMissingAsset: Bool = false) -> (txtURL: URL, jsonURL: URL)? {
             if previousTranscript != nil {
                 // Metadata (status, locale, export name) still describes the kept transcript, so it is not rewritten
                 warnings.append(keptWarning)
@@ -492,17 +515,25 @@ public final class MeetingRecorderService: ObservableObject {
             metadata.transcriptStatus = .failed
             Self.writeMetadata(metadata, to: metadataURL)
             transcriptError = message
+            transcriptMissingAsset = isMissingAsset
             return nil
         }
+        let chosenLocale: Locale? = forceAutomatic
+            ? nil
+            : (localeOverride ?? settingsStore.transcriptionLocaleIdentifier.map(Locale.init(identifier:)))
         let transcript: MeetingTranscript
         do {
             transcript = try await transcriptionService.transcribe(
                 audioFileURL: audioURL,
                 sessionID: sessionID,
-                locale: settingsStore.transcriptionLocaleIdentifier.map(Locale.init(identifier:))
+                locale: chosenLocale
             )
         } catch {
-            return giveUp(error.localizedDescription, keptWarning: "\(MeetingBubble.previousTranscriptKeptWarning): \(error.localizedDescription)")
+            return giveUp(
+                error.localizedDescription,
+                keptWarning: "\(MeetingBubble.previousTranscriptKeptWarning): \(error.localizedDescription)",
+                isMissingAsset: SpeechFrameworkTranscriptionService.isMissingAssetError(error)
+            )
         }
         if previousTranscript != nil,
            let kept = Self.keptTranscriptWarning(new: transcript, previous: Self.decodedTranscript(at: previousJSONURL)) {
@@ -805,7 +836,7 @@ public final class MeetingRecorderService: ObservableObject {
     }
 
     /// The session's metadata to merge into; derived from the tracks when a crash left none; nil when it does not decode.
-    nonisolated private static func recoveryMetadata(at url: URL, sessionDir: URL) -> MeetingRecordingMetadata? {
+    nonisolated static func recoveryMetadata(at url: URL, sessionDir: URL) -> MeetingRecordingMetadata? {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return recoveredMetadata(for: sessionDir)
         }
@@ -883,6 +914,11 @@ public final class MeetingRecorderService: ObservableObject {
             } else {
                 onOpenSettings?()
             }
+        case .openDictationSettings:
+            dismissBubble()
+            #if canImport(AppKit)
+            SpeechFrameworkTranscriptionService.openDictationSettings()
+            #endif
         case .dismiss:
             dismissBubble()
         }

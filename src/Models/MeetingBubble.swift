@@ -16,13 +16,14 @@ public struct MeetingBubble: Equatable, Sendable {
     }
 
     public enum Action: Hashable, Sendable {
-        case transcribeAgain, openInFinder, openSettings, dismiss
+        case transcribeAgain, openInFinder, openSettings, openDictationSettings, dismiss
 
         public var title: String {
             switch self {
             case .transcribeAgain: return "TRANSCRIBE AGAIN"
             case .openInFinder: return "OPEN IN FINDER"
             case .openSettings: return "OPEN SETTINGS"
+            case .openDictationSettings: return "DOWNLOAD MODEL"
             case .dismiss: return "DISMISS"
             }
         }
@@ -32,6 +33,7 @@ public struct MeetingBubble: Equatable, Sendable {
             case .transcribeAgain: return "Transcribe Recording Again"
             case .openInFinder: return "Open Meeting in Finder"
             case .openSettings: return "Open Audio Settings"
+            case .openDictationSettings: return "Open macOS Dictation Settings to Download Model"
             case .dismiss: return "Dismiss Meeting Notice"
             }
         }
@@ -134,9 +136,17 @@ public struct MeetingBubble: Equatable, Sendable {
             text = result.transcriptTextURL != nil ? savedAndTranscribedText : audioSavedText
         }
         let causes = [result.transcriptError, result.transcriptSkipReason?.text, result.warning].compactMap { $0 }
-        let actions: [Action] = result.transcriptTextURL == nil
-            ? [.transcribeAgain, .openInFinder, .dismiss]
-            : [.openInFinder, .dismiss]
+        let isMissingModel = result.transcriptMissingAsset
+        let actions: [Action]
+        if result.transcriptTextURL == nil {
+            if isMissingModel {
+                actions = [.openDictationSettings, .transcribeAgain, .openInFinder, .dismiss]
+            } else {
+                actions = [.transcribeAgain, .openInFinder, .dismiss]
+            }
+        } else {
+            actions = [.openInFinder, .dismiss]
+        }
         return MeetingBubble(
             kind: .completion,
             text: text,

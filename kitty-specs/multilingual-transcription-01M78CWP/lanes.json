@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "mission_slug": "multilingual-transcription-01M78CWP",
+  "mission_id": "01M78CWPZ7EAS9YK0DHE8NCSHS",
+  "mission_branch": "kitty/mission-multilingual-transcription-01M78CWP",
+  "target_branch": "feat/issue-148-multilingual-transcription",
+  "lanes": [
+    {
+      "lane_id": "lane-a",
+      "wp_ids": [
+        "WP01",
+        "WP02",
+        "WP03",
+        "WP04",
+        "WP05"
+      ],
+      "write_scope": [
+        "Tests/BitzTests/AudioSettingsViewsTests.swift",
+        "Tests/BitzTests/MeetingRecorderServiceTests.swift",
+        "Tests/BitzTests/MeetingTranscriptionTests.swift",
+        "Tests/BitzTests/MenuBarContentViewTests.swift",
+        "src/**",
+        "src/App/BitzApp.swift",
+        "src/Models/MeetingBubble.swift",
+        "src/Services/MeetingRecorder/MeetingRecorderService.swift",
+        "src/Services/MeetingRecorder/MeetingTranscriptionService.swift",
+        "src/Views/Settings/AudioSettingsTabView.swift"
+      ],
+      "predicted_surfaces": [
+        "api"
+      ],
+      "depends_on_lanes": [],
+      "parallel_group": 0
+    }
+  ],
+  "computed_at": "2026-11-12T17:46:09.147886+00:00",
+  "computed_from": "dependency_graph+ownership",
+  "planning_artifact_wps": [],
+  "planning_commit_sha": "e43ca0e289b83ce7fa0edafd4c53f4167a209501",
+  "collapse_report": {
+    "events": [
+      {
+        "wp_a": "WP01",
+        "wp_b": "WP05",
+        "rule": "write_scope_overlap",
+        "evidence": "overlapping globs: 'src/Services/MeetingRecorder/MeetingTranscriptionService.swift' vs 'src/**', 'src/Models/MeetingBubble.swift' vs 'src/**'; WP05 depends on WP01"
+      },
+      {
+        "wp_a": "WP02",
+        "wp_b": "WP05",
+        "rule": "write_scope_overlap",
+        "evidence": "overlapping globs: 'src/Services/MeetingRecorder/MeetingRecorderService.swift' vs 'src/**'; WP05 depends on WP02"
+      },
+      {
+        "wp_a": "WP03",
+        "wp_b": "WP05",
+        "rule": "write_scope_overlap",
+        "evidence": "overlapping globs: 'src/App/BitzApp.swift' vs 'src/**'; WP05 depends on WP03"
+      },
+      {
+        "wp_a": "WP04",
+        "wp_b": "WP05",
+        "rule": "write_scope_overlap",
+        "evidence": "overlapping globs: 'src/Views/Settings/AudioSettingsTabView.swift' vs 'src/**'; WP05 depends on WP04"
+      }
+    ],
+    "total_merges": 4,
+    "independent_wps_collapsed": 0,
+    "by_rule": {
+      "write_scope_overlap": 4
+    }
+  }
+}

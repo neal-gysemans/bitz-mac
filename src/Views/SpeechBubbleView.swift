@@ -268,7 +268,8 @@ public struct SpeechBubbleView: View {
 
     private func meetingBubbleView(_ meeting: MeetingBubble, visorColor: Color) -> some View {
         let colors = meetingColors(for: meeting.kind, visorColor: visorColor)
-        let rowActions = meeting.actions.filter { $0 != .transcribeAgain }
+        let primaryActions = meeting.actions.filter { $0 == .openDictationSettings || $0 == .transcribeAgain }
+        let secondaryActions = meeting.actions.filter { $0 != .openDictationSettings && $0 != .transcribeAgain }
         return VStack(spacing: 5) {
             Text(meeting.text)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -286,13 +287,17 @@ public struct SpeechBubbleView: View {
                     .foregroundStyle(Color.white.opacity(0.85))
             }
 
-            // TRANSCRIBE AGAIN gets its own row: three buttons do not fit the bubble width
-            if meeting.actions.contains(.transcribeAgain) {
-                meetingButton(.transcribeAgain, accent: colors.stroke)
-            }
-            if !rowActions.isEmpty {
+            // Split primary vs utility actions across two rows (at most 2 buttons per row for maxBubbleWidth)
+            if !primaryActions.isEmpty {
                 HStack(spacing: 6) {
-                    ForEach(rowActions, id: \.self) { action in
+                    ForEach(primaryActions, id: \.self) { action in
+                        meetingButton(action, accent: colors.stroke)
+                    }
+                }
+            }
+            if !secondaryActions.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(secondaryActions, id: \.self) { action in
                         meetingButton(action, accent: colors.stroke)
                     }
                 }

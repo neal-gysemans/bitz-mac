@@ -326,4 +326,68 @@ final class MenuBarContentViewTests: XCTestCase {
         XCTAssertNotEqual(delegate.menuBarTitle, "Bitz")
         XCTAssertGreaterThan(changes, 0)
     }
+
+    /// #148: Menu Bar Quick Language Switcher & Re-transcribe As submenus
+    func testMenuBarQuickLanguageSwitcherAndReTranscribeSubmenus() async throws {
+        let suiteName = "MenuBarLanguageSwitcherTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MenuBarLanguageSwitcher.\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let engine = WellnessPointEngine(riveController: ProductionRiveController(), userDefaults: defaults)
+        defaults.set(true, forKey: MeetingSettingsStore.consentAcknowledgedKey)
+        let meetingSettings = MeetingSettingsStore(userDefaults: defaults)
+        meetingSettings.setMeetingsRootDirectoryURL(tempRoot)
+        let recorder = MeetingRecorderService(
+            settingsStore: meetingSettings,
+            captureEngine: MockMeetingAudioCaptureEngine(),
+            transcriptionService: MockMeetingTranscriptionService(),
+            permissionChecker: MockMeetingPermissionChecker(
+                state: MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .authorized)
+            )
+        )
+
+        let menuView = BitzMenuBarContentView(
+            engine: engine,
+            activityMonitor: ActivityMonitorService(engine: engine, telemetry: MockTelemetryProvider()),
+            positionStore: AvatarPositionStore(userDefaults: defaults),
+            agentMonitor: AgentMonitorService(adapters: [], userDefaults: defaults),
+            updateStore: AppUpdateStore(userDefaults: defaults),
+            telemetryDashboard: TelemetryDashboardService(settingsStore: TelemetrySettingsStore(userDefaults: defaults)),
+            telemetrySettings: TelemetrySettingsStore(userDefaults: defaults),
+            meetingRecorder: recorder
+        )
+
+        let rendered = String(describing: menuView.body)
+        XCTAssertTrue(rendered.contains("Meeting Language (Automatic)"), "Menu Bar must default to Automatic in Meeting Language submenu")
+        XCTAssertTrue(rendered.contains("Automatic"), "Meeting Language submenu must contain Automatic option")
+
+        // Switch to a locale not necessarily in cachedOnDeviceLocaleOptions (e.g. nl-NL) and verify
+        // both the menu title and the prepended toggle row include it (FR-002)
+        meetingSettings.setTranscriptionLocaleIdentifier("nl-NL")
+        XCTAssertEqual(meetingSettings.transcriptionLocaleIdentifier, "nl-NL")
+        let dutchLabel = Locale.current.localizedString(forIdentifier: "nl-NL") ?? "nl-NL"
+        let mergedOptions = AudioSettingsTabView.languageOptions(selected: "nl-NL", loaded: [])
+        XCTAssertEqual(mergedOptions.first?.id, "nl-NL")
+
+        let updated = String(describing: menuView.body)
+        XCTAssertTrue(
+            updated.contains("Meeting Language (\(dutchLabel))") || updated.contains("Meeting Language (Dutch"),
+            "Menu Bar title must reflect the active selected language"
+        )
+        XCTAssertTrue(updated.contains(dutchLabel), "Selected language must be present as a toggle option in the submenu")
+
+        // Complete a recording so `canTranscribeAgain` becomes true and verify FR-003 submenu renders
+        await recorder.startRecording()
+        await recorder.stopRecording()
+        XCTAssertTrue(recorder.canTranscribeAgain)
+
+        let afterRecording = String(describing: menuView.body)
+        XCTAssertTrue(afterRecording.contains("Transcribe Last Recording Again As…"), "FR-003 submenu must appear when a recording is available")
+        XCTAssertTrue(afterRecording.contains("Automatic (System)"), "FR-003 submenu must offer Automatic (System) override")
+    }
 }
