@@ -391,7 +391,7 @@ final class ClaudeCodeTranscriptAdapterTests: XCTestCase {
         XCTAssertEqual(usage(after).last?.isSeed, false)
     }
 
-    func testSwitchesToNewerSessionOnlyAfterIdleDelay() throws {
+    func testFollowsNewerConcurrentSessionWithoutDroppingActiveSession() throws {
         let current = try makeSession("proj-a/a.jsonl", [
             userPrompt(),
             assistant(tokens: (1, 0, 1000), tools: [("a1", "Bash", ["command": "x"])]),
@@ -402,20 +402,25 @@ final class ClaudeCodeTranscriptAdapterTests: XCTestCase {
         let attached = collector.drain()
         XCTAssertEqual(attached.map(\.contextTokens), [1001])
         XCTAssertEqual(attached.first?.turnActive, true)
+        XCTAssertEqual(attached.first?.sessionID, "proj-a/a")
 
         let newer = try makeSession("proj-b/b.jsonl", [assistant(tokens: (2, 0, 2000), stop: "end_turn")])
         try setModified(newer, t0.addingTimeInterval(-1))
         adapter.checkForUpdates()
-        XCTAssertEqual(collector.drain(), [], "current session was active within the idle delay")
+        let concurrentSeed = collector.drain()
+        XCTAssertEqual(concurrentSeed.map(\.kind), [.usage])
+        XCTAssertEqual(concurrentSeed.first?.isSeed, true)
+        XCTAssertEqual(concurrentSeed.first?.sessionID, "proj-b/b")
+        XCTAssertEqual(concurrentSeed.first?.contextTokens, 2002)
+        XCTAssertEqual(concurrentSeed.first?.turnActive, false)
+        XCTAssertEqual(concurrentSeed.first?.pendingTools, 0)
 
-        clock.now = t0.addingTimeInterval(SessionLogTail.idleSwitchDelay + 1)
+        // The earlier session was never abandoned and still completes its turn cleanly.
+        try append([toolResult("a1"), assistant(tokens: (3, 0, 3000), stop: "end_turn")], to: current)
         adapter.checkForUpdates()
-        let switched = collector.drain()
-        XCTAssertEqual(switched.map(\.kind), [.usage])
-        XCTAssertEqual(switched.first?.isSeed, true)
-        XCTAssertEqual(switched.first?.contextTokens, 2002)
-        XCTAssertEqual(switched.first?.turnActive, false, "stale turn of the previous session is cleared")
-        XCTAssertEqual(switched.first?.pendingTools, 0)
+        let finished = collector.drain()
+        XCTAssertEqual(lifecycle(finished), [.done])
+        XCTAssertEqual(finished.first(where: { $0.kind == .done })?.sessionID, "proj-a/a")
     }
 
     // MARK: - Attach mid-session (FR-014)

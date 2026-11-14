@@ -68,26 +68,36 @@ public struct AgentEvent: Codable, Sendable, Equatable, Identifiable {
         self.kind = try container.decode(AgentEventKind.self, forKey: .kind)
         self.message = try? container.decode(String.self, forKey: .message)
         self.timestamp = (try? container.decode(Date.self, forKey: .timestamp)) ?? Date()
-        // Drop-box files come from user scripts: accept number/bool values, and never reject the event over bad metadata.
-        self.metadata = (try? container.decodeIfPresent([String: MetadataValue].self, forKey: .metadata))?
-            .mapValues(\.string)
+        // Drop-box files come from user scripts: accept number/bool values, and drop invalid/null keys without losing valid siblings.
+        if let decoded = (try? container.decodeIfPresent([String: MetadataValue].self, forKey: .metadata))?
+            .compactMapValues(\.string),
+           !decoded.isEmpty {
+            self.metadata = decoded
+        } else {
+            self.metadata = nil
+        }
     }
 
-    /// A metadata value written as a JSON string, number or boolean, normalised to a string.
+    /// A metadata value written as a JSON string, number or boolean, normalised to a string;
+    /// `null`, arrays and nested objects yield `nil` so sibling keys survive.
     private struct MetadataValue: Decodable {
-        let string: String
+        let string: String?
 
         init(from decoder: Decoder) throws {
             let container = try decoder.singleValueContainer()
-            if let value = try? container.decode(String.self) {
+            if container.decodeNil() {
+                string = nil
+            } else if let value = try? container.decode(String.self) {
                 string = value
             } else if let value = try? container.decode(Int.self) {
                 string = String(value)
             } else if let value = try? container.decode(Double.self) {
                 // 185000.0 → "185000", so integer accessors still read it
                 string = value.rounded() == value && abs(value) < 1e15 ? String(Int(value)) : String(value)
+            } else if let value = try? container.decode(Bool.self) {
+                string = String(value)
             } else {
-                string = String(try container.decode(Bool.self))
+                string = nil
             }
         }
     }

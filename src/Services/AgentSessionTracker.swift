@@ -61,8 +61,10 @@ public struct AgentSessionTracker: Sendable {
             switch entry {
             case .prompt:
                 if startsTurnOnPrompt {
-                    turnActive = true
-                    emit(.working, "\(agentName) is working...")
+                    if !turnActive {
+                        turnActive = true
+                        emit(.working, "\(agentName) is working...")
+                    }
                 } else {
                     awaitingFirstOutput = true
                 }

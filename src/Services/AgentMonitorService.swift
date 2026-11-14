@@ -309,7 +309,7 @@ public final class AgentMonitorService: ObservableObject {
             if activeWarning == nil {
                 let text = event.message ?? "\(name) is working..."
                 displayPopupIfEnabled(text: text, kind: .working, agentName: name, durationSeconds: 4.0)
-            } else {
+            } else if !event.isProcessPresence {
                 restoreWarningBubble(ifOverriddenByAgentID: id, stateKey: stateKey)
             }
         case .almostDone:
@@ -354,7 +354,7 @@ public final class AgentMonitorService: ObservableObject {
                 let text = event.message ?? "\(name) is done!"
                 // Done auto-dismisses after ~6.0 seconds
                 displayPopupIfEnabled(text: text, kind: .done, agentName: name, durationSeconds: 6.0)
-            } else {
+            } else if !event.isProcessPresence {
                 restoreWarningBubble(ifOverriddenByAgentID: id, stateKey: stateKey)
             }
         case .failed:
@@ -372,7 +372,7 @@ public final class AgentMonitorService: ObservableObject {
             if activeWarning == nil {
                 let text = event.message ?? "❌ \(name) failed!"
                 displayPopupIfEnabled(text: text, kind: .failed, agentName: name, durationSeconds: 6.0)
-            } else {
+            } else if !event.isProcessPresence {
                 restoreWarningBubble(ifOverriddenByAgentID: id, stateKey: stateKey)
             }
         case .warning:
