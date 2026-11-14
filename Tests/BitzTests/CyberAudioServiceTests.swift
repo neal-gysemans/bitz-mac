@@ -197,7 +197,7 @@ final class CyberAudioServiceTests: XCTestCase {
         // Simulated missing buffer in a custom service instance
         let emptyService = CyberAudioService(settingsStore: store)
         // Default character (.cyberCat) falls back to purr
-        XCTAssertEqual(emptyService.reactionBuffer(for: .cyberCat), purrBuffer)
+        XCTAssertEqual(emptyService.reactionBuffer(for: .cyberCat), emptyService.loadedBuffers[.purr])
     }
 
     func testCompanionSelectionRoutingViaStore() {

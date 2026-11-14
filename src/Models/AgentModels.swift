@@ -103,6 +103,8 @@ extension AgentEvent {
         public static let seed = "seed"
         /// `process` on `ProcessAgentAdapter` events (app presence).
         public static let source = "source"
+        /// Optional conversation / transcript session identifier distinguishing concurrent instances of the same agent.
+        public static let sessionID = "sessionID"
         public static let approvalRequestID = "approvalRequestID"
         public static let approvalChannel = "approvalChannel"
         public static let toolName = "toolName"
@@ -125,6 +127,15 @@ extension AgentEvent {
 
     /// App-presence event from `ProcessAgentAdapter`; its `done` never clears a warning or ends a turn.
     public var isProcessPresence: Bool { metadata?[MetadataKey.source] == "process" }
+
+    /// Distinct session identifier when an adapter tracks multiple concurrent sessions for one `agentID`.
+    public var sessionID: String? {
+        guard let raw = metadata?[MetadataKey.sessionID]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+        return raw
+    }
 
     public var approvalRequestID: String? { metadata?[MetadataKey.approvalRequestID] }
     public var approvalChannel: String? { metadata?[MetadataKey.approvalChannel] }

@@ -151,8 +151,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         let resolvedFlowShieldService = flowShieldService ?? FlowShieldService(settingsStore: resolvedFlowShieldSettings)
         self.flowShieldService = resolvedFlowShieldService
 
-        // Wire agent detection adapters
-        let processAdapter = ProcessAgentAdapter()
+        // Wire agent detection adapters (`AntigravityTranscriptAdapter` tracks active Antigravity conversations directly, #153)
+        let processAdapter = ProcessAgentAdapter(excludedAgentIDs: ["antigravity"])
         let dropboxAdapter = DropboxAgentAdapter()
         let antigravityAdapter = AntigravityTranscriptAdapter()
         let claudeAdapter = ClaudeCodeTranscriptAdapter()

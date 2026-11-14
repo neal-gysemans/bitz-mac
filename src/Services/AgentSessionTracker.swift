@@ -25,6 +25,8 @@ public struct AgentSessionTracker: Sendable {
     public let agentName: String
     /// Antigravity starts a turn on the prompt; Claude Code on the first assistant output (R4).
     public let startsTurnOnPrompt: Bool
+    /// Optional conversation / session identifier attached to emitted events for multi-session adapters (#153).
+    public let sessionID: String?
     public private(set) var turnActive = false
     public private(set) var latestContextTokens: Int? = nil
     public var pendingTools: Int { pendingIDs.count + anonymousPending }
@@ -36,16 +38,23 @@ public struct AgentSessionTracker: Sendable {
     private var loopCount = 0
     private var loopFired = false
 
-    public init(agentID: String, agentName: String, startsTurnOnPrompt: Bool) {
+    public init(agentID: String, agentName: String, startsTurnOnPrompt: Bool, sessionID: String? = nil) {
         self.agentID = agentID
         self.agentName = agentName
         self.startsTurnOnPrompt = startsTurnOnPrompt
+        self.sessionID = sessionID
     }
 
     public mutating func ingest(_ entries: [SessionLogEntry], at now: Date) -> [AgentEvent] {
         var events: [AgentEvent] = []
         func emit(_ kind: AgentEventKind, _ message: String, _ metadata: [String: String]? = nil) {
-            events.append(AgentEvent(agentID: agentID, agentName: agentName, kind: kind, message: message, timestamp: now, metadata: metadata))
+            var merged = metadata
+            if let sessionID {
+                var dict = merged ?? [:]
+                dict[AgentEvent.MetadataKey.sessionID] = sessionID
+                merged = dict
+            }
+            events.append(AgentEvent(agentID: agentID, agentName: agentName, kind: kind, message: message, timestamp: now, metadata: merged))
         }
 
         for entry in entries {
@@ -128,13 +137,22 @@ public struct AgentSessionTracker: Sendable {
             AgentEvent.MetadataKey.turnActive: String(turnActive),
             AgentEvent.MetadataKey.seed: String(seed),
         ]
+        if let sessionID { metadata[AgentEvent.MetadataKey.sessionID] = sessionID }
         if let latestContextTokens { metadata[AgentEvent.MetadataKey.contextTokens] = String(latestContextTokens) }
         return AgentEvent(agentID: agentID, agentName: agentName, kind: .usage, timestamp: now, metadata: metadata)
     }
 
     /// New session: everything fresh except identity.
     public mutating func reset() {
-        self = AgentSessionTracker(agentID: agentID, agentName: agentName, startsTurnOnPrompt: startsTurnOnPrompt)
+        self = AgentSessionTracker(agentID: agentID, agentName: agentName, startsTurnOnPrompt: startsTurnOnPrompt, sessionID: sessionID)
+    }
+
+    /// Clears `turnActive` and pending tool counts without resetting `latestContextTokens` (used for stale historic seeds, #153).
+    public mutating func markIdle() {
+        turnActive = false
+        awaitingFirstOutput = false
+        pendingIDs.removeAll()
+        anonymousPending = 0
     }
 
     /// Tool name + SHA-256 of the input serialized with sorted keys; identical inputs match regardless of key order (R6).

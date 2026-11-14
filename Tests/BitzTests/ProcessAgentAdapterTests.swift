@@ -109,4 +109,26 @@ final class ProcessAgentAdapterTests: XCTestCase {
 
         adapter.stop()
     }
+
+    func testExcludedAgentIDsSkipsAntigravityDesktopPresence() {
+        let mockProvider = MockProcessListingProvider()
+        let collector = EventCollector()
+        let adapter = ProcessAgentAdapter(
+            provider: mockProvider,
+            catalogProvider: { AgentDefinition.builtInCatalog },
+            excludedAgentIDs: ["antigravity"],
+            pollInterval: 1.0
+        )
+
+        adapter.start { collector.append($0) }
+        defer { adapter.stop() }
+
+        mockProvider.processes = [
+            RunningProcessInfo(pid: 301, name: "Antigravity", bundleIdentifier: "com.google.antigravity", cpuPercent: 0.0),
+            RunningProcessInfo(pid: 302, name: "Cursor", bundleIdentifier: "com.todesktop.230313mzl4w4u92", cpuPercent: 0.0)
+        ]
+        adapter.performSampleTick()
+
+        XCTAssertEqual(collector.snapshot.map(\.agentID), ["cursor"])
+    }
 }

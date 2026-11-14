@@ -458,11 +458,22 @@ final class LicensingServiceTests: XCTestCase {
     @MainActor
     func testDeactivateLicenseReleasesRemoteDeviceSeat() async throws {
         let storage = MockLicenseStorage()
-        var deactivatedKey: String?
-        var deactivatedDevice: String?
+        final class DeactivationCapture: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _key: String?
+            private var _device: String?
+            func record(key: String, device: String) {
+                lock.lock()
+                _key = key
+                _device = device
+                lock.unlock()
+            }
+            var key: String? { lock.lock(); defer { lock.unlock() }; return _key }
+            var device: String? { lock.lock(); defer { lock.unlock() }; return _device }
+        }
+        let capture = DeactivationCapture()
         let mockBackend = MockLicensingTestBackend(deactivateHandler: { key, device in
-            deactivatedKey = key
-            deactivatedDevice = device
+            capture.record(key: key, device: device)
             return RemoteDeactivateResult(success: true, deactivated: true)
         })
 
@@ -483,8 +494,8 @@ final class LicensingServiceTests: XCTestCase {
         // Yield to allow non-blocking async deactivation task to run
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertEqual(deactivatedKey, "BTZ-BETA-RELEASE-TEST")
-        XCTAssertNotNil(deactivatedDevice)
+        XCTAssertEqual(capture.key, "BTZ-BETA-RELEASE-TEST")
+        XCTAssertNotNil(capture.device)
     }
 
     @MainActor

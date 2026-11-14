@@ -45,6 +45,7 @@ public final class ProcessAgentAdapter: AgentAdapter, @unchecked Sendable {
 
     private let provider: ProcessListingProviding
     private let catalogProvider: @Sendable () -> [AgentDefinition]
+    private let excludedAgentIDs: Set<String>
     private let pollInterval: TimeInterval
     private let clock: @Sendable () -> Date
 
@@ -61,11 +62,13 @@ public final class ProcessAgentAdapter: AgentAdapter, @unchecked Sendable {
     public init(
         provider: ProcessListingProviding = SystemProcessListingProvider(),
         catalogProvider: @escaping @Sendable () -> [AgentDefinition] = { AgentDefinition.builtInCatalog },
+        excludedAgentIDs: Set<String> = [],
         pollInterval: TimeInterval = 3.0,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.provider = provider
         self.catalogProvider = catalogProvider
+        self.excludedAgentIDs = excludedAgentIDs
         self.pollInterval = pollInterval
         self.clock = clock
     }
@@ -97,7 +100,7 @@ public final class ProcessAgentAdapter: AgentAdapter, @unchecked Sendable {
         guard let handler = eventHandler else { return }
 
         let processes = provider.listRunningProcesses()
-        let catalog = catalogProvider().filter { $0.isEnabled }
+        let catalog = catalogProvider().filter { $0.isEnabled && !excludedAgentIDs.contains($0.id) }
         let now = clock()
 
         var currentMatchingAgents: [String: (def: AgentDefinition, isWorking: Bool)] = [:]

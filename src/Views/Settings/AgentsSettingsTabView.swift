@@ -88,7 +88,7 @@ public struct AgentsSettingsTabView: View {
             }
 
             // Section 3: Monitored Agents Catalog
-            settingsCard(title: "Monitored AI Agents (\(agentMonitor.activeAgents.count) Active)", systemImage: "cpu.fill") {
+            settingsCard(title: "Monitored AI Agents (\(agentMonitor.activeAgentCount) Active)", systemImage: "cpu.fill") {
                 VStack(spacing: 8) {
                     if !(licensingService?.isFeatureUnlocked(.multiAgentSwarm) ?? true) {
                         HStack(spacing: 8) {
@@ -119,8 +119,9 @@ public struct AgentsSettingsTabView: View {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(agent.displayName)
                                     .font(.subheadline.bold())
-                                if agentMonitor.activeAgents.contains(agent.id) {
-                                    Text("Active • Running")
+                                let sessionCount = agentMonitor.activeSessionCount(for: agent.id)
+                                if sessionCount > 0 {
+                                    Text(sessionCount > 1 ? "Active • \(sessionCount) Sessions Running" : "Active • Running")
                                         .font(.caption2)
                                         .foregroundStyle(.green)
                                 }

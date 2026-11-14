@@ -14,6 +14,8 @@ public protocol AgentAdapter: AnyObject, Sendable {
 public final class AgentMonitorService: ObservableObject {
     @Published public private(set) var activePopup: AgentPopupState? = nil
     @Published public private(set) var activeAgents: Set<String> = []
+    /// Total number of concurrently active agent sessions across all enabled agents (#153).
+    @Published public private(set) var activeAgentCount: Int = 0
     @Published public private(set) var catalog: [AgentDefinition] = []
     @Published public var popupsEnabled: Bool {
         didSet {
@@ -50,8 +52,9 @@ public final class AgentMonitorService: ObservableObject {
     private var stallTask: Task<Void, Never>? = nil
     private var wakeObserver: NSObjectProtocol? = nil
 
-    /// Per-agent stall and context-crossing inputs (data-model.md, "Per-agent session").
+    /// Per-session stall and context-crossing inputs, keyed by `(agentID, sessionID)` (#153).
     private struct SessionState {
+        let agentID: String
         var turnActive = false
         var awaitingApproval = false
         var pendingTools = 0
@@ -61,12 +64,18 @@ public final class AgentMonitorService: ObservableObject {
         /// Sends `usage` heartbeats (a session-log adapter); only these can stall (FR-009).
         var tracksLog = false
     }
+    private static let defaultSessionSubkey = "__default__"
+    private var activeSessionsByAgent: [String: Set<String>] = [:]
     private var sessions: [String: SessionState] = [:]
     private var contextReadings: [String: AgentContextReading] = [:]
-    /// Agent whose approval bubble currently covers the warning bubble.
+    private var latestContextStateKey: String? = nil
+    private var activeWarningStateKey: String? = nil
+    /// Agent/session whose approval bubble currently covers the warning bubble.
     private var approvalOverrideAgentID: String? = nil
-    /// Agent whose approval popup was shown last; valid while `activePopup` is that approval.
+    private var approvalOverrideStateKey: String? = nil
+    /// Agent/session whose approval popup was shown last; valid while `activePopup` is that approval.
     private var approvalPopupAgentID: String? = nil
+    private var approvalPopupStateKey: String? = nil
     private let stallSweepInterval: TimeInterval
     public var licensingService: (any LicensingServiceProtocol)?
 
@@ -152,20 +161,30 @@ public final class AgentMonitorService: ObservableObject {
         userDefaults.set(!isEnabled, forKey: Self.agentDisabledPrefix + id)
         loadCatalog()
         if !isEnabled {
-            activeAgents.remove(id)
+            activeSessionsByAgent.removeValue(forKey: id)
+            syncPublishedActiveState()
             if activePopup?.agentName == catalog.first(where: { $0.id == id })?.displayName {
                 activePopup = nil
             }
-            sessions[id] = nil
-            contextReadings[id] = nil
-            if latestContext?.agentID == id { latestContext = nil }
+            sessions = sessions.filter { $0.value.agentID != id }
+            contextReadings = contextReadings.filter { $0.value.agentID != id }
+            if latestContext?.agentID == id {
+                latestContext = nil
+                latestContextStateKey = nil
+            }
             if activeWarning?.agentID == id {
                 acknowledgeWarning()
             } else if approvalOverrideAgentID == id {
                 approvalOverrideAgentID = nil
+                approvalOverrideStateKey = nil
                 presentWarningBubble()
             }
         }
+    }
+
+    /// Number of currently active concurrent sessions for a catalog `agentID` (#153).
+    public func activeSessionCount(for agentID: String) -> Int {
+        activeSessionsByAgent[agentID]?.count ?? 0
     }
 
     public func isAgentEnabled(id: String) -> Bool {
@@ -226,12 +245,25 @@ public final class AgentMonitorService: ObservableObject {
             self.wakeObserver = nil
         }
         activePopup = nil
-        activeAgents.removeAll()
+        activeSessionsByAgent.removeAll()
+        syncPublishedActiveState()
         sessions.removeAll()
         contextReadings.removeAll()
         latestContext = nil
+        latestContextStateKey = nil
         activeWarning = nil
+        activeWarningStateKey = nil
         approvalOverrideAgentID = nil
+        approvalOverrideStateKey = nil
+        approvalPopupAgentID = nil
+        approvalPopupStateKey = nil
+    }
+
+    private static func makeStateKey(agentID: String, sessionID: String?) -> String {
+        if let sessionID {
+            return "\(agentID)::\(sessionID)"
+        }
+        return agentID
     }
 
     /// Processes an incoming AgentEvent and evaluates popup display rules.
@@ -250,14 +282,16 @@ public final class AgentMonitorService: ObservableObject {
 
         let id = event.agentID
         let name = event.agentName
-        var session = sessions[id] ?? SessionState(lastActivity: now)
+        let subkey = event.sessionID ?? Self.defaultSessionSubkey
+        let stateKey = Self.makeStateKey(agentID: id, sessionID: event.sessionID)
+        var session = sessions[stateKey] ?? SessionState(agentID: id, lastActivity: now)
 
         // Popup priority while a warning is active: data-model.md "Warning slot".
         switch event.kind {
         case .started:
-            registerActiveAgent(id)
+            registerActiveSession(agentID: id, subkey: subkey)
         case .working:
-            registerActiveAgent(id)
+            registerActiveSession(agentID: id, subkey: subkey)
             session.turnActive = true
             session.awaitingApproval = false
             session.lastActivity = now
@@ -266,10 +300,10 @@ public final class AgentMonitorService: ObservableObject {
                 let text = event.message ?? "\(name) is working..."
                 displayPopupIfEnabled(text: text, kind: .working, agentName: name, durationSeconds: 4.0)
             } else {
-                restoreWarningBubble(ifOverriddenBy: id)
+                restoreWarningBubble(ifOverriddenByAgentID: id, stateKey: stateKey)
             }
         case .almostDone:
-            registerActiveAgent(id)
+            registerActiveSession(agentID: id, subkey: subkey)
             session.lastActivity = now
             if activeWarning == nil {
                 if signalSettings.almostDoneEnabled {
@@ -277,75 +311,91 @@ public final class AgentMonitorService: ObservableObject {
                     displayPopupIfEnabled(text: text, kind: .almostDone, agentName: name, durationSeconds: 6.0)
                 }
             } else {
-                restoreWarningBubble(ifOverriddenBy: id)
+                restoreWarningBubble(ifOverriddenByAgentID: id, stateKey: stateKey)
             }
         case .needsApproval:
-            registerActiveAgent(id)
+            registerActiveSession(agentID: id, subkey: subkey)
             session.awaitingApproval = true
-            if activeWarning?.agentID == id {
+            if matchesActiveWarning(agentID: id, stateKey: stateKey) {
                 acknowledgeWarning()
             } else if activeWarning != nil {
                 approvalOverrideAgentID = id
+                approvalOverrideStateKey = stateKey
             }
             let text = event.message ?? "\(name) needs your approval!"
             approvalPopupAgentID = id
+            approvalPopupStateKey = stateKey
             // Approval popup persists indefinitely until next event or manual action
             displayPopupIfEnabled(text: text, kind: .needsApproval, agentName: name, durationSeconds: nil)
         case .done:
-            activeAgents.remove(id)
+            unregisterActiveSession(agentID: id, sessionID: event.sessionID, isProcessPresence: event.isProcessPresence)
             // App presence (Claude desktop app shares the `claude` ID with Claude Code) never ends a turn or clears a warning.
             if !event.isProcessPresence {
                 session.turnActive = false
                 session.awaitingApproval = false
                 session.pendingTools = 0
-                if activeWarning?.agentID == id { acknowledgeWarning() }
+                if matchesActiveWarning(agentID: id, stateKey: stateKey) { acknowledgeWarning() }
             }
             if activeWarning == nil {
                 let text = event.message ?? "\(name) is done!"
                 // Done auto-dismisses after ~6.0 seconds
                 displayPopupIfEnabled(text: text, kind: .done, agentName: name, durationSeconds: 6.0)
             } else {
-                restoreWarningBubble(ifOverriddenBy: id)
+                restoreWarningBubble(ifOverriddenByAgentID: id, stateKey: stateKey)
             }
         case .failed:
-            activeAgents.remove(id)
+            unregisterActiveSession(agentID: id, sessionID: event.sessionID, isProcessPresence: event.isProcessPresence)
             if !event.isProcessPresence {
                 session.turnActive = false
                 session.awaitingApproval = false
                 session.pendingTools = 0
-                if activeWarning?.agentID == id { acknowledgeWarning() }
+                if matchesActiveWarning(agentID: id, stateKey: stateKey) { acknowledgeWarning() }
             }
             if activeWarning == nil {
                 let text = event.message ?? "❌ \(name) failed!"
                 displayPopupIfEnabled(text: text, kind: .failed, agentName: name, durationSeconds: 6.0)
             } else {
-                restoreWarningBubble(ifOverriddenBy: id)
+                restoreWarningBubble(ifOverriddenByAgentID: id, stateKey: stateKey)
             }
         case .warning:
             let reason = event.warningReason
             if signalSettings.isEnabled(reason) {
-                raiseWarning(AgentWarning(agentID: id, agentName: name, reason: reason,
-                                          text: event.message ?? "⚠️ \(name) reported a problem"))
+                raiseWarning(
+                    AgentWarning(agentID: id, agentName: name, reason: reason,
+                                 text: event.message ?? "⚠️ \(name) reported a problem"),
+                    stateKey: stateKey
+                )
             } else {
-                restoreWarningBubble(ifOverriddenBy: id)
+                restoreWarningBubble(ifOverriddenByAgentID: id, stateKey: stateKey)
             }
         case .usage:
             session.tracksLog = true
             session.lastActivity = now
             session.stallFired = false
             if let pending = event.pendingTools { session.pendingTools = pending }
-            if let turnActive = event.turnActive { session.turnActive = turnActive }
+            if let turnActive = event.turnActive {
+                session.turnActive = turnActive
+                if turnActive {
+                    registerActiveSession(agentID: id, subkey: subkey)
+                } else if !session.awaitingApproval {
+                    unregisterActiveSession(agentID: id, sessionID: event.sessionID, isProcessPresence: false)
+                }
+            }
             if let tokens = event.contextTokens {
                 let reading = AgentContextReading(agentID: id, agentName: name, tokens: tokens,
                                                   windowTokens: signalSettings.contextWindow(for: id))
-                contextReadings[id] = reading
+                contextReadings[stateKey] = reading
+                latestContextStateKey = stateKey
                 latestContext = reading
                 if reading.percent >= signalSettings.contextThresholdPercent {
                     if !session.contextFired {
                         session.contextFired = true
                         if !event.isSeed && signalSettings.contextWarningEnabled {
-                            raiseWarning(AgentWarning(agentID: id, agentName: name, reason: .context,
-                                text: "⚠️ \(name): context at \(reading.percent)%! Consider /compact soon."))
+                            raiseWarning(
+                                AgentWarning(agentID: id, agentName: name, reason: .context,
+                                             text: "⚠️ \(name): context at \(reading.percent)%! Consider /compact soon."),
+                                stateKey: stateKey
+                            )
                         }
                     }
                 } else {
@@ -353,7 +403,7 @@ public final class AgentMonitorService: ObservableObject {
                 }
             }
         }
-        sessions[id] = session
+        sessions[stateKey] = session
         onEventHandled?(event)
     }
 
@@ -362,54 +412,94 @@ public final class AgentMonitorService: ObservableObject {
         guard signalSettings.stallWarningEnabled else { return }
         let now = clock()
         let minutes = signalSettings.stallTimeoutMinutes
-        for (id, session) in sessions
+        for (stateKey, session) in sessions
         where session.tracksLog && session.turnActive && !session.awaitingApproval && session.pendingTools == 0 && !session.stallFired
             && now.timeIntervalSince(session.lastActivity) >= Double(minutes) * 60 {
-            guard let agent = catalog.first(where: { $0.id == id }), agent.isEnabled else { continue }
-            sessions[id]?.stallFired = true
-            raiseWarning(AgentWarning(agentID: id, agentName: agent.displayName, reason: .stall,
-                                      text: "⚠️ \(agent.displayName) may be stuck: no output for \(minutes) min."))
+            guard let agent = catalog.first(where: { $0.id == session.agentID }), agent.isEnabled else { continue }
+            sessions[stateKey]?.stallFired = true
+            raiseWarning(
+                AgentWarning(agentID: session.agentID, agentName: agent.displayName, reason: .stall,
+                             text: "⚠️ \(agent.displayName) may be stuck: no output for \(minutes) min."),
+                stateKey: stateKey
+            )
         }
     }
 
     /// Agents produce no output while the Mac sleeps, so each session gets a full stall timeout after wake. Public for tests.
     public func handleSystemWake() {
         let now = clock()
-        for id in sessions.keys { sessions[id]?.lastActivity = now }
+        for key in sessions.keys { sessions[key]?.lastActivity = now }
     }
 
-    private func registerActiveAgent(_ id: String) {
+    private func registerActiveSession(agentID: String, subkey: String) {
         if let licensingService, !licensingService.isFeatureUnlocked(.multiAgentSwarm) {
-            // Free tier: allow 1 active simultaneously monitored agent.
-            // If another agent is already active and this agent takes over activity,
-            // replace active set so only 1 agent is active at any time.
-            if !activeAgents.contains(id) && !activeAgents.isEmpty {
-                activeAgents = [id]
-            } else {
-                activeAgents.insert(id)
-            }
+            // Free tier: allow at most 1 active simultaneously monitored session across all agents.
+            activeSessionsByAgent = [agentID: [subkey]]
         } else {
-            activeAgents.insert(id)
+            activeSessionsByAgent[agentID, default: []].insert(subkey)
         }
+        syncPublishedActiveState()
+    }
+
+    private func unregisterActiveSession(agentID: String, sessionID: String?, isProcessPresence: Bool) {
+        if let sessionID {
+            activeSessionsByAgent[agentID]?.remove(sessionID)
+        } else if isProcessPresence {
+            activeSessionsByAgent[agentID]?.remove(Self.defaultSessionSubkey)
+        } else {
+            activeSessionsByAgent[agentID]?.remove(Self.defaultSessionSubkey)
+        }
+        if activeSessionsByAgent[agentID]?.isEmpty == true {
+            activeSessionsByAgent.removeValue(forKey: agentID)
+        }
+        syncPublishedActiveState()
+    }
+
+    private func syncPublishedActiveState() {
+        let updatedAgents = Set(activeSessionsByAgent.compactMap { $0.value.isEmpty ? nil : $0.key })
+        let updatedCount = activeSessionsByAgent.values.reduce(0) { $0 + $1.count }
+        if activeAgents != updatedAgents {
+            activeAgents = updatedAgents
+        }
+        if activeAgentCount != updatedCount {
+            activeAgentCount = updatedCount
+        }
+    }
+
+    private func matchesActiveWarning(agentID: String, stateKey: String) -> Bool {
+        guard let warning = activeWarning, warning.agentID == agentID else { return false }
+        guard let warningKey = activeWarningStateKey else { return true }
+        if warningKey == agentID || stateKey == agentID {
+            return true
+        }
+        return warningKey == stateKey
     }
 
     /// Clears the warning (Got it / menu Dismiss Agent Warning) and its bubble.
     public func acknowledgeWarning() {
         activeWarning = nil
+        activeWarningStateKey = nil
         approvalOverrideAgentID = nil
+        approvalOverrideStateKey = nil
         if activePopup?.kind == .warning {
             dismissPopup()
         }
     }
 
-    private func raiseWarning(_ warning: AgentWarning) {
+    private func raiseWarning(_ warning: AgentWarning, stateKey: String) {
         activeWarning = warning
-        // Approval takes the bubble (FR-010): a warning raised while another agent's approval shows waits behind it.
-        if activePopup?.kind == .needsApproval, let approver = approvalPopupAgentID, approver != warning.agentID {
-            approvalOverrideAgentID = approver
+        activeWarningStateKey = stateKey
+        // Approval takes the bubble (FR-010): a warning raised while another agent/session's approval shows waits behind it.
+        if activePopup?.kind == .needsApproval,
+           let approverAgent = approvalPopupAgentID,
+           let approverKey = approvalPopupStateKey,
+           approverKey != stateKey && (approverAgent != warning.agentID || (approverKey != approverAgent && stateKey != warning.agentID)) {
+            approvalOverrideAgentID = approverAgent
+            approvalOverrideStateKey = approverKey
             return
         }
         approvalOverrideAgentID = nil
+        approvalOverrideStateKey = nil
         presentWarningBubble()
     }
 
@@ -418,10 +508,15 @@ public final class AgentMonitorService: ObservableObject {
         displayPopupIfEnabled(text: warning.text, kind: .warning, agentName: warning.agentName, durationSeconds: nil)
     }
 
-    /// The approving agent's next lifecycle event supersedes its approval, so the warning bubble returns.
-    private func restoreWarningBubble(ifOverriddenBy id: String) {
-        guard approvalOverrideAgentID == id else { return }
+    /// The approving agent/session's next lifecycle event supersedes its approval, so the warning bubble returns.
+    private func restoreWarningBubble(ifOverriddenByAgentID id: String, stateKey: String) {
+        guard let overrideAgent = approvalOverrideAgentID, overrideAgent == id else { return }
+        if let overrideKey = approvalOverrideStateKey,
+           overrideKey != id && stateKey != id && overrideKey != stateKey {
+            return
+        }
         approvalOverrideAgentID = nil
+        approvalOverrideStateKey = nil
         presentWarningBubble()
     }
 
@@ -431,7 +526,11 @@ public final class AgentMonitorService: ObservableObject {
             AgentContextReading(agentID: $0.agentID, agentName: $0.agentName, tokens: $0.tokens,
                                 windowTokens: signalSettings.contextWindow(for: $0.agentID))
         }
-        latestContext = latestContext.flatMap { contextReadings[$0.agentID] }
+        if let key = latestContextStateKey {
+            latestContext = contextReadings[key]
+        } else {
+            latestContext = latestContext.flatMap { contextReadings[$0.agentID] }
+        }
     }
 
     private func displayPopupIfEnabled(text: String, kind: AgentEventKind, agentName: String, durationSeconds: TimeInterval?) {

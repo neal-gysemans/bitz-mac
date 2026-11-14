@@ -548,7 +548,7 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
 
     /// Attaches observations to AgentMonitorService.
     public func observe(agentMonitor: AgentMonitorService) {
-        var previousActiveCount = agentMonitor.activeAgents.count
+        var previousActiveCount = agentMonitor.activeAgentCount
 
         agentMonitor.onEventHandled = { [weak self] event in
             guard let self else { return }
@@ -559,10 +559,9 @@ public final class CyberAudioService: ObservableObject, CyberAudioPlaying {
             }
         }
 
-        agentMonitor.$activeAgents
-            .sink { [weak self] currentAgents in
+        agentMonitor.$activeAgentCount
+            .sink { [weak self] currentCount in
                 guard let self else { return }
-                let currentCount = currentAgents.count
 
                 // All agents finished detection: transition from non-empty to empty
                 if previousActiveCount > 0 && currentCount == 0 {

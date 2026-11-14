@@ -233,4 +233,161 @@ final class AgentMonitorServiceTests: XCTestCase {
         XCTAssertTrue(antigravityDef.matches(processName: "agy"))
         XCTAssertTrue(antigravityDef.matches(bundleIdentifier: "com.google.antigravity"))
     }
+
+    func testMultipleConcurrentAntigravitySessionsIncrementAndDecrementActiveAgentCount() async {
+        let suite = "BitzTests.MultiSessionAntigravity.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let now = Date()
+        let service = AgentMonitorService(clock: { now }, userDefaults: defaults)
+
+        // 1. Seed attach of an already mid-turn session-a + live .working of session-b + .needsApproval of session-c
+        service.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .usage,
+            timestamp: now,
+            metadata: [
+                AgentEvent.MetadataKey.sessionID: "session-a",
+                AgentEvent.MetadataKey.turnActive: "true",
+                AgentEvent.MetadataKey.seed: "true",
+                AgentEvent.MetadataKey.contextTokens: "120000"
+            ]
+        ))
+        XCTAssertEqual(service.activeAgentCount, 1)
+        XCTAssertEqual(service.activeSessionCount(for: "antigravity"), 1)
+        XCTAssertEqual(service.activeAgents, ["antigravity"])
+
+        service.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .working,
+            timestamp: now,
+            metadata: [AgentEvent.MetadataKey.sessionID: "session-b"]
+        ))
+        XCTAssertEqual(service.activeAgentCount, 2)
+        XCTAssertEqual(service.activeSessionCount(for: "antigravity"), 2)
+        XCTAssertEqual(service.activeAgents, ["antigravity"])
+
+        service.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .needsApproval,
+            message: "Approve command?",
+            timestamp: now,
+            metadata: [AgentEvent.MetadataKey.sessionID: "session-c"]
+        ))
+        XCTAssertEqual(service.activeAgentCount, 3)
+        XCTAssertEqual(service.activeSessionCount(for: "antigravity"), 3)
+
+        // Verify TelemetryDashboardService surfaces 3 AGTS and Antigravity ×3
+        let telemetrySettings = TelemetrySettingsStore(userDefaults: defaults)
+        let dashboard = TelemetryDashboardService(settingsStore: telemetrySettings, agentMonitor: service)
+        await dashboard.performSampleTick()
+        XCTAssertEqual(dashboard.snapshot.agents.activeCount, 3)
+        XCTAssertEqual(dashboard.snapshot.agents.compactBadge, "3 AGTS · 12%")
+        XCTAssertEqual(dashboard.snapshot.agents.agentNames, ["Antigravity ×3"])
+
+        // 2. Finish session-a -> count drops from 3 to 2
+        service.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .done,
+            timestamp: now,
+            metadata: [AgentEvent.MetadataKey.sessionID: "session-a"]
+        ))
+        XCTAssertEqual(service.activeAgentCount, 2)
+        XCTAssertEqual(service.activeSessionCount(for: "antigravity"), 2)
+        XCTAssertTrue(service.activeAgents.contains("antigravity"))
+
+        // 3. Cancel session-b silently via usage(turnActive: false) -> count drops from 2 to 1
+        service.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .usage,
+            timestamp: now,
+            metadata: [
+                AgentEvent.MetadataKey.sessionID: "session-b",
+                AgentEvent.MetadataKey.turnActive: "false"
+            ]
+        ))
+        XCTAssertEqual(service.activeAgentCount, 1)
+        XCTAssertEqual(service.activeSessionCount(for: "antigravity"), 1)
+
+        // 4. Finish session-c -> count drops to 0 and activeAgents becomes empty
+        service.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .done,
+            timestamp: now,
+            metadata: [AgentEvent.MetadataKey.sessionID: "session-c"]
+        ))
+        XCTAssertEqual(service.activeAgentCount, 0)
+        XCTAssertEqual(service.activeSessionCount(for: "antigravity"), 0)
+        XCTAssertTrue(service.activeAgents.isEmpty)
+    }
+
+    func testConcurrentSameAgentSessionsIsolateStallAndWarningState() {
+        final class TestClock: @unchecked Sendable {
+            var now = Date(timeIntervalSince1970: 1_700_000_000)
+        }
+
+        let suite = "BitzTests.MultiSessionStallIsolation.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let clock = TestClock()
+        let service = AgentMonitorService(clock: { clock.now }, userDefaults: defaults)
+
+        // session-1 is running a long tool (pendingTools = 1), session-2 has no pending tool (pendingTools = 0)
+        service.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .usage,
+            timestamp: clock.now,
+            metadata: [
+                AgentEvent.MetadataKey.sessionID: "session-1",
+                AgentEvent.MetadataKey.turnActive: "true",
+                AgentEvent.MetadataKey.pendingTools: "1"
+            ]
+        ))
+        service.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .usage,
+            timestamp: clock.now,
+            metadata: [
+                AgentEvent.MetadataKey.sessionID: "session-2",
+                AgentEvent.MetadataKey.turnActive: "true",
+                AgentEvent.MetadataKey.pendingTools: "0"
+            ]
+        ))
+
+        clock.now = clock.now.addingTimeInterval(4 * 60)
+        service.evaluateStalls()
+        XCTAssertEqual(service.activeWarning?.reason, .stall)
+
+        // session-1 finishing does NOT clear session-2's stall warning
+        service.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .done,
+            timestamp: clock.now,
+            metadata: [AgentEvent.MetadataKey.sessionID: "session-1"]
+        ))
+        XCTAssertEqual(service.activeWarning?.reason, .stall)
+        XCTAssertEqual(service.activeAgentCount, 1)
+
+        // session-2 finishing clears session-2's stall warning
+        service.handleEvent(AgentEvent(
+            agentID: "antigravity",
+            agentName: "Antigravity",
+            kind: .done,
+            timestamp: clock.now,
+            metadata: [AgentEvent.MetadataKey.sessionID: "session-2"]
+        ))
+        XCTAssertNil(service.activeWarning)
+        XCTAssertEqual(service.activeAgentCount, 0)
+    }
 }

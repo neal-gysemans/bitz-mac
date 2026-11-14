@@ -600,14 +600,18 @@ public final class TelemetryDashboardService: ObservableObject {
 
         // Gather agent metrics from bound AgentMonitorService
         let activeAgentIDs = agentMonitor?.activeAgents ?? []
+        let activeCount = agentMonitor?.activeAgentCount ?? activeAgentIDs.count
         let activeAgentNames: [String] = agentMonitor?.catalog
             .filter { activeAgentIDs.contains($0.id) }
-            .map { $0.displayName } ?? []
+            .map { def in
+                let sessionCount = agentMonitor?.activeSessionCount(for: def.id) ?? 0
+                return sessionCount > 1 ? "\(def.displayName) ×\(sessionCount)" : def.displayName
+            } ?? []
         let lastAction = agentMonitor?.activePopup?.text
         // The last reading stays after the turn ends, when context is most worth checking; a new reading replaces it.
         let context = agentMonitor?.latestContext
         let agentTelemetry = AgentTelemetry(
-            activeCount: activeAgentIDs.count,
+            activeCount: activeCount,
             agentNames: activeAgentNames,
             lastActionMessage: lastAction,
             context: context

@@ -386,4 +386,250 @@ final class AntigravityTranscriptAdapterTests: XCTestCase {
         XCTAssertEqual(lifecycle.last?.kind, .done)
         XCTAssertEqual(lifecycle.last?.message, "Antigravity is done!")
     }
+
+    func testConcurrentTopLevelSessionsTrackedIndependentlyWithDistinctSessionIDs() throws {
+        let session2Logs = tempBrainDir.appendingPathComponent("session-2/.system_generated/logs")
+        try FileManager.default.createDirectory(at: session2Logs, withIntermediateDirectories: true)
+        let transcript2 = session2Logs.appendingPathComponent("transcript.jsonl")
+        FileManager.default.createFile(atPath: transcript2.path, contents: Data())
+
+        let collector = Collector()
+        let adapter = attachedAdapter(collector)
+
+        // Both session-1 and session-2 seeded on attach
+        XCTAssertEqual(Set(collector.usages.compactMap(\.sessionID)), ["session-1", "session-2"])
+
+        // Start turns concurrently in both conversations
+        let userInput = #"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"go"}"# + "\n"
+        let h1 = try FileHandle(forWritingTo: transcriptFile)
+        defer { try? h1.close() }
+        try h1.seekToEnd()
+        try h1.write(contentsOf: Data(userInput.utf8))
+
+        let h2 = try FileHandle(forWritingTo: transcript2)
+        defer { try? h2.close() }
+        try h2.seekToEnd()
+        try h2.write(contentsOf: Data(userInput.utf8))
+
+        adapter.checkForUpdates()
+
+        let workingEvents = collector.snapshot.filter { $0.kind == .working }
+        XCTAssertEqual(workingEvents.count, 2)
+        XCTAssertEqual(Set(workingEvents.compactMap(\.sessionID)), ["session-1", "session-2"])
+
+        // Finish session-1 only; session-2 remains mid-turn
+        let doneLine = #"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"done 1"}"# + "\n"
+        try h1.seekToEnd()
+        try h1.write(contentsOf: Data(doneLine.utf8))
+
+        adapter.checkForUpdates()
+
+        let doneEventsAfterS1 = collector.snapshot.filter { $0.kind == .done }
+        XCTAssertEqual(doneEventsAfterS1.count, 1)
+        XCTAssertEqual(doneEventsAfterS1.first?.sessionID, "session-1")
+
+        // Finish session-2 next
+        try h2.seekToEnd()
+        try h2.write(contentsOf: Data(doneLine.utf8))
+
+        adapter.checkForUpdates()
+
+        let doneEventsAfterS2 = collector.snapshot.filter { $0.kind == .done }
+        XCTAssertEqual(doneEventsAfterS2.count, 2)
+        XCTAssertEqual(Set(doneEventsAfterS2.compactMap(\.sessionID)), ["session-1", "session-2"])
+    }
+
+    func testSpawnedSubagentTranscriptsAreSkipped() throws {
+        // 1. Pre-populated subagent transcript (step_index 0 SYSTEM_MESSAGE)
+        let sub1Logs = tempBrainDir.appendingPathComponent("subagent-1/.system_generated/logs")
+        try FileManager.default.createDirectory(at: sub1Logs, withIntermediateDirectories: true)
+        let sub1Transcript = sub1Logs.appendingPathComponent("transcript.jsonl")
+        let subHeader = #"{"step_index":0,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","content":"task"}"# + "\n"
+        try Data(subHeader.utf8).write(to: sub1Transcript)
+
+        // 2. Empty subagent file attached at 0 bytes, then receives SYSTEM_MESSAGE at step 0
+        let sub2Logs = tempBrainDir.appendingPathComponent("subagent-2/.system_generated/logs")
+        try FileManager.default.createDirectory(at: sub2Logs, withIntermediateDirectories: true)
+        let sub2Transcript = sub2Logs.appendingPathComponent("transcript.jsonl")
+        FileManager.default.createFile(atPath: sub2Transcript.path, contents: Data())
+
+        let collector = Collector()
+        let adapter = attachedAdapter(collector)
+
+        // subagent-1 is immediately excluded from candidates
+        let initialCandidateSessionIDs = Set(adapter.sessionCandidates().compactMap { AntigravityTranscriptAdapter.sessionID(fromTranscriptURL: $0.url) })
+        XCTAssertFalse(initialCandidateSessionIDs.contains("subagent-1"))
+        XCTAssertTrue(initialCandidateSessionIDs.contains("session-1"))
+
+        // Write subagent-2's initial SYSTEM_MESSAGE + a PLANNER_RESPONSE
+        let hSub2 = try FileHandle(forWritingTo: sub2Transcript)
+        defer { try? hSub2.close() }
+        try hSub2.seekToEnd()
+        let subTurn = subHeader + #"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","input_tokens":9999}"# + "\n"
+        try hSub2.write(contentsOf: Data(subTurn.utf8))
+
+        adapter.checkForUpdates()
+
+        // Neither subagent emits live events or remains in candidates
+        XCTAssertFalse(collector.snapshot.contains { $0.sessionID == "subagent-1" })
+        XCTAssertFalse(collector.snapshot.contains { $0.sessionID == "subagent-2" && !$0.isSeed })
+        let finalCandidateSessionIDs = Set(adapter.sessionCandidates().compactMap { AntigravityTranscriptAdapter.sessionID(fromTranscriptURL: $0.url) })
+        XCTAssertEqual(finalCandidateSessionIDs, ["session-1"])
+    }
+
+    func testCancelledTurnReconciledViaConversationSummariesDatabase() throws {
+        final class TestClock: @unchecked Sendable {
+            var now: Date
+            init(_ now: Date) { self.now = now }
+        }
+
+        let dbURL = tempBrainDir.deletingLastPathComponent().appendingPathComponent("summaries-\(UUID().uuidString).db")
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(dbURL.path, &db), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(
+            db,
+            "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, status TEXT NOT NULL);",
+            nil, nil, nil
+        ), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(
+            db,
+            "INSERT INTO conversation_summaries (conversation_id, status) VALUES ('session-1', 'CASCADE_RUN_STATUS_RUNNING');",
+            nil, nil, nil
+        ), SQLITE_OK)
+        sqlite3_close(db)
+
+        let t0 = Date()
+        let clock = TestClock(t0)
+        let collector = Collector()
+        let adapter = AntigravityTranscriptAdapter(
+            baseBrainURL: tempBrainDir,
+            summariesDatabaseURL: dbURL,
+            clock: { clock.now }
+        )
+        adapter.setHandlerForTesting { collector.append($0) }
+        adapter.checkForUpdates()
+
+        try append(#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"run"}"#)
+        adapter.checkForUpdates()
+        XCTAssertEqual(collector.usages.last?.turnActive, true)
+
+        // Simulate user clicking Stop in Antigravity IDE (summary flips to IDLE without appending PLANNER_RESPONSE)
+        var db2: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(dbURL.path, &db2), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(
+            db2,
+            "UPDATE conversation_summaries SET status = 'CASCADE_RUN_STATUS_IDLE' WHERE conversation_id = 'session-1';",
+            nil, nil, nil
+        ), SQLITE_OK)
+        sqlite3_close(db2)
+        try FileManager.default.setAttributes([.modificationDate: t0.addingTimeInterval(4.0)], ofItemAtPath: dbURL.path)
+
+        clock.now = t0.addingTimeInterval(4.0)
+        adapter.checkForUpdates()
+
+        XCTAssertEqual(collector.usages.last?.sessionID, "session-1")
+        XCTAssertEqual(collector.usages.last?.turnActive, false)
+        XCTAssertFalse(collector.snapshot.contains { $0.kind == .done }, "Cancelled turn clears silently without fake done popup")
+    }
+
+    func testStaleHistoricMidTurnFallbackSeedsContextWithoutMarkingTurnActive() throws {
+        try append(
+            #"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE"}"#,
+            #"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","input_tokens":4000,"cache_read_tokens":6000,"tool_calls":[{"name":"run_command"}]}"#
+        )
+        let t0 = Date()
+        // Mark transcript 2 hours old (> activeAttachWindow)
+        try FileManager.default.setAttributes([.modificationDate: t0.addingTimeInterval(-7200)], ofItemAtPath: transcriptFile.path)
+
+        let collector = Collector()
+        let adapter = AntigravityTranscriptAdapter(baseBrainURL: tempBrainDir, clock: { t0 })
+        adapter.setHandlerForTesting { collector.append($0) }
+        adapter.checkForUpdates()
+
+        XCTAssertEqual(collector.usages.count, 1)
+        XCTAssertEqual(collector.usages.first?.isSeed, true)
+        XCTAssertEqual(collector.usages.first?.contextTokens, 10_000)
+        XCTAssertEqual(collector.usages.first?.turnActive, false, "Stale historic unfinished transcript must not report an active running turn on launch")
+    }
+
+    func testConcurrentSessionsIsolateDatabaseApprovalAndPreserveAskQuestion() throws {
+        let session2Logs = tempBrainDir.appendingPathComponent("session-2/.system_generated/logs")
+        try FileManager.default.createDirectory(at: session2Logs, withIntermediateDirectories: true)
+        let transcript2 = session2Logs.appendingPathComponent("transcript.jsonl")
+        FileManager.default.createFile(atPath: transcript2.path, contents: Data())
+
+        let conversationsDir = tempBrainDir.appendingPathComponent("conversations")
+        try FileManager.default.createDirectory(at: conversationsDir, withIntermediateDirectories: true)
+        let db1URL = conversationsDir.appendingPathComponent("session-1.db")
+        let db2URL = conversationsDir.appendingPathComponent("session-2.db")
+
+        for url in [db1URL, db2URL] {
+            var db: OpaquePointer?
+            XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+            XCTAssertEqual(sqlite3_exec(db, "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER);", nil, nil, nil), SQLITE_OK)
+            sqlite3_close(db)
+        }
+
+        let adapter = AntigravityTranscriptAdapter(
+            baseBrainURL: tempBrainDir,
+            conversationsDirectoryURL: conversationsDir
+        )
+        let collector = Collector()
+        adapter.setHandlerForTesting { collector.append($0) }
+        adapter.checkForUpdates()
+
+        let userInput = #"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"go"}"# + "\n"
+        let h1 = try FileHandle(forWritingTo: transcriptFile)
+        defer { try? h1.close() }
+        try h1.seekToEnd()
+        try h1.write(contentsOf: Data(userInput.utf8))
+
+        let h2 = try FileHandle(forWritingTo: transcript2)
+        defer { try? h2.close() }
+        try h2.seekToEnd()
+        try h2.write(contentsOf: Data(userInput.utf8))
+
+        adapter.checkForUpdates()
+
+        // session-1 enters DB step approval (status == 9)
+        var db1: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(db1URL.path, &db1), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db1, "INSERT INTO steps VALUES (1, 132, 9);", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db1)
+
+        // session-2 asks a question via transcript while its DB step status is 3 (not 9)
+        let askLine = #"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"ask_question","args":{"questions":[]}}]}"# + "\n"
+        try h2.seekToEnd()
+        try h2.write(contentsOf: Data(askLine.utf8))
+
+        var db2: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(db2URL.path, &db2), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db2, "INSERT INTO steps VALUES (1, 100, 3);", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db2)
+
+        adapter.checkForUpdates()
+
+        let approvalEvents = collector.snapshot.filter { $0.kind == .needsApproval }
+        XCTAssertEqual(approvalEvents.count, 2)
+        XCTAssertEqual(approvalEvents.first(where: { $0.sessionID == "session-1" })?.message, "Antigravity needs your approval!")
+        XCTAssertEqual(approvalEvents.first(where: { $0.sessionID == "session-2" })?.message, "Antigravity needs input!")
+
+        // Subsequent poll must NOT emit spurious .working for session-2 (ask_question remains pending)
+        let workingCountBeforeApprove = collector.snapshot.filter { $0.kind == .working }.count
+        adapter.checkForUpdates()
+        XCTAssertEqual(collector.snapshot.filter { $0.kind == .working }.count, workingCountBeforeApprove)
+
+        // Approving session-1 (status -> 3) transitions ONLY session-1 back to .working
+        XCTAssertEqual(sqlite3_open(db1URL.path, &db1), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db1, "UPDATE steps SET status = 3 WHERE idx = 1;", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db1)
+
+        adapter.checkForUpdates()
+
+        let workingEventsAfterApprove = collector.snapshot.filter { $0.kind == .working }
+        XCTAssertEqual(workingEventsAfterApprove.count, workingCountBeforeApprove + 1)
+        XCTAssertEqual(workingEventsAfterApprove.last?.sessionID, "session-1")
+    }
 }
