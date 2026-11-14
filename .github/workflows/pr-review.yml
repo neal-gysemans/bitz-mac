@@ -2,7 +2,7 @@ name: OpenHands PR Review
 
 on:
   pull_request_target:
-    types: [opened, ready_for_review, synchronize, reopened]
+    types: [labeled]
     branches:
       - main
 
@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   review:
-    if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ github.event.label.name == 'review-this' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: self-hosted
     timeout-minutes: 15
     steps:
@@ -66,3 +66,12 @@ jobs:
           cd pr-repo
           uv run --no-project --with 'openhands-sdk==1.60.1' --with 'openhands-tools==1.60.1' --with 'lmnr==0.7.67' \
             python ../extensions/plugins/pr-review/scripts/agent_script.py
+
+      - name: Remove review-this label
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh pr edit "$PR_NUMBER" --repo "$REPOSITORY" --remove-label review-this || true
