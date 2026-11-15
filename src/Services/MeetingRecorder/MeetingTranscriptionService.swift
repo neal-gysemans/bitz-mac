@@ -174,6 +174,11 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
         max(60, seconds * 2 + 60)
     }
 
+    private static func isRecognizerReady(for locale: Locale) -> Bool {
+        guard let recognizer = SFSpeechRecognizer(locale: locale) else { return false }
+        return recognizer.supportsOnDeviceRecognition && recognizer.isAvailable
+    }
+
     /// First locale with an on-device model: the requested (or current) locale, its same-language variants
     /// (en-US first for English), then for Automatic each preferred language and its variants.
     /// e.g. `en_BE` has no model and region-less fallback picks `en-GB` (also none), so this lands on `en-US`.
@@ -182,7 +187,7 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
         current: Locale = .current,
         preferredLanguages: [String] = Locale.preferredLanguages,
         supportedLocales: Set<Locale> = SFSpeechRecognizer.supportedLocales(),
-        supportsOnDevice: (Locale) -> Bool = { SFSpeechRecognizer(locale: $0)?.supportsOnDeviceRecognition ?? false }
+        supportsOnDevice: (Locale) -> Bool = { isRecognizerReady(for: $0) }
     ) throws -> Locale {
         let base = requested ?? current
         let supportedIDs = supportedLocales.map { $0.identifier(.bcp47) }.sorted()
@@ -198,15 +203,20 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
             candidates += preferredLanguages.flatMap { withVariants(Locale(identifier: $0)) }
         }
 
+        let supportedIDSet = Set(supportedIDs)
         var seen = Set<String>()
+        var firstSupportedCandidate: Locale?
         for id in candidates where seen.insert(id).inserted {
             let locale = Locale(identifier: id)
+            if firstSupportedCandidate == nil, supportedIDSet.contains(locale.identifier(.bcp47)) {
+                firstSupportedCandidate = locale
+            }
             if supportsOnDevice(locale) { return locale }
         }
 
-        if isLocaleSupported(base, in: supportedLocales) {
-            let displayName = Locale.current.localizedString(forIdentifier: base.identifier) ?? base.identifier
-            throw MeetingTranscriptionError.missingOnDeviceAsset(locale: base.identifier, languageDisplayName: displayName)
+        if let fallback = firstSupportedCandidate ?? (isLocaleSupported(base, in: supportedLocales) ? base : nil) {
+            let displayName = Locale.current.localizedString(forIdentifier: fallback.identifier) ?? fallback.identifier
+            throw MeetingTranscriptionError.missingOnDeviceAsset(locale: fallback.identifier, languageDisplayName: displayName)
         }
         throw MeetingTranscriptionError.onDeviceRecognitionUnsupported(base.identifier)
     }
@@ -248,18 +258,39 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
             return []
         }
         return dict.compactMap { key, value in
-            (value as? NSNumber)?.boolValue == true ? key.replacingOccurrences(of: "_", with: "-") : nil
+            (value as? NSNumber)?.boolValue == true ? Locale(identifier: key).identifier(.bcp47) : nil
         }.sorted()
     }
 
-    /// On-device transcription languages for the Settings picker, sorted by display name, refreshing the cache.
+    static func candidateLocaleIdentifiers(
+        dictationLocales: [String],
+        supportedLocales: Set<Locale>,
+        supportsOnDevice: (Locale) -> Bool
+    ) -> [String] {
+        let supportedIDs = Set(supportedLocales.map { $0.identifier(.bcp47) })
+        let dictationMatches = dictationLocales
+            .map { Locale(identifier: $0).identifier(.bcp47) }
+            .filter { supportedIDs.contains($0) }
+        if !dictationMatches.isEmpty {
+            return dictationMatches
+        }
+        return supportedLocales
+            .filter(supportsOnDevice)
+            .map { $0.identifier(.bcp47) }
+    }
+
+    /// Transcription languages for the Settings picker: Dictation-enabled locales supported by Speech,
+    /// falling back to installed on-device locales when Dictation preferences are empty.
     public static func onDeviceLocaleOptions() -> [(id: String, label: String)] {
         let dictationLocales = dictationLocaleIdentifiers()
         let preferred = Locale.preferredLanguages + dictationLocales.filter { !Locale.preferredLanguages.contains($0) }
+        let candidates = candidateLocaleIdentifiers(
+            dictationLocales: dictationLocales,
+            supportedLocales: SFSpeechRecognizer.supportedLocales(),
+            supportsOnDevice: { SFSpeechRecognizer(locale: $0)?.supportsOnDeviceRecognition ?? false }
+        )
         let options = orderedLocaleOptions(
-            SFSpeechRecognizer.supportedLocales()
-                .filter { SFSpeechRecognizer(locale: $0)?.supportsOnDeviceRecognition ?? false }
-                .map(\.identifier),
+            candidates,
             preferredLanguages: preferred,
             displayLocale: .current
         )
@@ -269,6 +300,39 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
             _isRefreshingLocaleOptions = false
         }
         return options
+    }
+
+    /// Downloads and installs the on-device speech model for `locale` if missing (macOS 26+ `AssetInventory`),
+    /// returning `true` when `SFSpeechRecognizer` reports on-device support and availability afterward.
+    @discardableResult
+    public static func ensureOnDeviceAssetInstalled(for locale: Locale) async -> Bool {
+        if isRecognizerReady(for: locale) {
+            return true
+        }
+        if #available(macOS 26.0, *) {
+            let installLocale = await DictationTranscriber.supportedLocale(equivalentTo: locale) ?? locale
+            if isRecognizerReady(for: installLocale) {
+                return true
+            }
+            let targetID = installLocale.identifier(.bcp47)
+            let reserved = await AssetInventory.reservedLocales
+            if !reserved.contains(where: { $0.identifier(.bcp47) == targetID }) {
+                if reserved.count >= AssetInventory.maximumReservedLocales {
+                    for oldLocale in reserved where oldLocale.identifier(.bcp47) != targetID {
+                        _ = await AssetInventory.release(reservedLocale: oldLocale)
+                        break
+                    }
+                }
+                _ = try? await AssetInventory.reserve(locale: installLocale)
+            }
+            let module = DictationTranscriber(locale: installLocale, preset: .progressiveLongDictation)
+            if let request = try? await AssetInventory.assetInstallationRequest(supporting: [module]) {
+                try? await request.downloadAndInstall()
+            }
+            invalidateCachedLocaleOptions()
+            return isRecognizerReady(for: locale) || isRecognizerReady(for: installLocale)
+        }
+        return isRecognizerReady(for: locale)
     }
 
     /// Picker entries after "Automatic": the user's preferred languages first (in their order, preferred variants in the
@@ -318,7 +382,16 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
         sessionID: String,
         locale: Locale? = nil
     ) async throws -> MeetingTranscript {
-        let chosenLocale = try Self.resolveOnDeviceLocale(requested: locale)
+        if let locale, !Self.isRecognizerReady(for: locale) {
+            _ = await Self.ensureOnDeviceAssetInstalled(for: locale)
+        }
+        let chosenLocale: Locale
+        do {
+            chosenLocale = try Self.resolveOnDeviceLocale(requested: locale)
+        } catch let MeetingTranscriptionError.missingOnDeviceAsset(missingLocaleID, _) {
+            _ = await Self.ensureOnDeviceAssetInstalled(for: Locale(identifier: missingLocaleID))
+            chosenLocale = try Self.resolveOnDeviceLocale(requested: locale)
+        }
         guard let recognizer = SFSpeechRecognizer(locale: chosenLocale) else {
             throw MeetingTranscriptionError.recognizerUnavailable(chosenLocale.identifier)
         }

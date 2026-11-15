@@ -13,6 +13,7 @@ public struct AudioSettingsTabView: View {
     @ObservedObject public var characterStore: AvatarCharacterStore
     enum SpeechModelNotice: Equatable {
         case ready
+        case downloading
         case needsDownload(title: String)
         case unsupported
     }
@@ -68,12 +69,13 @@ public struct AudioSettingsTabView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             loadTranscriptionLocaleOptions()
         }
-        .onChange(of: meetingSettings.transcriptionLocaleIdentifier) { loadSpeechModelNotice() }
+        .onChange(of: meetingSettings.transcriptionLocaleIdentifier) { loadSpeechModelNotice(autoDownloadIfNeeded: true) }
         .onChange(of: meetingSettings.meetingsRootDirectoryURL) { updateRecordingsFolderWarning() }
         .onChange(of: meetingSettings.transcriptExportDirectoryURL) { updateExportFolderWarning() }
     }
 
     private func loadTranscriptionLocaleOptions() {
+        SpeechFrameworkTranscriptionService.invalidateCachedLocaleOptions()
         let selectedID = meetingSettings.transcriptionLocaleIdentifier
         // Probing ~60 recognizers takes ~0.2 s, so build the list off the main thread
         Task {
@@ -84,21 +86,60 @@ public struct AudioSettingsTabView: View {
                 )
             }.value
             transcriptionLocaleOptions = options
-            if meetingSettings.transcriptionLocaleIdentifier == selectedID {
+            if meetingSettings.transcriptionLocaleIdentifier == selectedID, speechModelNotice != .downloading {
                 speechModelNotice = notice
             }
         }
     }
 
-    private func loadSpeechModelNotice() {
+    private func loadSpeechModelNotice(autoDownloadIfNeeded: Bool = false) {
         let selectedID = meetingSettings.transcriptionLocaleIdentifier
         Task {
             let notice = await Task.detached(priority: .utility) {
                 Self.resolveSpeechModelNotice(localeID: selectedID)
             }.value
-            if meetingSettings.transcriptionLocaleIdentifier == selectedID {
+            guard meetingSettings.transcriptionLocaleIdentifier == selectedID else { return }
+            if autoDownloadIfNeeded, #available(macOS 26.0, *), case .needsDownload = notice {
+                await performModelDownload(for: selectedID)
+            } else {
                 speechModelNotice = notice
             }
+        }
+    }
+
+    private func downloadSpeechModel() {
+        let selectedID = meetingSettings.transcriptionLocaleIdentifier
+        Task {
+            await performModelDownload(for: selectedID)
+        }
+    }
+
+    private func performModelDownload(for selectedID: String?) async {
+        speechModelNotice = .downloading
+        let targetLocale = Self.targetDownloadLocale(for: selectedID)
+        let (options, updatedNotice) = await Task.detached(priority: .utility) {
+            await SpeechFrameworkTranscriptionService.ensureOnDeviceAssetInstalled(for: targetLocale)
+            return (
+                SpeechFrameworkTranscriptionService.onDeviceLocaleOptions(),
+                Self.resolveSpeechModelNotice(localeID: selectedID)
+            )
+        }.value
+        transcriptionLocaleOptions = options
+        if meetingSettings.transcriptionLocaleIdentifier == selectedID {
+            speechModelNotice = updatedNotice
+        }
+    }
+
+    nonisolated static func targetDownloadLocale(for localeID: String?) -> Locale {
+        if let localeID {
+            return Locale(identifier: localeID)
+        }
+        do {
+            return try SpeechFrameworkTranscriptionService.resolveOnDeviceLocale(requested: nil)
+        } catch let MeetingTranscriptionError.missingOnDeviceAsset(missingLocaleID, _) {
+            return Locale(identifier: missingLocaleID)
+        } catch {
+            return .current
         }
     }
 
@@ -193,6 +234,19 @@ public struct AudioSettingsTabView: View {
                             meetingRecorder.revealInFinder(lastResult.sessionDirectoryURL)
                         } label: {
                             Label("Reveal Last Recording in Finder", systemImage: "folder.fill")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+
+                    if meetingRecorder.canTranscribeAgain {
+                        Button {
+                            Task {
+                                await meetingRecorder.transcribeAgain()
+                            }
+                        } label: {
+                            Label("Transcribe Last Recording Again", systemImage: "arrow.clockwise")
                                 .font(.caption)
                         }
                         .buttonStyle(.bordered)
@@ -343,7 +397,7 @@ public struct AudioSettingsTabView: View {
                     }
                 }
                 .font(.subheadline)
-                .disabled(meetingRecorder.hasUnfinalizedRecording || meetingRecorder.isTranscribing)
+                .disabled(meetingRecorder.hasUnfinalizedRecording || meetingRecorder.isTranscribing || speechModelNotice == .downloading)
 
                 HStack(spacing: 4) {
                     Text("Don't see your language?")
@@ -362,7 +416,7 @@ public struct AudioSettingsTabView: View {
                     .font(.caption)
                 }
 
-                caption("Transcription uses one language per recording. Only languages with a downloaded macOS Dictation model appear here — turn Dictation ON and add your language in System Settings → Keyboard to download it.", enabled: true)
+                caption("Transcription uses one language per recording. Only languages enabled in System Settings → Keyboard → Dictation appear here; selecting one downloads its on-device model automatically on macOS 26+.", enabled: true)
 
                 switch speechModelNotice {
                 case .ready:
@@ -370,6 +424,14 @@ public struct AudioSettingsTabView: View {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                         Text("On-device speech model is installed on this Mac.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                case .downloading:
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Downloading on-device speech model from macOS…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -457,12 +519,29 @@ public struct AudioSettingsTabView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
-            caption("In System Settings → Keyboard, turn Dictation ON and add the language. If macOS doesn't download it right away, start Dictation once in Notes or any text field with that language selected.", enabled: true)
-            Button("Download in macOS Dictation Settings…") {
-                SpeechFrameworkTranscriptionService.openDictationSettings()
+            if #available(macOS 26.0, *) {
+                caption("Bitz can download this speech model from macOS automatically, or you can enable Dictation for the language in System Settings → Keyboard.", enabled: true)
+                HStack(spacing: 8) {
+                    Button("Download Model") {
+                        downloadSpeechModel()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Button("Open macOS Dictation Settings…") {
+                        SpeechFrameworkTranscriptionService.openDictationSettings()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            } else {
+                caption("Enable Dictation for this language in System Settings → Keyboard to download its on-device speech model.", enabled: true)
+                Button("Open macOS Dictation Settings…") {
+                    SpeechFrameworkTranscriptionService.openDictationSettings()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
         }
     }
 

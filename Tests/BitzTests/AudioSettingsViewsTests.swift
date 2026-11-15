@@ -259,4 +259,28 @@ final class AudioSettingsViewsTests: XCTestCase {
             "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Dictation"
         )
     }
+
+    func testSpeechModelDownloadingNoticeAndControls() {
+        XCTAssertEqual(AudioSettingsTabView.SpeechModelNotice.downloading, .downloading)
+        XCTAssertNotEqual(AudioSettingsTabView.SpeechModelNotice.downloading, .ready)
+        XCTAssertEqual(
+            AudioSettingsTabView.targetDownloadLocale(for: "nl-BE").identifier(.bcp47),
+            "nl-BE"
+        )
+
+        let suiteName = "AudioSettingsDownloadNoticeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CyberAudioSettingsStore(userDefaults: defaults)
+        let recorder = MeetingRecorderService.stub(defaults: defaults)
+        let view = AudioSettingsTabView(
+            settingsStore: store,
+            audioPlayer: SpyCyberAudioPlayer(),
+            meetingRecorder: recorder
+        )
+        let rendered = String(describing: view.body)
+        XCTAssertTrue(rendered.contains("Start Meeting Recording"))
+        XCTAssertTrue(rendered.contains("Transcription"))
+    }
 }

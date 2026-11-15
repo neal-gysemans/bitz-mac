@@ -62,6 +62,7 @@ public final class MeetingRecorderService: ObservableObject {
     /// Launch recovery is scanning or mixing; retention waits so it never deletes a folder being recovered.
     private(set) var isRecovering = false
     private var transcribingMetadata: (metadata: MeetingRecordingMetadata, url: URL)?
+    private var lastFailedTranscriptionLocaleID: String?
 
     /// Meeting apps by bundle ID, as `ActivityMonitorService` matches them; browsers are never listed. The extra apps are
     /// for the recorder only: Discord, Webex (`Cisco-Systems.Spark`) and Tuple.
@@ -521,6 +522,7 @@ public final class MeetingRecorderService: ObservableObject {
         let chosenLocale: Locale? = forceAutomatic
             ? nil
             : (localeOverride ?? settingsStore.transcriptionLocaleIdentifier.map(Locale.init(identifier:)))
+        lastFailedTranscriptionLocaleID = nil
         let transcript: MeetingTranscript
         do {
             transcript = try await transcriptionService.transcribe(
@@ -529,10 +531,18 @@ public final class MeetingRecorderService: ObservableObject {
                 locale: chosenLocale
             )
         } catch {
+            let isMissingAsset = SpeechFrameworkTranscriptionService.isMissingAssetError(error)
+            if isMissingAsset {
+                if case .missingOnDeviceAsset(let id, _) = error as? MeetingTranscriptionError {
+                    lastFailedTranscriptionLocaleID = id
+                } else {
+                    lastFailedTranscriptionLocaleID = chosenLocale?.identifier(.bcp47) ?? settingsStore.transcriptionLocaleIdentifier
+                }
+            }
             return giveUp(
                 error.localizedDescription,
                 keptWarning: "\(MeetingBubble.previousTranscriptKeptWarning): \(error.localizedDescription)",
-                isMissingAsset: SpeechFrameworkTranscriptionService.isMissingAssetError(error)
+                isMissingAsset: isMissingAsset
             )
         }
         if previousTranscript != nil,
@@ -915,10 +925,32 @@ public final class MeetingRecorderService: ObservableObject {
                 onOpenSettings?()
             }
         case .openDictationSettings:
-            dismissBubble()
-            #if canImport(AppKit)
-            SpeechFrameworkTranscriptionService.openDictationSettings()
-            #endif
+            guard !hasUnfinalizedRecording, !isTranscribing else { return }
+            let failedLocaleID = lastFailedTranscriptionLocaleID
+            let overrideLocaleID = failedLocaleID ?? settingsStore.transcriptionLocaleIdentifier
+            let targetLocale = overrideLocaleID.map(Locale.init(identifier:)) ?? AudioSettingsTabView.targetDownloadLocale(for: nil)
+            state = .transcribing
+            statusMessage = "Downloading on-device speech model from macOS…"
+            present(.transcribing)
+            Task {
+                let installed = await SpeechFrameworkTranscriptionService.ensureOnDeviceAssetInstalled(for: targetLocale)
+                state = .completed
+                if installed, canTranscribeAgain {
+                    await transcribeAgain(
+                        localeIdentifier: overrideLocaleID,
+                        forceAutomatic: overrideLocaleID == nil && failedLocaleID == nil
+                    )
+                } else {
+                    if let last = lastCompletedResult {
+                        showCompletion(last)
+                    } else {
+                        dismissBubble()
+                    }
+                    #if canImport(AppKit)
+                    SpeechFrameworkTranscriptionService.openDictationSettings()
+                    #endif
+                }
+            }
         case .dismiss:
             dismissBubble()
         }

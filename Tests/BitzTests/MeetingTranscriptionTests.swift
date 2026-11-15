@@ -62,6 +62,15 @@ final class MeetingTranscriptionTests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
+
+        do {
+            _ = try resolve(nil, current: "en_BE", onDevice: [])
+            XCTFail("Should throw missingOnDeviceAsset for en_BE with first supported candidate")
+        } catch let MeetingTranscriptionError.missingOnDeviceAsset(locale, _) {
+            XCTAssertEqual(locale, "en-US")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 
     // MARK: - Utterance accumulation (one recognition result per utterance)
@@ -288,13 +297,33 @@ final class MeetingTranscriptionTests: XCTestCase {
             "VisibleNetworkSRLocaleIdentifiers": [
                 "nl_BE": 1,
                 "fr_FR": 0,
-                "de_DE": true
+                "de_DE": true,
+                "zh_Hans_CN": 1,
+                "zh_Hant_TW": 1,
+                "zh_Hant_HK": 1
             ]
         ]
         XCTAssertEqual(
             SpeechFrameworkTranscriptionService.dictationLocaleIdentifiers(prefs: prefs),
-            ["de-DE", "nl-BE"]
+            ["de-DE", "nl-BE", "zh-CN", "zh-HK", "zh-TW"]
         )
         XCTAssertEqual(SpeechFrameworkTranscriptionService.dictationLocaleIdentifiers(prefs: nil), [])
+    }
+
+    func testCandidateLocaleIdentifiersFiltersToDictationWithOnDeviceFallback() {
+        let supported: Set<Locale> = Set(["en-US", "nl-BE", "fr-FR", "zh-CN", "zh-TW", "zh-HK"].map(Locale.init(identifier:)))
+        let filtered = SpeechFrameworkTranscriptionService.candidateLocaleIdentifiers(
+            dictationLocales: ["nl_BE", "zh_Hans_CN", "zh_Hant_TW", "zh_Hant_HK", "xx-YY"],
+            supportedLocales: supported,
+            supportsOnDevice: { $0.identifier == "en-US" }
+        )
+        XCTAssertEqual(filtered, ["nl-BE", "zh-CN", "zh-TW", "zh-HK"])
+
+        let fallback = SpeechFrameworkTranscriptionService.candidateLocaleIdentifiers(
+            dictationLocales: [],
+            supportedLocales: supported,
+            supportsOnDevice: { $0.identifier == "en-US" }
+        )
+        XCTAssertEqual(fallback, ["en-US"])
     }
 }
