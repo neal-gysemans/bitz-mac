@@ -168,4 +168,60 @@ public struct AgentSessionTracker: Sendable {
         } ?? Data()
         return name + ":" + SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
+
+    // MARK: - Shared Multi-Session Adapter Helpers
+
+    /// Computes the next backoff scan interval: resets to `base` on activity, doubles up to `max` after an idle scan.
+    public static func nextScanInterval(
+        current: TimeInterval,
+        base: TimeInterval,
+        max maxInterval: TimeInterval,
+        hadActivity: Bool,
+        didScan: Bool
+    ) -> TimeInterval {
+        if hadActivity { return base }
+        if didScan { return Swift.min(current * 2.0, maxInterval) }
+        return current
+    }
+
+    /// Selects newly active unattached sessions to follow, or falls back to the newest stale session when none are followed yet.
+    public static func selectUnattachedCandidates<C>(
+        from unattached: [C],
+        followedIsEmpty: Bool,
+        activeAttachWindow: TimeInterval,
+        now: Date,
+        modified: (C) -> Date
+    ) -> (candidates: [C], isStaleFallback: Bool) {
+        let fresh = unattached
+            .filter { now.timeIntervalSince(modified($0)) <= activeAttachWindow }
+            .sorted { modified($0) < modified($1) }
+        if !fresh.isEmpty {
+            return (fresh, false)
+        }
+        if followedIsEmpty, let newest = unattached.max(by: { modified($0) < modified($1) }) {
+            return ([newest], true)
+        }
+        return ([], false)
+    }
+
+    /// Returns idle session keys older than `retainWindow`, keeping at least the most recently active session and any busy sessions.
+    public static func idleSessionIDsToPrune<S>(
+        from sessions: [String: S],
+        retainWindow: TimeInterval,
+        now: Date,
+        lastActivityAt: (S) -> Date,
+        isBusy: (S) -> Bool
+    ) -> [String] {
+        guard sessions.count > 1 else { return [] }
+        let sorted = sessions.sorted { lastActivityAt($0.value) > lastActivityAt($1.value) }
+        guard let newestKey = sorted.first?.key else { return [] }
+        return sorted.compactMap { key, session in
+            guard key != newestKey,
+                  !isBusy(session),
+                  now.timeIntervalSince(lastActivityAt(session)) > retainWindow else {
+                return nil
+            }
+            return key
+        }
+    }
 }

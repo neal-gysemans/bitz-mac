@@ -532,7 +532,14 @@ public final class AgentMonitorService: ObservableObject {
             approvalPopupAgentID = id
             approvalPopupStateKey = stateKey
             // Approval popup persists indefinitely until next event or manual action
-            displayPopupIfEnabled(text: text, kind: .needsApproval, agentName: name, durationSeconds: nil)
+            displayPopupIfEnabled(
+                text: text,
+                kind: .needsApproval,
+                agentName: name,
+                durationSeconds: nil,
+                agentID: id,
+                approvalRequestID: event.approvalRequestID
+            )
         case .done:
             if tracksSessionState {
                 unregisterActiveSession(agentID: id, sessionID: event.sessionID, isProcessPresence: event.isProcessPresence)
@@ -800,15 +807,43 @@ public final class AgentMonitorService: ObservableObject {
         }
     }
 
-    private func displayPopupIfEnabled(text: String, kind: AgentEventKind, agentName: String, durationSeconds: TimeInterval?) {
+    private func displayPopupIfEnabled(
+        text: String,
+        kind: AgentEventKind,
+        agentName: String,
+        durationSeconds: TimeInterval?,
+        agentID: String? = nil,
+        approvalRequestID: String? = nil
+    ) {
         guard popupsEnabled else { return }
-        displayPopup(text: text, kind: kind, agentName: agentName, durationSeconds: durationSeconds)
+        displayPopup(
+            text: text,
+            kind: kind,
+            agentName: agentName,
+            durationSeconds: durationSeconds,
+            agentID: agentID,
+            approvalRequestID: approvalRequestID
+        )
     }
 
-    private func displayPopup(text: String, kind: AgentEventKind, agentName: String, durationSeconds: TimeInterval?) {
+    private func displayPopup(
+        text: String,
+        kind: AgentEventKind,
+        agentName: String,
+        durationSeconds: TimeInterval?,
+        agentID: String? = nil,
+        approvalRequestID: String? = nil
+    ) {
         dismissTask?.cancel()
         let expiresAt = durationSeconds.map { clock().addingTimeInterval($0) }
-        activePopup = AgentPopupState(text: text, kind: kind, agentName: agentName, expiresAt: expiresAt)
+        activePopup = AgentPopupState(
+            text: text,
+            kind: kind,
+            agentName: agentName,
+            expiresAt: expiresAt,
+            agentID: agentID,
+            approvalRequestID: approvalRequestID
+        )
 
         if let duration = durationSeconds {
             dismissTask = Task { @MainActor [weak self] in

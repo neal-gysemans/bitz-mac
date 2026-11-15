@@ -34,24 +34,49 @@ public final class CursorTranscriptAdapter: AgentAdapter, @unchecked Sendable {
     }
 
     private struct SQLiteToolState: Equatable {
+        var bubbleID: String
         var status: String
         var awaitingApprovalEmitted: Bool
         var completedEmitted: Bool
     }
 
     private struct SQLiteSessionState {
+        private static let maxBoundedEntries = 4_096
+
         let sessionID: String
         var tracker: AgentSessionTracker
         var lastActivityAt: Date
         var lastComposerUpdatedAt: Date?
         var wasGenerating: Bool
         var lastEmittedContextTokens: Int?
+        var lastBubbleCount: Int = 0
+        var lastComposerStatus: String = ""
+        var lastGeneratingIDs: Set<String> = []
+        var finalizedPrefixCount: Int = 0
         var seenHumanBubbles: Set<String> = []
         var seenAIBubbles: Set<String> = []
         var pendingToolBubbleIDs: Set<String> = []
         var toolStates: [String: SQLiteToolState] = [:]
         var handledErrorKeys: Set<Data> = []
         var lastBubbleSignatureByID: [String: Int] = [:]
+
+        mutating func pruneBoundedState(preservingBubbleIDs: Set<String>) {
+            if !toolStates.isEmpty {
+                toolStates = toolStates.filter { !$0.value.completedEmitted || preservingBubbleIDs.contains($0.value.bubbleID) }
+            }
+            if handledErrorKeys.count > Self.maxBoundedEntries {
+                handledErrorKeys.removeAll(keepingCapacity: true)
+            }
+            if lastBubbleSignatureByID.count > Self.maxBoundedEntries {
+                lastBubbleSignatureByID = lastBubbleSignatureByID.filter { preservingBubbleIDs.contains($0.key) }
+            }
+            if seenHumanBubbles.count > Self.maxBoundedEntries {
+                seenHumanBubbles = seenHumanBubbles.intersection(preservingBubbleIDs)
+            }
+            if seenAIBubbles.count > Self.maxBoundedEntries {
+                seenAIBubbles = seenAIBubbles.intersection(preservingBubbleIDs)
+            }
+        }
     }
 
     // MARK: - JSONL State
@@ -215,11 +240,13 @@ public final class CursorTranscriptAdapter: AgentAdapter, @unchecked Sendable {
             }
         }
 
-        if anyActivity {
-            currentScanInterval = pollInterval
-        } else if shouldScan {
-            currentScanInterval = min(currentScanInterval * 2.0, maxIdleScanInterval)
-        }
+        currentScanInterval = AgentSessionTracker.nextScanInterval(
+            current: currentScanInterval,
+            base: pollInterval,
+            max: maxIdleScanInterval,
+            hadActivity: anyActivity,
+            didScan: shouldScan
+        )
 
         pruneIdleSessions(at: now)
     }
@@ -306,37 +333,23 @@ public final class CursorTranscriptAdapter: AgentAdapter, @unchecked Sendable {
         // Choose which composers to follow when cold starting without fresh composers.
         let validComposers = composerObjects.filter { !Self.isSubagentOrDraft($0.json) }
         if isColdStart && sqliteSessions.isEmpty {
-            let fresh = validComposers.filter { item in
-                guard let ts = Self.composerUpdatedDate(item.json, fallback: marker.walModified ?? marker.dbModified) else {
-                    return false
-                }
-                return now.timeIntervalSince(ts) <= activeAttachWindow
-            }
-            let toAttach: [(id: String, json: [String: Any])]
-            let staleFallback: Bool
-            if !fresh.isEmpty {
-                toAttach = fresh
-                staleFallback = false
-            } else if let newest = validComposers.max(by: {
-                (Self.composerUpdatedDate($0.json, fallback: nil) ?? .distantPast)
-                    < (Self.composerUpdatedDate($1.json, fallback: nil) ?? .distantPast)
-            }) {
-                toAttach = [newest]
-                staleFallback = true
-            } else {
-                toAttach = []
-                staleFallback = false
-            }
+            let selection = AgentSessionTracker.selectUnattachedCandidates(
+                from: validComposers,
+                followedIsEmpty: true,
+                activeAttachWindow: activeAttachWindow,
+                now: now,
+                modified: { Self.composerUpdatedDate($0.json, fallback: marker.walModified ?? marker.dbModified) ?? .distantPast }
+            )
 
             var changed = false
-            for item in toAttach {
+            for item in selection.candidates {
                 attachSQLiteComposer(
                     id: item.id,
                     composer: item.json,
                     markerDate: marker.walModified ?? marker.dbModified ?? now,
                     at: now,
                     db: db,
-                    isStaleFallback: staleFallback,
+                    isStaleFallback: selection.isStaleFallback,
                     handler: handler
                 )
                 changed = true
@@ -460,10 +473,24 @@ public final class CursorTranscriptAdapter: AgentAdapter, @unchecked Sendable {
         let bubbleRefs = Self.bubbleHeaders(from: composer)
         let generatingIDs = Set(composer["generatingBubbleIds"] as? [String] ?? [])
         let composerContext = Self.composerContextTokens(from: composer)
+        let composerStatus = (composer["status"] as? String)?.lowercased() ?? "none"
+        let composerUpdatedAt = Self.composerUpdatedDate(composer, fallback: nil)
+        let isGeneratingNow = Self.isComposerGenerating(composer)
 
-        // Only inspect bubbles we haven't finalized yet (tailing recent ones + any currently generating).
-        let candidateBubbles = bubbleRefs.enumerated().filter { index, ref in
-            let isTail = index >= max(0, bubbleRefs.count - 4)
+        let shouldRecheckTail = isSeed
+            || isGeneratingNow
+            || !state.pendingToolBubbleIDs.isEmpty
+            || bubbleRefs.count != state.lastBubbleCount
+            || composerStatus != state.lastComposerStatus
+            || composerUpdatedAt != state.lastComposerUpdatedAt
+            || generatingIDs != state.lastGeneratingIDs
+
+        // Only inspect bubbles we haven't finalized yet (tailing recent ones when state changed + any currently generating).
+        if bubbleRefs.count < state.finalizedPrefixCount {
+            state.finalizedPrefixCount = max(0, bubbleRefs.count - 8)
+        }
+        let candidateBubbles = bubbleRefs.enumerated().dropFirst(state.finalizedPrefixCount).filter { index, ref in
+            let isTail = shouldRecheckTail && index >= max(0, bubbleRefs.count - 4)
             return !state.seenHumanBubbles.contains(ref.id)
                 && (
                     !state.seenAIBubbles.contains(ref.id)
@@ -573,12 +600,14 @@ public final class CursorTranscriptAdapter: AgentAdapter, @unchecked Sendable {
                         fingerprint: AgentSessionTracker.fingerprint(name: name, input: parsedArgs)
                     ))
                     toolState = SQLiteToolState(
+                        bubbleID: ref.id,
                         status: status,
                         awaitingApprovalEmitted: false,
                         completedEmitted: false
                     )
                 }
                 if var ts = toolState {
+                    ts.bubbleID = ref.id
                     ts.status = status
                     if isWaitingApproval && !ts.awaitingApprovalEmitted {
                         ts.awaitingApprovalEmitted = true
@@ -606,9 +635,7 @@ public final class CursorTranscriptAdapter: AgentAdapter, @unchecked Sendable {
             entries.append(.assistantOutput(contextTokens: tokens))
         }
 
-        let isGeneratingNow = Self.isComposerGenerating(composer)
-        let composerStatus = (composer["status"] as? String)?.lowercased() ?? "none"
-        let hasPendingTools = state.toolStates.values.contains { !$0.completedEmitted }
+        let hasPendingTools = !state.pendingToolBubbleIDs.isEmpty
 
         if !isSeed {
             if isGeneratingNow && !state.wasGenerating && !state.tracker.turnActive {
@@ -625,6 +652,24 @@ public final class CursorTranscriptAdapter: AgentAdapter, @unchecked Sendable {
             }
         }
         state.wasGenerating = isGeneratingNow
+        state.lastComposerUpdatedAt = composerUpdatedAt
+        state.lastBubbleCount = bubbleRefs.count
+        state.lastComposerStatus = composerStatus
+        state.lastGeneratingIDs = generatingIDs
+        let tailStart = max(0, bubbleRefs.count - 8)
+        while state.finalizedPrefixCount < tailStart {
+            let refID = bubbleRefs[state.finalizedPrefixCount].id
+            let isFinalized = (state.seenHumanBubbles.contains(refID) || state.seenAIBubbles.contains(refID))
+                && !generatingIDs.contains(refID)
+                && !state.pendingToolBubbleIDs.contains(refID)
+            guard isFinalized else { break }
+            state.seenHumanBubbles.remove(refID)
+            state.seenAIBubbles.remove(refID)
+            state.lastBubbleSignatureByID.removeValue(forKey: refID)
+            state.finalizedPrefixCount += 1
+        }
+        let tailIDs = Set(bubbleRefs.suffix(8).map(\.id)).union(generatingIDs).union(state.pendingToolBubbleIDs)
+        state.pruneBoundedState(preservingBubbleIDs: tailIDs)
 
         return entries
     }
@@ -947,19 +992,17 @@ public final class CursorTranscriptAdapter: AgentAdapter, @unchecked Sendable {
         }
 
         let unattached = candidates.filter { followedJSONLSessions[$0.sessionID] == nil }
-        let freshUnattached = unattached
-            .filter { now.timeIntervalSince($0.modified) <= activeAttachWindow }
-            .sorted { $0.modified < $1.modified }
+        let selection = AgentSessionTracker.selectUnattachedCandidates(
+            from: unattached,
+            followedIsEmpty: followedJSONLSessions.isEmpty && sqliteSessions.isEmpty,
+            activeAttachWindow: activeAttachWindow,
+            now: now,
+            modified: \.modified
+        )
 
         var attachedAny = false
-        if !freshUnattached.isEmpty {
-            for candidate in freshUnattached {
-                attachJSONLSession(candidate, at: now, isStaleFallback: false, handler: handler)
-                attachedAny = true
-            }
-        } else if followedJSONLSessions.isEmpty && sqliteSessions.isEmpty,
-                  let newest = unattached.max(by: { $0.modified < $1.modified }) {
-            attachJSONLSession(newest, at: now, isStaleFallback: true, handler: handler)
+        for candidate in selection.candidates {
+            attachJSONLSession(candidate, at: now, isStaleFallback: selection.isStaleFallback, handler: handler)
             attachedAny = true
         }
 
@@ -1008,27 +1051,27 @@ public final class CursorTranscriptAdapter: AgentAdapter, @unchecked Sendable {
     }
 
     private func pruneIdleSessions(at now: Date) {
-        let total = sqliteSessions.count + followedJSONLSessions.count
-        guard total > 1 else { return }
-
-        var allRecency: [(key: String, isSQLite: Bool, date: Date, turnActive: Bool)] = []
+        var combined: [String: (key: String, isSQLite: Bool, date: Date, turnActive: Bool)] = [:]
+        combined.reserveCapacity(sqliteSessions.count + followedJSONLSessions.count)
         for s in sqliteSessions.values {
-            allRecency.append((s.sessionID, true, s.lastActivityAt, s.tracker.turnActive))
+            combined["s:\(s.sessionID)"] = (s.sessionID, true, s.lastActivityAt, s.tracker.turnActive)
         }
         for s in followedJSONLSessions.values {
-            allRecency.append((s.sessionID, false, s.lastActivityAt, s.tracker.turnActive))
+            combined["j:\(s.sessionID)"] = (s.sessionID, false, s.lastActivityAt, s.tracker.turnActive)
         }
-        let sorted = allRecency.sorted { $0.date > $1.date }
-        guard let newest = sorted.first else { return }
-
-        for item in sorted {
-            if item.key == newest.key && item.isSQLite == newest.isSQLite { continue }
-            if !item.turnActive && now.timeIntervalSince(item.date) > Self.idleRetainWindow {
-                if item.isSQLite {
-                    sqliteSessions.removeValue(forKey: item.key)
-                } else {
-                    followedJSONLSessions.removeValue(forKey: item.key)
-                }
+        let staleKeys = AgentSessionTracker.idleSessionIDsToPrune(
+            from: combined,
+            retainWindow: Self.idleRetainWindow,
+            now: now,
+            lastActivityAt: \.date,
+            isBusy: \.turnActive
+        )
+        for compositeKey in staleKeys {
+            guard let item = combined[compositeKey] else { continue }
+            if item.isSQLite {
+                sqliteSessions.removeValue(forKey: item.key)
+            } else {
+                followedJSONLSessions.removeValue(forKey: item.key)
             }
         }
     }

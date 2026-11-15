@@ -120,7 +120,11 @@ public final class AgentApprovalStore: ObservableObject {
     public func registerRequest(from event: AgentEvent) -> AgentApprovalRequest? {
         sweepExpired()
 
-        guard event.kind == .needsApproval, let requestID = event.approvalRequestID else { return nil }
+        guard event.kind == .needsApproval else { return nil }
+        guard let requestID = event.approvalRequestID else {
+            activeRequest = nil
+            return nil
+        }
         let now = clock()
 
         let request = AgentApprovalRequest(
@@ -194,6 +198,18 @@ public final class AgentApprovalStore: ObservableObject {
         activeRequest = nil
     }
 
+    /// Returns the active approval request only when it matches the currently displayed `.needsApproval` popup.
+    public func matchingActiveRequest(for popup: AgentPopupState?) -> AgentApprovalRequest? {
+        guard let popup, popup.kind == .needsApproval, let request = activeRequest else { return nil }
+        if let popupRequestID = popup.approvalRequestID {
+            return request.id == popupRequestID ? request : nil
+        }
+        if popup.agentID != nil {
+            return nil
+        }
+        return request.agentName == popup.agentName ? request : nil
+    }
+
     /// Removes all expired requests.
     public func sweepExpired() {
         let now = clock()
@@ -206,6 +222,57 @@ public final class AgentApprovalStore: ObservableObject {
         }
     }
 
+    public enum ApprovalChannelError: LocalizedError, Sendable {
+        case unsafeChannelPath(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .unsafeChannelPath(let path):
+                return "Refused to write approval response outside allowed directories: \(path)"
+            }
+        }
+    }
+
+    nonisolated public static var defaultApprovalsDirectory: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Bitz/agent-approvals", isDirectory: true)
+    }
+
+    nonisolated private static func validatedChannelURL(for channel: String) throws -> URL {
+        let trimmed = channel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.hasPrefix("/") else {
+            throw ApprovalChannelError.unsafeChannelPath(channel)
+        }
+        let rawURL = URL(fileURLWithPath: trimmed)
+        guard !rawURL.pathComponents.contains("..") else {
+            throw ApprovalChannelError.unsafeChannelPath(channel)
+        }
+        let resolvedParent = rawURL.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+        let fileURL = resolvedParent.appendingPathComponent(rawURL.lastPathComponent)
+        let candidatePath = fileURL.path
+
+        let allowedRoots = [
+            defaultApprovalsDirectory,
+            FileManager.default.temporaryDirectory,
+            URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        ].map { $0.resolvingSymlinksInPath().standardizedFileURL.path }
+
+        let isAllowed = allowedRoots.contains { root in
+            candidatePath == root || candidatePath.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+        }
+        guard isAllowed else {
+            throw ApprovalChannelError.unsafeChannelPath(channel)
+        }
+
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: candidatePath),
+           let fileType = attrs[.type] as? FileAttributeType,
+           (fileType == .typeSymbolicLink || fileType == .typeDirectory) {
+            throw ApprovalChannelError.unsafeChannelPath(channel)
+        }
+
+        return fileURL
+    }
+
     /// Default file / FIFO response channel writer (FR-006, NFR-002: Zero keystroke injection).
     nonisolated public static func defaultChannelWriter(channel: String, decision: ApprovalDecision, requestID: String) -> Result<Void, Error> {
         let payload: [String: String] = [
@@ -214,9 +281,45 @@ public final class AgentApprovalStore: ObservableObject {
             "timestamp": ISO8601DateFormatter().string(from: Date())
         ]
         do {
+            let fileURL = try validatedChannelURL(for: channel)
+            let parentDir = fileURL.deletingLastPathComponent()
+            if !FileManager.default.fileExists(atPath: parentDir.path) {
+                try FileManager.default.createDirectory(
+                    at: parentDir,
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700]
+                )
+            }
             let data = try JSONEncoder().encode(payload)
-            let fileURL = URL(fileURLWithPath: channel)
-            try data.write(to: fileURL, options: .atomic)
+            var st = stat()
+            let isFIFO = lstat(fileURL.path, &st) == 0 && (st.st_mode & mode_t(S_IFMT)) == mode_t(S_IFIFO)
+            if isFIFO {
+                // O_NONBLOCK avoids hanging @MainActor if the reader process already exited; O_NOFOLLOW closes TOCTOU symlink swaps; F_SETNOSIGPIPE prevents SIGPIPE termination.
+                let fd = open(fileURL.path, O_WRONLY | O_NONBLOCK | O_NOFOLLOW)
+                guard fd >= 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                defer { close(fd) }
+                _ = fcntl(fd, F_SETNOSIGPIPE, 1)
+                try data.withUnsafeBytes { rawBuffer in
+                    guard let baseAddress = rawBuffer.baseAddress else { return }
+                    var offset = 0
+                    while offset < rawBuffer.count {
+                        let written = write(fd, baseAddress.advanced(by: offset), rawBuffer.count - offset)
+                        if written < 0 {
+                            if errno == EINTR { continue }
+                            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                        }
+                        if written == 0 {
+                            throw POSIXError(.EIO)
+                        }
+                        offset += written
+                    }
+                }
+            } else {
+                try data.write(to: fileURL, options: .atomic)
+                try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            }
             return .success(())
         } catch {
             return .failure(error)

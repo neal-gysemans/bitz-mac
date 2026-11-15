@@ -289,4 +289,176 @@ final class AgentApprovalStoreTests: XCTestCase {
         XCTAssertEqual(hudWithoutChannel.summaryText, "Edit: save file")
         XCTAssertFalse(requestWithoutChannel.hasApprovalChannel, "Request without channel must gate APPROVE button")
     }
+
+    func testBubblePanelRevertsToClickThroughWhenApprovalPopupDismissedWithPendingRequest() throws {
+        let (defaults, suiteName) = makeIsolatedDefaults()
+        OverlayFixture.resetAgentMonitorDefaults()
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            OverlayFixture.resetAgentMonitorDefaults()
+        }
+
+        let delegate = BitzAppDelegate(
+            telemetryProvider: MockTelemetryProvider(),
+            scaleStore: AvatarScaleStore(userDefaults: defaults),
+            opacityStore: AvatarOpacityStore(userDefaults: defaults),
+            positionStore: AvatarPositionStore(userDefaults: defaults),
+            displayStore: DisplayPreferenceStore(userDefaults: defaults),
+            updateStore: AppUpdateStore(userDefaults: defaults),
+            userDefaults: defaults
+        )
+        delegate.setupOverlayPanel()
+        defer { delegate.overlayPanels.forEach { $0.close() } }
+
+        let panel = try XCTUnwrap(delegate.overlayPanel)
+        let bubble = panel.speechBubblePanel
+        XCTAssertTrue(bubble.ignoresMouseEvents)
+
+        delegate.agentMonitor.handleEvent(AgentEvent(
+            agentID: "claude",
+            agentName: "Claude",
+            kind: .needsApproval,
+            message: "Claude needs approval!",
+            metadata: [
+                AgentEvent.MetadataKey.approvalRequestID: "req-bubble-1",
+                AgentEvent.MetadataKey.approvalChannel: "/tmp/req-bubble-1.json"
+            ]
+        ))
+        XCTAssertNotNil(delegate.approvalStore.activeRequest)
+        XCTAssertTrue(spinRunLoop(until: { !bubble.ignoresMouseEvents }), "Approval bubble with pending request must accept clicks")
+
+        // Dismiss popup without resolving approvalStore.activeRequest: bubble must revert to click-through.
+        delegate.agentMonitor.dismissPopup()
+        XCTAssertNotNil(delegate.approvalStore.activeRequest)
+        XCTAssertTrue(spinRunLoop(until: { bubble.ignoresMouseEvents }), "Dismissed approval popup must not leave invisible bubble blocking clicks")
+    }
+
+    func testDefaultChannelWriterRejectsTraversalAndOutsidePaths() throws {
+        let outsidePath = "/var/log/bitz-should-not-write-\(UUID().uuidString).json"
+        let outsideResult = AgentApprovalStore.defaultChannelWriter(
+            channel: outsidePath,
+            decision: .approve,
+            requestID: "req-outside"
+        )
+        if case .success = outsideResult {
+            XCTFail("Expected outside path \(outsidePath) to be rejected")
+        }
+
+        let traversalResult = AgentApprovalStore.defaultChannelWriter(
+            channel: "/tmp/../etc/bitz-traversal-test.json",
+            decision: .reject,
+            requestID: "req-traversal"
+        )
+        if case .success = traversalResult {
+            XCTFail("Expected traversal path to be rejected")
+        }
+
+        let relativeResult = AgentApprovalStore.defaultChannelWriter(
+            channel: "relative/approval.json",
+            decision: .approve,
+            requestID: "req-relative"
+        )
+        if case .success = relativeResult {
+            XCTFail("Expected relative path to be rejected")
+        }
+
+        let symlinkURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bitz-symlink-\(UUID().uuidString).json")
+        try FileManager.default.createSymbolicLink(atPath: symlinkURL.path, withDestinationPath: "/etc/hosts")
+        defer { try? FileManager.default.removeItem(at: symlinkURL) }
+
+        let symlinkResult = AgentApprovalStore.defaultChannelWriter(
+            channel: symlinkURL.path,
+            decision: .approve,
+            requestID: "req-symlink"
+        )
+        if case .success = symlinkResult {
+            XCTFail("Expected symlink channel path to be rejected")
+        }
+
+        let validURL = AgentApprovalStore.defaultApprovalsDirectory
+            .appendingPathComponent("bitz-valid-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: validURL) }
+
+        let validResult = AgentApprovalStore.defaultChannelWriter(
+            channel: validURL.path,
+            decision: .approve,
+            requestID: "req-valid"
+        )
+        if case .failure(let error) = validResult {
+            XCTFail("Expected defaultApprovalsDirectory path to succeed, failed with: \(error)")
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: validURL.path))
+    }
+
+    func testDefaultChannelWriterDoesNotBlockOnFIFOWithoutReader() throws {
+        let approvalsDir = AgentApprovalStore.defaultApprovalsDirectory
+        try FileManager.default.createDirectory(at: approvalsDir, withIntermediateDirectories: true)
+
+        let fifoURL = approvalsDir.appendingPathComponent("bitz-fifo-\(UUID().uuidString).pipe")
+        XCTAssertEqual(mkfifo(fifoURL.path, 0o600), 0, "mkfifo failed with errno \(errno)")
+        defer { try? FileManager.default.removeItem(at: fifoURL) }
+
+        let result = AgentApprovalStore.defaultChannelWriter(
+            channel: fifoURL.path,
+            decision: .approve,
+            requestID: "req-fifo-no-reader"
+        )
+        switch result {
+        case .success:
+            XCTFail("Expected non-blocking FIFO write with no reader to fail immediately")
+        case .failure(let error):
+            XCTAssertEqual((error as? POSIXError)?.code, .ENXIO)
+        }
+    }
+
+    func testCrossAgentApprovalWithoutRequestIDClearsActiveRequestAndRejectsMismatch() {
+        let (defaults, suiteName) = makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = AgentApprovalStore()
+        let monitor = AgentMonitorService(adapters: [], userDefaults: defaults)
+        store.bind(agentMonitor: monitor)
+
+        monitor.handleEvent(AgentEvent(
+            agentID: "claude",
+            agentName: "Claude",
+            kind: .needsApproval,
+            message: "Claude needs approval",
+            metadata: [
+                AgentEvent.MetadataKey.approvalRequestID: "req-claude-1",
+                AgentEvent.MetadataKey.approvalChannel: "/tmp/claude.json"
+            ]
+        ))
+        XCTAssertEqual(store.matchingActiveRequest(for: monitor.activePopup)?.id, "req-claude-1")
+
+        let mismatchedPopup = AgentPopupState(
+            text: "Codex needs approval",
+            kind: .needsApproval,
+            agentName: "Codex",
+            expiresAt: nil,
+            agentID: "codex",
+            approvalRequestID: nil
+        )
+        XCTAssertNil(store.matchingActiveRequest(for: mismatchedPopup))
+
+        monitor.handleEvent(AgentEvent(
+            agentID: "codex",
+            agentName: "Codex",
+            kind: .needsApproval,
+            message: "Codex needs approval"
+        ))
+        XCTAssertEqual(monitor.activePopup?.agentID, "codex")
+        XCTAssertNil(store.activeRequest)
+        XCTAssertNil(store.matchingActiveRequest(for: monitor.activePopup))
+
+        let dropboxChannel = DropboxAgentAdapter.defaultDirectoryURL.appendingPathComponent("evil.json").path
+        if case .success = AgentApprovalStore.defaultChannelWriter(
+            channel: dropboxChannel,
+            decision: .approve,
+            requestID: "req-dropbox"
+        ) {
+            XCTFail("Dropbox input directory must not be allowed as an approval channel")
+        }
+    }
 }

@@ -217,30 +217,25 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
     nonisolated(unsafe) private static var _isRefreshingLocaleOptions = false
 
     /// Returns cached on-device transcription languages (ordered by user preference, then name),
-    /// refreshing off-main if the cache is older than 10 seconds.
+    /// refreshing off-main if missing or older than 10 seconds without blocking `@MainActor`.
     public static func cachedOnDeviceLocaleOptions() -> [(id: String, label: String)] {
-        let snapshot: (options: [(id: String, label: String)]?, needsBackgroundRefresh: Bool) = cachedLocaleOptionsLock.withLock {
-            guard let cached = _cachedLocaleOptions else { return (nil, false) }
-            let stale = _cachedLocaleOptionsUpdatedAt.map { Date().timeIntervalSince($0) > 10 } ?? true
+        let snapshot: (options: [(id: String, label: String)], needsBackgroundRefresh: Bool) = cachedLocaleOptionsLock.withLock {
+            let stale = _cachedLocaleOptions == nil || (_cachedLocaleOptionsUpdatedAt.map { Date().timeIntervalSince($0) > 10 } ?? true)
             let shouldRefresh = stale && !_isRefreshingLocaleOptions
             if shouldRefresh { _isRefreshingLocaleOptions = true }
-            return (cached, shouldRefresh)
+            return (_cachedLocaleOptions ?? [], shouldRefresh)
         }
         if snapshot.needsBackgroundRefresh {
             Task.detached(priority: .utility) {
                 _ = onDeviceLocaleOptions()
             }
         }
-        if let options = snapshot.options {
-            return options
-        }
-        return onDeviceLocaleOptions()
+        return snapshot.options
     }
 
-    /// Clears the cached locale options so subsequent lookups re-query the system (e.g. after adding a language in macOS Settings).
+    /// Clears the freshness timestamp so the next lookup refreshes asynchronously off-main without blocking `@MainActor`.
     public static func invalidateCachedLocaleOptions() {
         cachedLocaleOptionsLock.withLock {
-            _cachedLocaleOptions = nil
             _cachedLocaleOptionsUpdatedAt = nil
         }
     }

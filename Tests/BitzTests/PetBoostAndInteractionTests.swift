@@ -103,6 +103,8 @@ final class PetBoostAndInteractionTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: name) }
         let store = MascotInteractionSettingsStore(userDefaults: defaults)
         XCTAssertTrue(store.isHoldActive(for: [.option]))
+        XCTAssertFalse(store.isHoldActive(for: [.option, .command]))
+        XCTAssertFalse(store.isHoldActive(for: [.option, .shift]))
         XCTAssertFalse(store.isHoldActive(for: [.control]))
         store.holdModifier = .shift
         XCTAssertTrue(store.isHoldActive(for: [.shift]))

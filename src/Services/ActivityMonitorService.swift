@@ -509,39 +509,6 @@ public enum BrowserTabTelemetryReader {
         cachedChromiumSession = (sessionFile.path, newestModDate, url)
         return (url, nil)
     }
-
-    // ⚡ Bolt: Hoisted AppleScript compilation to a nonisolated(unsafe) static property.
-    // Compiling an NSAppleScript from source is an expensive kernel operation.
-    // Since this is polled frequently (every 5s), compiling it once lazily
-    // saves CPU cycles and prevents blocking the main thread during telemetry ticks.
-    // NSAppleScript is non-Sendable, but safe to share as we only use it serially on the MainActor.
-    nonisolated(unsafe) private static let safariAppleScript = NSAppleScript(source: """
-    tell application "Safari"
-        if (count of windows) > 0 then
-            set currentTab to current tab of front window
-            return {URL of currentTab, name of currentTab}
-        end if
-    end tell
-    return {"", ""}
-    """)
-
-    /// Reads the currently active tab URL and title from Safari via AppleScript if permitted,
-    /// or returns `(nil, nil)` without throwing or hanging.
-    public static func readActiveSafariTab() -> (url: String?, title: String?) {
-        guard let script = safariAppleScript else {
-            return (nil, nil)
-        }
-        var errorInfo: NSDictionary?
-        let descriptor = script.executeAndReturnError(&errorInfo)
-        guard errorInfo == nil, descriptor.numberOfItems >= 2 else {
-            return (nil, nil)
-        }
-        let url = descriptor.atIndex(1)?.stringValue
-        let title = descriptor.atIndex(2)?.stringValue
-        let cleanURL = (url?.isEmpty ?? true) ? nil : url
-        let cleanTitle = (title?.isEmpty ?? true) ? nil : title
-        return (cleanURL, cleanTitle)
-    }
 }
 
 // MARK: - ActivityTelemetryProviding Seam
@@ -666,9 +633,8 @@ public struct SystemActivityTelemetryProvider: ActivityTelemetryProviding {
            bundleID.contains("thebrowser") || bundleID.contains("opera") || bundleID.contains("vivaldi") {
             return BrowserTabTelemetryReader.readActiveChromiumTab(forBundleID: bundleID)
         }
-        if bundleID.contains("safari") {
-            return BrowserTabTelemetryReader.readActiveSafariTab()
-        }
+        // Safari video playback is tracked via IOKit power assertions in isVideoPlaybackActive(),
+        // avoiding synchronous NSAppleScript calls on @MainActor and unsolicited Automation prompts.
         return (nil, nil)
     }
 

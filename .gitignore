@@ -22,3 +22,6 @@ DerivedData/
 build/
 .agents/
 skills-lock.json
+
+# Spec-kitty artifacts
+kitty-specs/

@@ -10,13 +10,45 @@ public protocol PowerStateProviding: Sendable {
     var thermalState: ProcessInfo.ThermalState { get }
 }
 
-/// Production system power state provider querying Foundation `ProcessInfo`.
+/// Production system power state provider querying Foundation `ProcessInfo` and cached IOKit battery telemetry.
 public struct SystemPowerStateProvider: PowerStateProviding {
+    private final class BatteryCache: @unchecked Sendable {
+        let lock = NSLock()
+        var value: Double?
+        var updatedAt: Date?
+    }
+
+    private static let cacheTTL: TimeInterval = 30.0
+    private let cache = BatteryCache()
+
     public init() {}
 
     public var batteryLevelPercentage: Double? {
-        // Default system provider; desktop Macs and AC-tethered Macs return nil
-        nil
+        let now = Date()
+        if let cached = cache.lock.withLock({ () -> Double?? in
+            guard let updatedAt = cache.updatedAt, now.timeIntervalSince(updatedAt) < Self.cacheTTL else {
+                return nil
+            }
+            return .some(cache.value)
+        }) {
+            return cached
+        }
+
+        let measured: Double? = {
+            guard let battery = SystemTelemetryDataProvider().fetchBatteryTelemetry(),
+                  battery.isCharging != true,
+                  battery.powerSource != "AC Power",
+                  let pct = battery.percentage else {
+                return nil
+            }
+            return Double(pct)
+        }()
+
+        cache.lock.withLock {
+            cache.value = measured
+            cache.updatedAt = now
+        }
+        return measured
     }
 
     public var isLowPowerModeEnabled: Bool {

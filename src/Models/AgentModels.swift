@@ -447,12 +447,23 @@ public struct AgentPopupState: Sendable, Equatable {
     public let kind: AgentEventKind
     public let agentName: String
     public let expiresAt: Date?
+    public let agentID: String?
+    public let approvalRequestID: String?
 
-    public init(text: String, kind: AgentEventKind, agentName: String, expiresAt: Date?) {
+    public init(
+        text: String,
+        kind: AgentEventKind,
+        agentName: String,
+        expiresAt: Date?,
+        agentID: String? = nil,
+        approvalRequestID: String? = nil
+    ) {
         self.text = text
         self.kind = kind
         self.agentName = agentName
         self.expiresAt = expiresAt
+        self.agentID = agentID
+        self.approvalRequestID = approvalRequestID
     }
 
     public var isExpired: Bool {

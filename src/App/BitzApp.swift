@@ -141,15 +141,22 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         self.telemetrySettings = resolvedTelemetrySettings
         self.telemetryDashboard = telemetryDashboard ?? TelemetryDashboardService(settingsStore: resolvedTelemetrySettings)
 
-        let resolvedAudioSettings = audioSettings ?? CyberAudioSettingsStore(userDefaults: userDefaults)
-        self.audioSettings = resolvedAudioSettings
-        let resolvedAudioService = audioService ?? CyberAudioService(settingsStore: resolvedAudioSettings)
-        self.audioService = resolvedAudioService
-
         let resolvedFlowShieldSettings = flowShieldSettings ?? FlowShieldSettingsStore(userDefaults: userDefaults)
         self.flowShieldSettings = resolvedFlowShieldSettings
         let resolvedFlowShieldService = flowShieldService ?? FlowShieldService(settingsStore: resolvedFlowShieldSettings)
         self.flowShieldService = resolvedFlowShieldService
+
+        let resolvedAudioSettings = audioSettings ?? CyberAudioSettingsStore(userDefaults: userDefaults)
+        self.audioSettings = resolvedAudioSettings
+        let resolvedAudioService = audioService ?? CyberAudioService(
+            settingsStore: resolvedAudioSettings,
+            environmentDetector: AudioEnvironmentDetector(
+                isFocusActiveProvider: { [weak resolvedFlowShieldService] in
+                    resolvedFlowShieldService?.isFlowShieldActiveSnapshot ?? false
+                }
+            )
+        )
+        self.audioService = resolvedAudioService
 
         // Wire agent detection adapters (`AntigravityTranscriptAdapter` tracks active Antigravity conversations directly, #153)
         let processAdapter = ProcessAgentAdapter(excludedAgentIDs: ["antigravity"])
@@ -398,7 +405,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             telemetrySettings: telemetrySettings,
             meetingRecorder: meetingRecorder
         )
-        let bubbleIsInteractive = (currentContent?.isInteractive ?? false) || approvalStore.activeRequest != nil
+        let bubbleIsInteractive = (currentContent?.isInteractive ?? false)
+            || approvalStore.matchingActiveRequest(for: agentMonitor.activePopup) != nil
         overlayPanels.forEach { panel in
             panel.ignoresMouseEvents = !positionStore.isInteractivityEnabled
             panel.speechBubblePanel.ignoresMouseEvents = !bubbleIsInteractive
@@ -965,6 +973,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
 /// interactive quick-action HUD (`AgentApprovalHUDView`) during `.needsApproval` status (FR-004, FR-005, FR-006, FR-008).
 public struct SpeechBubbleHostView: View {
     public let speechBubbleView: SpeechBubbleView
+    @ObservedObject public var scaleStore: AvatarScaleStore
     @ObservedObject public var approvalStore: AgentApprovalStore
     @ObservedObject public var agentMonitor: AgentMonitorService
     public let appActivator: any AppActivating
@@ -978,6 +987,7 @@ public struct SpeechBubbleHostView: View {
         diffViewer: any DiffViewing
     ) {
         self.speechBubbleView = speechBubbleView
+        self.scaleStore = speechBubbleView.scaleStore
         self.approvalStore = approvalStore
         self.agentMonitor = agentMonitor
         self.appActivator = appActivator
@@ -985,21 +995,28 @@ public struct SpeechBubbleHostView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 4) {
+        let scale = CGFloat(scaleStore.scaleFactor)
+        VStack(spacing: 4 * scale) {
             speechBubbleView
 
-            if let request = approvalStore.activeRequest, agentMonitor.activePopup?.kind == .needsApproval {
-                AgentApprovalHUDView(
-                    request: request,
-                    appActivator: appActivator,
-                    diffViewer: diffViewer,
-                    onApprove: {
-                        approvalStore.submitDecision(.approve, for: request.id)
-                        agentMonitor.dismissPopup()
-                    }
-                )
-                .padding(.horizontal, 8)
-                .padding(.bottom, 6)
+            if let request = approvalStore.matchingActiveRequest(for: agentMonitor.activePopup) {
+                BubbleWindowLayout(
+                    width: SpeechBubbleView.maxBubbleWidth + SpeechBubbleView.glowPadding * 2,
+                    scale: scale
+                ) {
+                    AgentApprovalHUDView(
+                        request: request,
+                        appActivator: appActivator,
+                        diffViewer: diffViewer,
+                        onApprove: {
+                            approvalStore.submitDecision(.approve, for: request.id)
+                            agentMonitor.dismissPopup()
+                        }
+                    )
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 6)
+                    .scaleEffect(scale, anchor: .topLeading)
+                }
             }
         }
     }

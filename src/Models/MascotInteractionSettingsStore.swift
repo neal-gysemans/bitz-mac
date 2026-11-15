@@ -73,10 +73,10 @@ public final class MascotInteractionSettingsStore: ObservableObject {
         self.isInboxHandoffEnabled = userDefaults.object(forKey: Self.inboxHandoffKey) as? Bool ?? false
     }
 
-    /// True when exactly the configured modifier is held (other modifiers are ignored so shortcuts stay usable).
+    /// True when strictly the configured modifier key (and no other chord modifier) is held so multi-key shortcuts stay usable.
     public func isHoldActive(for flags: NSEvent.ModifierFlags) -> Bool {
         guard isHoldToInteractEnabled else { return false }
-        return flags.intersection(.deviceIndependentFlagsMask).contains(holdModifier.flag)
+        return flags.intersection([.option, .control, .command, .shift]) == holdModifier.flag
     }
 }
 

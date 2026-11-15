@@ -1162,6 +1162,188 @@ final class LicensingServiceTests: XCTestCase {
         XCTAssertEqual(monitor.activeAgentCount, 1)
         XCTAssertEqual(handledKinds, [.started, .needsApproval, .done])
     }
+
+    @MainActor
+    func testRemoteLicensePersistsExpirationAcrossRestartAndExpiresOffline() async throws {
+        let (defaults, suite) = makeIsolatedDefaults("RemotePersistExpire")
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        final class ClockBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _now: Date
+            init(_ now: Date) { self._now = now }
+            var now: Date {
+                get { lock.lock(); defer { lock.unlock() }; return _now }
+                set { lock.lock(); _now = newValue; lock.unlock() }
+            }
+        }
+
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let expiresAt = start.addingTimeInterval(3600)
+        let clockBox = ClockBox(start)
+        let storage = MockLicenseStorage()
+        let backend = MockLicensingTestBackend(validateHandler: { _, _ in
+            RemoteLicenseResult(
+                valid: true,
+                tier: "pro",
+                licenseKey: "BTZ-REMOTE-PERSIST-1",
+                expiresAt: expiresAt
+            )
+        })
+
+        let service1 = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData,
+            backendClient: backend,
+            accessPolicy: .production,
+            clock: { clockBox.now },
+            userDefaults: defaults
+        )
+        try await service1.activateLicense(key: "BTZ-REMOTE-PERSIST-1")
+        XCTAssertEqual(service1.currentTier, .pro)
+        XCTAssertEqual(service1.activeLicense?.licenseId, "BTZ-REMOTE-PERSIST-1")
+        XCTAssertEqual(service1.activeLicense?.expiresAt, expiresAt.timeIntervalSince1970)
+
+        // Wipe UserDefaults before restarting offline to prove expiry lives inside storage, not UserDefaults.
+        defaults.removePersistentDomain(forName: suite)
+
+        // Simulate app restart offline before expiration: Pro entitlement & metadata remain intact.
+        let service2 = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData,
+            backendClient: nil,
+            accessPolicy: .production,
+            clock: { clockBox.now },
+            userDefaults: defaults
+        )
+        XCTAssertEqual(service2.currentTier, .pro)
+        XCTAssertEqual(service2.activeLicense?.licenseId, "BTZ-REMOTE-PERSIST-1")
+        XCTAssertEqual(service2.activeLicense?.expiresAt, expiresAt.timeIntervalSince1970)
+
+        // Advance clock past expiresAt and restart offline: expired remote license must purge.
+        clockBox.now = expiresAt.addingTimeInterval(60)
+        let service3 = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData,
+            backendClient: nil,
+            accessPolicy: .production,
+            clock: { clockBox.now },
+            userDefaults: defaults
+        )
+        XCTAssertEqual(service3.currentTier, .free)
+        XCTAssertNil(service3.activeLicense)
+        XCTAssertNil(storage.loadLicenseToken())
+    }
+
+    @MainActor
+    func testMalformedTwoLineRemoteTokenPurgesOnStartup() throws {
+        let (defaults, suite) = makeIsolatedDefaults("MalformedTwoLineToken")
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+        // 1) Corrupt base64 payload in a 2-line BTZ- token must fail closed and purge storage.
+        let malformedStorage = MockLicenseStorage(token: "BTZ-MALFORMED-1\nnot_valid_base64!!!")
+        let malformedService = LicensingService(
+            storage: malformedStorage,
+            publicKeyData: testPublicKeyData,
+            backendClient: nil,
+            accessPolicy: .production,
+            clock: { now },
+            userDefaults: defaults
+        )
+        XCTAssertEqual(malformedService.currentTier, .free)
+        XCTAssertNil(malformedService.activeLicense)
+        XCTAssertNil(malformedStorage.loadLicenseToken())
+
+        // 2) Mismatched outer/inner licenseId in a 2-line BTZ- token must fail closed and purge storage.
+        let innerPayload = LicensePayload(
+            tier: "pro",
+            licenseId: "BTZ-INNER-2",
+            issuedAt: now.timeIntervalSince1970,
+            expiresAt: now.addingTimeInterval(3600).timeIntervalSince1970
+        )
+        let encodedPayload = LicensingService.base64URLEncode(try JSONEncoder().encode(innerPayload))
+        let mismatchStorage = MockLicenseStorage(token: "BTZ-OUTER-1\n\(encodedPayload)")
+        let mismatchService = LicensingService(
+            storage: mismatchStorage,
+            publicKeyData: testPublicKeyData,
+            backendClient: nil,
+            accessPolicy: .production,
+            clock: { now },
+            userDefaults: defaults
+        )
+        XCTAssertEqual(mismatchService.currentTier, .free)
+        XCTAssertNil(mismatchService.activeLicense)
+        XCTAssertNil(mismatchStorage.loadLicenseToken())
+    }
+
+    @MainActor
+    func testValidateActiveLicenseRemotelyClearsExpirationOnLifetimeUpgrade() async throws {
+        let (defaults, suite) = makeIsolatedDefaults("RemoteLifetimeUpgrade")
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        final class Box<T>: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _value: T
+            init(_ value: T) { self._value = value }
+            var value: T {
+                get { lock.lock(); defer { lock.unlock() }; return _value }
+                set { lock.lock(); _value = newValue; lock.unlock() }
+            }
+        }
+
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let originalExpiry = start.addingTimeInterval(3600)
+        let clockBox = Box(start)
+        let resultBox = Box(RemoteLicenseResult(
+            valid: true,
+            tier: "pro",
+            licenseKey: "BTZ-UPGRADE-1",
+            expiresAt: originalExpiry
+        ))
+        let storage = MockLicenseStorage()
+        let backend = MockLicensingTestBackend(validateHandler: { _, _ in
+            resultBox.value
+        })
+
+        let service1 = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData,
+            backendClient: backend,
+            accessPolicy: .production,
+            clock: { clockBox.value },
+            userDefaults: defaults
+        )
+        try await service1.activateLicense(key: "BTZ-UPGRADE-1")
+        XCTAssertEqual(service1.currentTier, .pro)
+        XCTAssertEqual(service1.activeLicense?.expiresAt, originalExpiry.timeIntervalSince1970)
+
+        // Backend upgrades the license to lifetime (expiresAt == nil).
+        resultBox.value = RemoteLicenseResult(
+            valid: true,
+            tier: "pro",
+            licenseKey: "BTZ-UPGRADE-1",
+            expiresAt: nil
+        )
+        await service1.validateActiveLicenseRemotely()
+        XCTAssertEqual(service1.currentTier, .pro)
+        XCTAssertNil(service1.activeLicense?.expiresAt)
+
+        // Advance past original expiry and restart offline: lifetime Pro must persist.
+        clockBox.value = originalExpiry.addingTimeInterval(3600)
+        let service2 = LicensingService(
+            storage: storage,
+            publicKeyData: testPublicKeyData,
+            backendClient: nil,
+            accessPolicy: .production,
+            clock: { clockBox.value },
+            userDefaults: defaults
+        )
+        XCTAssertEqual(service2.currentTier, .pro)
+        XCTAssertEqual(service2.activeLicense?.licenseId, "BTZ-UPGRADE-1")
+        XCTAssertNil(service2.activeLicense?.expiresAt)
+    }
 }
 
 // MARK: - Test Mock Backend Client

@@ -273,10 +273,11 @@ final class MeetingTranscriptionTests: XCTestCase {
     }
 
     func testInvalidateCachedLocaleOptions() {
+        _ = SpeechFrameworkTranscriptionService.onDeviceLocaleOptions()
         let options1 = SpeechFrameworkTranscriptionService.cachedOnDeviceLocaleOptions()
         XCTAssertFalse(options1.isEmpty)
 
-        // Invalidating resets the cache and subsequent fetch succeeds
+        // Invalidating resets freshness without dropping cached options for @MainActor callers
         SpeechFrameworkTranscriptionService.invalidateCachedLocaleOptions()
         let options2 = SpeechFrameworkTranscriptionService.cachedOnDeviceLocaleOptions()
         XCTAssertEqual(options1.count, options2.count)

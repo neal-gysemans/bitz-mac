@@ -63,14 +63,7 @@ public final class PersonalityService: ObservableObject {
 
         let now = clock()
 
-        // FR-008: Hardware power and thermal gate
-        let gateDecision = gate.evaluate(powerState: powerStateProvider, context: context)
-        guard gateDecision.isAllowed else {
-            lastError = gateDecision.error
-            return
-        }
-
-        // FR-007: Rate limiting (cooldown interval and daily cap)
+        // FR-007: Rate limiting (cooldown interval and daily cap) checked before hardware gating
         guard settingsStore.canGenerateCommentToday(for: now) else { return }
         if !bypassRateLimit {
             let rateDecision = rateLimiter.evaluate(
@@ -79,6 +72,13 @@ public final class PersonalityService: ObservableObject {
                 dailyCap: settingsStore.dailyCap
             )
             guard rateDecision.isAllowed else { return }
+        }
+
+        // FR-008: Hardware power and thermal gate
+        let gateDecision = gate.evaluate(powerState: powerStateProvider, context: context)
+        guard gateDecision.isAllowed else {
+            lastError = gateDecision.error
+            return
         }
 
         isGenerating = true

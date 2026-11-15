@@ -58,6 +58,8 @@ public final class GeminiCLITranscriptAdapter: AgentAdapter, @unchecked Sendable
     }
 
     private struct MessageDeduplicator {
+        private static let maxSetSize = 2_048
+
         var seenPromptIDs: Set<String> = []
         var emittedContextTokensByMsgID: [String: Int] = [:]
         var seenGeminiMsgIDs: Set<String> = []
@@ -67,6 +69,23 @@ public final class GeminiCLITranscriptAdapter: AgentAdapter, @unchecked Sendable
         var emittedTurnEndMsgIDs: Set<String> = []
         var handledErrorKeys: Set<Data> = []
         var handledInfoKeys: Set<Data> = []
+
+        mutating func pruneIfOversized() {
+            if seenPromptIDs.count > Self.maxSetSize { seenPromptIDs.removeAll(keepingCapacity: true) }
+            if emittedContextTokensByMsgID.count > Self.maxSetSize { emittedContextTokensByMsgID.removeAll(keepingCapacity: true) }
+            if seenGeminiMsgIDs.count > Self.maxSetSize { seenGeminiMsgIDs.removeAll(keepingCapacity: true) }
+            if seenToolCallIDs.count > Self.maxSetSize {
+                let inFlightToolIDs = seenToolCallIDs.subtracting(completedToolCallIDs)
+                seenToolCallIDs = inFlightToolIDs.count > Self.maxSetSize
+                    ? Set(inFlightToolIDs.prefix(Self.maxSetSize))
+                    : inFlightToolIDs
+            }
+            if completedToolCallIDs.count > Self.maxSetSize { completedToolCallIDs.removeAll(keepingCapacity: true) }
+            if awaitingApprovalToolCallIDs.count > Self.maxSetSize { awaitingApprovalToolCallIDs.removeAll(keepingCapacity: true) }
+            if emittedTurnEndMsgIDs.count > Self.maxSetSize { emittedTurnEndMsgIDs.removeAll(keepingCapacity: true) }
+            if handledErrorKeys.count > Self.maxSetSize { handledErrorKeys.removeAll(keepingCapacity: true) }
+            if handledInfoKeys.count > Self.maxSetSize { handledInfoKeys.removeAll(keepingCapacity: true) }
+        }
     }
 
     private struct FollowedSession {
@@ -76,6 +95,7 @@ public final class GeminiCLITranscriptAdapter: AgentAdapter, @unchecked Sendable
         let format: FileFormat
         var tail: SessionLogTail
         var lastSnapshotMeta: (size: UInt64, modified: Date)?
+        var lastSnapshotMessageCount: Int = 0
         var tracker: AgentSessionTracker
         var deduplicator: MessageDeduplicator
         var lastActivityAt: Date
@@ -184,18 +204,15 @@ public final class GeminiCLITranscriptAdapter: AgentAdapter, @unchecked Sendable
             scanChanged = scan.changed
 
             let unattached = scan.candidates.filter { followedSessions[$0.sessionID] == nil }
-            let freshUnattached = unattached
-                .filter { now.timeIntervalSince($0.modified) <= activeAttachWindow }
-                .sorted { $0.modified < $1.modified }
-
-            if !freshUnattached.isEmpty {
-                for candidate in freshUnattached {
-                    attachSession(candidate, at: now, isStaleFallback: false, handler: handler)
-                    attachedAny = true
-                }
-            } else if followedSessions.isEmpty,
-                      let newest = unattached.max(by: { $0.modified < $1.modified }) {
-                attachSession(newest, at: now, isStaleFallback: true, handler: handler)
+            let selection = AgentSessionTracker.selectUnattachedCandidates(
+                from: unattached,
+                followedIsEmpty: followedSessions.isEmpty,
+                activeAttachWindow: activeAttachWindow,
+                now: now,
+                modified: \.modified
+            )
+            for candidate in selection.candidates {
+                attachSession(candidate, at: now, isStaleFallback: selection.isStaleFallback, handler: handler)
                 attachedAny = true
             }
         }
@@ -221,11 +238,13 @@ public final class GeminiCLITranscriptAdapter: AgentAdapter, @unchecked Sendable
             followedSessions[sessionID] = session
         }
 
-        if anyGrew || attachedAny || (shouldScan && scanChanged) {
-            currentScanInterval = pollInterval
-        } else if shouldScan {
-            currentScanInterval = min(currentScanInterval * 2.0, maxIdleScanInterval)
-        }
+        currentScanInterval = AgentSessionTracker.nextScanInterval(
+            current: currentScanInterval,
+            base: pollInterval,
+            max: maxIdleScanInterval,
+            hadActivity: anyGrew || attachedAny || (shouldScan && scanChanged),
+            didScan: shouldScan
+        )
 
         pruneIdleSessions(at: now)
     }
@@ -443,6 +462,7 @@ public final class GeminiCLITranscriptAdapter: AgentAdapter, @unchecked Sendable
     ) {
         var tail = SessionLogTail()
         var lastSnapshotMeta: (size: UInt64, modified: Date)?
+        var lastSnapshotMessageCount = 0
         var deduplicator = MessageDeduplicator()
         var seedEntries: [SessionLogEntry] = []
         var confirmedTopLevel = false
@@ -477,6 +497,7 @@ public final class GeminiCLITranscriptAdapter: AgentAdapter, @unchecked Sendable
                         return
                     }
                     confirmedTopLevel = true
+                    lastSnapshotMessageCount = parsed.messages.count
                     seedEntries = Self.entries(
                         fromMessages: parsed.messages,
                         deduplicator: &deduplicator,
@@ -504,6 +525,7 @@ public final class GeminiCLITranscriptAdapter: AgentAdapter, @unchecked Sendable
             format: candidate.format,
             tail: tail,
             lastSnapshotMeta: lastSnapshotMeta,
+            lastSnapshotMessageCount: lastSnapshotMessageCount,
             tracker: tracker,
             deduplicator: deduplicator,
             lastActivityAt: candidate.modified,
@@ -562,8 +584,28 @@ public final class GeminiCLITranscriptAdapter: AgentAdapter, @unchecked Sendable
                 return ([], false, true)
             }
             session.confirmedTopLevel = true
+            let startIndex: Int
+            if parsed.messages.count < session.lastSnapshotMessageCount {
+                let seedEnd = max(0, parsed.messages.count - 1)
+                if seedEnd > 0 {
+                    let seedEntries = Self.entries(
+                        fromMessages: Array(parsed.messages[0..<seedEnd]),
+                        startIndex: 0,
+                        deduplicator: &session.deduplicator,
+                        referenceDate: now
+                    )
+                    if !seedEntries.isEmpty {
+                        session.tracker.prime(fromSeed: seedEntries)
+                    }
+                }
+                startIndex = seedEnd
+            } else {
+                startIndex = max(0, session.lastSnapshotMessageCount - 1)
+            }
+            session.lastSnapshotMessageCount = parsed.messages.count
             let entries = Self.entries(
                 fromMessages: parsed.messages,
+                startIndex: startIndex,
                 deduplicator: &session.deduplicator,
                 referenceDate: now
             )
@@ -572,14 +614,15 @@ public final class GeminiCLITranscriptAdapter: AgentAdapter, @unchecked Sendable
     }
 
     private func pruneIdleSessions(at now: Date) {
-        guard followedSessions.count > 1 else { return }
-        let sortedByRecency = followedSessions.values.sorted { $0.lastActivityAt > $1.lastActivityAt }
-        guard let newestID = sortedByRecency.first?.sessionID else { return }
-        for session in sortedByRecency where session.sessionID != newestID {
-            if !session.tracker.turnActive
-                && now.timeIntervalSince(session.lastActivityAt) > Self.idleRetainWindow {
-                followedSessions.removeValue(forKey: session.sessionID)
-            }
+        let staleIDs = AgentSessionTracker.idleSessionIDsToPrune(
+            from: followedSessions,
+            retainWindow: Self.idleRetainWindow,
+            now: now,
+            lastActivityAt: \.lastActivityAt,
+            isBusy: \.tracker.turnActive
+        )
+        for id in staleIDs {
+            followedSessions.removeValue(forKey: id)
         }
     }
 
@@ -606,13 +649,15 @@ public final class GeminiCLITranscriptAdapter: AgentAdapter, @unchecked Sendable
 
     private static func entries(
         fromMessages messages: [[String: Any]],
+        startIndex: Int = 0,
         deduplicator: inout MessageDeduplicator,
         referenceDate: Date
     ) -> [SessionLogEntry] {
         var result: [SessionLogEntry] = []
-        for (index, msg) in messages.enumerated() {
+        let clampedStart = min(max(0, startIndex), messages.count)
+        for index in clampedStart..<messages.count {
             result.append(contentsOf: entries(
-                fromRecord: msg,
+                fromRecord: messages[index],
                 deduplicator: &deduplicator,
                 fallbackID: "msg#\(index)",
                 referenceDate: referenceDate
@@ -635,6 +680,7 @@ public final class GeminiCLITranscriptAdapter: AgentAdapter, @unchecked Sendable
             return []
         }
         guard let type = obj["type"] as? String else { return [] }
+        deduplicator.pruneIfOversized()
 
         let msgID = (obj["id"] as? String) ?? fallbackID
         let lineDate = RateLimitParser.parseTimestamp(obj["timestamp"]) ?? referenceDate

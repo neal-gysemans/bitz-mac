@@ -194,8 +194,7 @@ final class QuickActionHUDTests: XCTestCase {
             htmlUrl: URL(string: "https://github.com/AkramKs/bitz-mac/releases/tag/v1.4.0")!
         )
         let updateContent = SpeechBubbleContent.update(release)
-        XCTAssertTrue(SpeechBubblePanel.isInteractiveContent(updateContent))
-        XCTAssertTrue(updateContent.isQuickActionInteractive)
+        XCTAssertTrue(updateContent.isInteractive)
 
         let approvalPopup = AgentPopupState(
             text: "Needs approval",
@@ -203,9 +202,8 @@ final class QuickActionHUDTests: XCTestCase {
             agentName: "Claude",
             expiresAt: Date().addingTimeInterval(300)
         )
-        let approvalContent = SpeechBubbleContent.agentPopup(approvalPopup)
-        XCTAssertTrue(SpeechBubblePanel.isInteractiveContent(approvalContent), "Approval bubble must be classified as interactive")
-        XCTAssertTrue(approvalContent.isQuickActionInteractive)
+        // Without a pending AgentApprovalRequest in the host delegate, .needsApproval has no buttons.
+        XCTAssertFalse(SpeechBubbleContent.agentPopup(approvalPopup).isInteractive)
 
         let warningPopup = AgentPopupState(
             text: "Stalled",
@@ -213,8 +211,7 @@ final class QuickActionHUDTests: XCTestCase {
             agentName: "Claude",
             expiresAt: Date().addingTimeInterval(60)
         )
-        let warningContent = SpeechBubbleContent.agentPopup(warningPopup)
-        XCTAssertTrue(SpeechBubblePanel.isInteractiveContent(warningContent))
+        XCTAssertTrue(SpeechBubbleContent.agentPopup(warningPopup).isInteractive)
 
         let workingPopup = AgentPopupState(
             text: "Working",
@@ -222,17 +219,10 @@ final class QuickActionHUDTests: XCTestCase {
             agentName: "Claude",
             expiresAt: Date().addingTimeInterval(60)
         )
-        let workingContent = SpeechBubbleContent.agentPopup(workingPopup)
-        XCTAssertFalse(SpeechBubblePanel.isInteractiveContent(workingContent), "Working popup must NOT be interactive")
-        XCTAssertFalse(workingContent.isQuickActionInteractive)
+        XCTAssertFalse(SpeechBubbleContent.agentPopup(workingPopup).isInteractive)
 
-        let wellnessContent = SpeechBubbleContent.wellness("SYSTEM HOT!")
-        XCTAssertFalse(SpeechBubblePanel.isInteractiveContent(wellnessContent))
-
-        let carouselContent = SpeechBubbleContent.carousel("CPU: 12%")
-        XCTAssertFalse(SpeechBubblePanel.isInteractiveContent(carouselContent))
-
-        XCTAssertFalse(SpeechBubblePanel.isInteractiveContent(nil))
+        XCTAssertFalse(SpeechBubbleContent.wellness("SYSTEM HOT!").isInteractive)
+        XCTAssertFalse(SpeechBubbleContent.carousel("CPU: 12%").isInteractive)
     }
 
     func testSpeechBubblePanel_PanelInteractivityTogglingAndFocusInvariants() {
@@ -252,22 +242,6 @@ final class QuickActionHUDTests: XCTestCase {
         // Set non-interactive
         panel.isInteractive = false
         XCTAssertTrue(panel.ignoresMouseEvents)
-        XCTAssertFalse(panel.isInteractive)
-
-        // Update interactivity with approval content
-        let approvalPopup = AgentPopupState(
-            text: "Needs approval",
-            kind: .needsApproval,
-            agentName: "Claude",
-            expiresAt: Date().addingTimeInterval(300)
-        )
-        panel.updateInteractivity(for: .agentPopup(approvalPopup))
-        XCTAssertFalse(panel.ignoresMouseEvents, "Panel must accept clicks for approval popup")
-        XCTAssertTrue(panel.isInteractive)
-
-        // Update interactivity with nil
-        panel.updateInteractivity(for: nil)
-        XCTAssertTrue(panel.ignoresMouseEvents, "Panel must revert to click-through when content is nil")
         XCTAssertFalse(panel.isInteractive)
     }
 }

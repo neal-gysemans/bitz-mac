@@ -192,8 +192,21 @@ public final class FlowShieldService: ObservableObject {
     public let settingsStore: FlowShieldSettingsStore
     public let shortcutsRunner: any ShortcutsRunning
 
-    @Published public private(set) var isFlowShieldActive: Bool = false
+    @Published public private(set) var isFlowShieldActive: Bool = false {
+        didSet {
+            activeSnapshotLock.withLock {
+                _isFlowShieldActiveSnapshot = isFlowShieldActive
+            }
+        }
+    }
     @Published public private(set) var lastErrorMessage: String? = nil
+
+    private let activeSnapshotLock = NSLock()
+    nonisolated(unsafe) private var _isFlowShieldActiveSnapshot: Bool = false
+
+    nonisolated public var isFlowShieldActiveSnapshot: Bool {
+        activeSnapshotLock.withLock { _isFlowShieldActiveSnapshot }
+    }
 
     private weak var observedEngine: WellnessPointEngine?
     private var hasTriggeredForCurrentStreak: Bool = false

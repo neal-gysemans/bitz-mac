@@ -16,7 +16,11 @@ public protocol AudioEnvironmentDetecting: Sendable {
 
 /// Production detector leveraging macOS CoreAudio properties.
 public final class AudioEnvironmentDetector: AudioEnvironmentDetecting, @unchecked Sendable {
-    public init() {}
+    private let isFocusActiveProvider: (@Sendable () -> Bool)?
+
+    public init(isFocusActiveProvider: (@Sendable () -> Bool)? = nil) {
+        self.isFocusActiveProvider = isFocusActiveProvider
+    }
 
     public func isSystemOutputMuted() -> Bool {
         var defaultOutputDeviceID = AudioDeviceID(0)
@@ -130,11 +134,7 @@ public final class AudioEnvironmentDetector: AudioEnvironmentDetecting, @uncheck
     }
 
     public func isFocusOrDNDActive() -> Bool {
-        // macOS does not provide a public non-private API to query Do Not Disturb / Focus status
-        // without private framework entitlements or full-disk TCC access.
-        // Returns false to avoid false-positive permanent audio suppression for users
-        // who have the Focus icon pinned in their menu bar.
-        return false
+        isFocusActiveProvider?() ?? false
     }
 }
 

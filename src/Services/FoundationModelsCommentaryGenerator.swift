@@ -7,13 +7,8 @@ import FoundationModels
 /// Real on-device language model backend powered by Apple Foundation Models (macOS 26+).
 ///
 /// Operates with zero network calls, utilizing the system-managed on-device foundation model.
-/// Lazily loads the session upon first request and automatically releases it on memory pressure or idle timeout.
+/// Creates a fresh single-turn session per request so conversation history never exceeds the context window.
 public actor FoundationModelsCommentaryGenerator: CommentaryGenerating {
-    private var cachedPreset: PersonalityPreset?
-    #if canImport(FoundationModels)
-    private var activeSession: Any?
-    #endif
-
     private let availabilityOverride: (@Sendable () -> Bool)?
     private let customResponder: (@Sendable (String, PersonalityPreset) async throws -> String)?
 
@@ -89,23 +84,13 @@ public actor FoundationModelsCommentaryGenerator: CommentaryGenerating {
         return warning
     }
 
-    public func unload() async {
-        cachedPreset = nil
-        #if canImport(FoundationModels)
-        activeSession = nil
-        #endif
-    }
+    public func unload() async {}
 
     #if canImport(FoundationModels)
     @available(macOS 26.0, *)
     private func resolveSession(for preset: PersonalityPreset) -> LanguageModelSession {
-        if let existing = activeSession as? LanguageModelSession, cachedPreset == preset {
-            return existing
-        }
-        let session = LanguageModelSession(model: .default, instructions: preset.systemPrompt)
-        activeSession = session
-        cachedPreset = preset
-        return session
+        // Fresh single-turn session per request prevents transcript growth past the 4,096-token limit.
+        LanguageModelSession(model: .default, instructions: preset.systemPrompt)
     }
     #endif
 

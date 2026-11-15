@@ -27,7 +27,12 @@ public final class DropboxAgentAdapter: AgentAdapter, @unchecked Sendable {
     public func start(onEvent: @escaping @Sendable (AgentEvent) -> Void) {
         self.eventHandler = onEvent
 
-        try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directoryURL.path)
 
         // Process any existing files right away
         processPendingFiles()

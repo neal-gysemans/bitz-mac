@@ -338,7 +338,7 @@ public struct SpeechBubbleView: View {
 
 /// Measures its content as if offered `width` (then scaled), ignoring the window's current size,
 /// so the hosting panel resizes to fit the wrapped bubble instead of clipping it.
-private struct BubbleWindowLayout: Layout {
+struct BubbleWindowLayout: Layout {
     let width: CGFloat
     let scale: CGFloat
 

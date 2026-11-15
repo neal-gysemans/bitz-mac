@@ -101,16 +101,15 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
                     try? storage.deleteLicenseToken()
                 }
             } else if trimmedToken.hasPrefix("BTZ-") {
-                let normalizedID = trimmedToken.uppercased()
-                if Self.revokedLicenseIDs.contains(normalizedID) {
+                let decoded = Self.decodeRemoteStorageToken(trimmedToken, now: clock())
+                if Self.revokedLicenseIDs.contains(decoded.licenseId) {
                     self.storedVerifiedLicense = nil
                     try? storage.deleteLicenseToken()
+                } else if let payload = decoded.payload, !payload.isExpired(at: clock()) {
+                    self.storedVerifiedLicense = payload
                 } else {
-                    self.storedVerifiedLicense = LicensePayload(
-                        tier: "pro",
-                        licenseId: normalizedID,
-                        issuedAt: clock().timeIntervalSince1970
-                    )
+                    self.storedVerifiedLicense = nil
+                    try? storage.deleteLicenseToken()
                 }
             } else {
                 // Unknown or corrupt token format: purge and revert to free
@@ -291,7 +290,7 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
             throw LicensingError.licenseExpired
         }
 
-        try storage.saveLicenseToken(normalizedKey)
+        try storage.saveLicenseToken(Self.encodeRemoteStorageToken(payload))
         self.storedVerifiedLicense = payload
         if entitlementOverride == .simulateFreeTier {
             entitlementOverride = .automatic
@@ -437,6 +436,16 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
                 try? deactivateLicense()
             } else if let expiresAt = result.expiresAt, clock() > expiresAt {
                 try? deactivateLicense()
+            } else {
+                let refreshedPayload = LicensePayload(
+                    tier: result.tier ?? license.tier,
+                    licenseId: license.licenseId,
+                    issuedAt: license.issuedAt,
+                    expiresAt: result.expiresAt?.timeIntervalSince1970
+                )
+                self.storedVerifiedLicense = refreshedPayload
+                try? storage.saveLicenseToken(Self.encodeRemoteStorageToken(refreshedPayload))
+                refreshEntitlement()
             }
         } catch {
             // Offline grace period: If network fails, do NOT immediately downgrade
@@ -444,6 +453,30 @@ public final class LicensingService: LicensingServiceProtocol, ObservableObject 
                 try? deactivateLicense()
             }
         }
+    }
+
+    nonisolated private static func encodeRemoteStorageToken(_ payload: LicensePayload) -> String {
+        guard let data = try? JSONEncoder().encode(payload) else {
+            return payload.licenseId.uppercased()
+        }
+        return "\(payload.licenseId.uppercased())\n\(base64URLEncode(data))"
+    }
+
+    nonisolated private static func decodeRemoteStorageToken(_ rawToken: String, now: Date) -> (licenseId: String, payload: LicensePayload?) {
+        let parts = rawToken.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+        let licenseId = String(parts.first ?? Substring(rawToken)).trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        if parts.count == 2 {
+            guard let data = base64URLDecode(String(parts[1])),
+                  let payload = try? JSONDecoder().decode(LicensePayload.self, from: data),
+                  payload.licenseId.uppercased() == licenseId else {
+                return (licenseId, nil)
+            }
+            return (licenseId, payload)
+        }
+        return (
+            licenseId,
+            LicensePayload(tier: "pro", licenseId: licenseId, issuedAt: now.timeIntervalSince1970)
+        )
     }
 
     isolated deinit {

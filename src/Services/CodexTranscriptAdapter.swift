@@ -172,18 +172,15 @@ public final class CodexTranscriptAdapter: AgentAdapter, @unchecked Sendable {
             scanChanged = scan.changed
 
             let unattached = scan.candidates.filter { followedSessions[$0.sessionID] == nil }
-            let freshUnattached = unattached
-                .filter { now.timeIntervalSince($0.modified) <= activeAttachWindow }
-                .sorted { $0.modified < $1.modified }
-
-            if !freshUnattached.isEmpty {
-                for candidate in freshUnattached {
-                    attachSession(candidate, at: now, isStaleFallback: false, handler: handler)
-                    attachedAny = true
-                }
-            } else if followedSessions.isEmpty,
-                      let newest = unattached.max(by: { $0.modified < $1.modified }) {
-                attachSession(newest, at: now, isStaleFallback: true, handler: handler)
+            let selection = AgentSessionTracker.selectUnattachedCandidates(
+                from: unattached,
+                followedIsEmpty: followedSessions.isEmpty,
+                activeAttachWindow: activeAttachWindow,
+                now: now,
+                modified: \.modified
+            )
+            for candidate in selection.candidates {
+                attachSession(candidate, at: now, isStaleFallback: selection.isStaleFallback, handler: handler)
                 attachedAny = true
             }
         }
@@ -226,11 +223,13 @@ public final class CodexTranscriptAdapter: AgentAdapter, @unchecked Sendable {
             followedSessions[sessionID] = session
         }
 
-        if anyGrew || attachedAny || (shouldScan && scanChanged) {
-            currentScanInterval = pollInterval
-        } else if shouldScan {
-            currentScanInterval = min(currentScanInterval * 2.0, maxIdleScanInterval)
-        }
+        currentScanInterval = AgentSessionTracker.nextScanInterval(
+            current: currentScanInterval,
+            base: pollInterval,
+            max: maxIdleScanInterval,
+            hadActivity: anyGrew || attachedAny || (shouldScan && scanChanged),
+            didScan: shouldScan
+        )
 
         pruneIdleSessions(at: now)
     }
@@ -571,14 +570,15 @@ public final class CodexTranscriptAdapter: AgentAdapter, @unchecked Sendable {
     }
 
     private func pruneIdleSessions(at now: Date) {
-        guard followedSessions.count > 1 else { return }
-        let sortedByRecency = followedSessions.values.sorted { $0.lastActivityAt > $1.lastActivityAt }
-        guard let newestID = sortedByRecency.first?.sessionID else { return }
-        for session in sortedByRecency where session.sessionID != newestID {
-            if !session.tracker.turnActive
-                && now.timeIntervalSince(session.lastActivityAt) > Self.idleRetainWindow {
-                followedSessions.removeValue(forKey: session.sessionID)
-            }
+        let staleIDs = AgentSessionTracker.idleSessionIDsToPrune(
+            from: followedSessions,
+            retainWindow: Self.idleRetainWindow,
+            now: now,
+            lastActivityAt: \.lastActivityAt,
+            isBusy: \.tracker.turnActive
+        )
+        for id in staleIDs {
+            followedSessions.removeValue(forKey: id)
         }
     }
 
