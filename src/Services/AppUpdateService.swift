@@ -248,7 +248,7 @@ public final class AppUpdateStore: ObservableObject {
         } else if let bundleVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
             resolvedVersion = bundleVersion
         } else {
-            resolvedVersion = "1.3.2"
+            resolvedVersion = "1.0.0"
         }
         self.currentVersion = SemanticVersion(resolvedVersion)
 

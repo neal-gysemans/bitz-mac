@@ -64,14 +64,14 @@ git checkout main
 git pull origin main
 
 # Create and push a semver tag
-git tag v1.3.1
-git push origin v1.3.1
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 ### Option B: Manual GitHub Actions Dispatch
 1. Go to `AkramKs/bitz-mac` -> **Actions** -> **Release & Distribute**.
 2. Click **Run workflow**.
-3. Enter the tag name (e.g., `v1.3.1`) and confirm.
+3. Enter the tag name (e.g., `v1.0.0`) and confirm.
 
 ---
 

@@ -41,15 +41,24 @@ final class BuildScriptsTests: XCTestCase {
             XCTAssertEqual(plist["CFBundleIdentifier"] as? String, bundleID)
             XCTAssertEqual(plist["CFBundleExecutable"] as? String, "Bitz")
             XCTAssertEqual(plist["CFBundleName"] as? String, "Bitz")
+            XCTAssertEqual(plist["CFBundleShortVersionString"] as? String, "1.0.0")
             for key in ["NSMicrophoneUsageDescription", "NSSpeechRecognitionUsageDescription",
                         "NSScreenCaptureUsageDescription", "NSDocumentsFolderUsageDescription"] {
                 XCTAssertFalse((plist[key] as? String ?? "").isEmpty, "\(bundleID): \(key)")
             }
         }
 
-        // A bundle ID that would break the sed substitution or the XML is refused
+        // Explicit version argument strips any leading 'v' and stamps CFBundleShortVersionString
+        let stamped = dir.appendingPathComponent("stamped.plist")
+        XCTAssertEqual(try run("/bin/bash", [renderer, "Bitz", "com.bitz.cybercat", stamped.path, "v1.2.3"]), 0)
+        XCTAssertEqual(try run("/usr/bin/plutil", ["-lint", stamped.path]), 0)
+        let stampedPlist = try XCTUnwrap(NSDictionary(contentsOf: stamped) as? [String: Any])
+        XCTAssertEqual(stampedPlist["CFBundleShortVersionString"] as? String, "1.2.3")
+
+        // A bundle ID or version that would break the sed substitution or the XML is refused
         let bad = dir.appendingPathComponent("bad.plist")
         XCTAssertNotEqual(try run("/bin/bash", [renderer, "Bitz", "com.bitz/<x>", bad.path]), 0)
+        XCTAssertNotEqual(try run("/bin/bash", [renderer, "Bitz", "com.bitz.cybercat", bad.path, "1.0/<x>"]), 0)
     }
 
     func testPackagingScriptsDoNotInjectLocalDevLicenseToken() throws {

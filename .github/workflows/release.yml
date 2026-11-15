@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release Tag (e.g. v1.3.1)'
+        description: 'Release Tag (e.g. v1.0.0)'
         required: true
-        default: 'v1.3.1'
+        default: 'v1.0.0'
 
 concurrency:
   group: release-${{ github.ref }}
@@ -38,13 +38,7 @@ jobs:
             echo "⚠️ Full Xcode.app not installed (only CommandLineTools present; XCTest.framework unavailable). Skipping XCTest suite."
           fi
 
-      - name: Package Disk Image (DMG)
-        run: |
-          chmod +x Scripts/create_dmg.sh
-          ./Scripts/create_dmg.sh
-          test -f build/Bitz.dmg
-
-      - name: Determine Version & Checksum
+      - name: Determine Version, Package DMG & Checksum
         id: release_meta
         run: |
           TAG="${{ github.ref_name }}"
@@ -52,6 +46,9 @@ jobs:
             TAG="${{ github.event.inputs.tag_name }}"
           fi
           VERSION="${TAG#v}"
+          chmod +x Scripts/create_dmg.sh
+          BITZ_VERSION="${VERSION}" ./Scripts/create_dmg.sh
+          test -f build/Bitz.dmg
           SHA256=$(shasum -a 256 build/Bitz.dmg | awk '{print $1}')
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
