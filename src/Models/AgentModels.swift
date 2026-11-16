@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Defines the kind of lifecycle / activity event emitted by an AI agent.
@@ -115,6 +116,8 @@ extension AgentEvent {
         public static let source = "source"
         /// Optional conversation / transcript session identifier distinguishing concurrent instances of the same agent.
         public static let sessionID = "sessionID"
+        /// Optional human-readable override label for the session (e.g., Task-Kitten title).
+        public static let sessionLabel = "session_label"
         public static let approvalRequestID = "approvalRequestID"
         public static let approvalChannel = "approvalChannel"
         public static let toolName = "toolName"
@@ -469,5 +472,94 @@ public struct AgentPopupState: Sendable, Equatable {
     public var isExpired: Bool {
         guard let expiresAt = expiresAt else { return false }
         return Date() >= expiresAt
+    }
+}
+
+/// Lifecycle state of an active or recent agent session, directly mapping to Cyber-Ship deck station zones.
+public enum AgentSessionLifecycleState: String, Codable, Sendable, Equatable, Comparable, CaseIterable {
+    case needsApproval
+    case warning
+    case failed
+    case almostDone
+    case working
+    case done
+    case idle
+
+    /// Priority order matching ship deck attention hierarchy: 0 (highest attention) to 6 (lowest).
+    public var priorityOrder: Int {
+        switch self {
+        case .needsApproval: return 0
+        case .warning:       return 1
+        case .failed:        return 2
+        case .almostDone:    return 3
+        case .working:       return 4
+        case .done:          return 5
+        case .idle:          return 6
+        }
+    }
+
+    public static func < (lhs: AgentSessionLifecycleState, rhs: AgentSessionLifecycleState) -> Bool {
+        lhs.priorityOrder < rhs.priorityOrder
+    }
+
+    /// Canonical status color shared by 3D Command Deck crewmates and HUD badges.
+    public var nsColor: NSColor {
+        switch self {
+        case .needsApproval: return NSColor(calibratedRed: 1.0, green: 0.75, blue: 0.1, alpha: 1.0)
+        case .warning:       return NSColor(calibratedRed: 1.0, green: 0.2, blue: 0.2, alpha: 1.0)
+        case .failed:        return NSColor(calibratedRed: 0.95, green: 0.1, blue: 0.1, alpha: 1.0)
+        case .almostDone:    return NSColor(calibratedRed: 0.0, green: 0.9, blue: 1.0, alpha: 1.0)
+        case .working:       return NSColor(calibratedRed: 0.1, green: 0.9, blue: 0.4, alpha: 1.0)
+        case .done:          return NSColor(calibratedRed: 0.2, green: 0.85, blue: 0.5, alpha: 1.0)
+        case .idle:          return NSColor(calibratedRed: 0.3, green: 0.5, blue: 0.9, alpha: 1.0)
+        }
+    }
+}
+
+/// An immutable, sendable snapshot representing an active or recent agent session on the Cyber-Ship deck.
+public struct AgentSessionSnapshot: Identifiable, Sendable, Equatable {
+    public var id: String { stateKey }
+    public let stateKey: String
+    public let agentID: String
+    public let agentName: String
+    public let sessionID: String?
+    public let sessionLabel: String
+    public let lifecycleState: AgentSessionLifecycleState
+    public let activeWarning: AgentWarningReason?
+    public let contextReading: AgentContextReading?
+    public let pendingTools: Int
+    public let lastActivity: Date
+    public let linkedApprovalRequest: AgentApprovalRequest?
+    public let workingDir: String?
+    public let statusMessage: String?
+
+    public init(
+        stateKey: String,
+        agentID: String,
+        agentName: String,
+        sessionID: String?,
+        sessionLabel: String,
+        lifecycleState: AgentSessionLifecycleState,
+        activeWarning: AgentWarningReason? = nil,
+        contextReading: AgentContextReading? = nil,
+        pendingTools: Int = 0,
+        lastActivity: Date,
+        linkedApprovalRequest: AgentApprovalRequest? = nil,
+        workingDir: String? = nil,
+        statusMessage: String? = nil
+    ) {
+        self.stateKey = stateKey
+        self.agentID = agentID
+        self.agentName = agentName
+        self.sessionID = sessionID
+        self.sessionLabel = sessionLabel
+        self.lifecycleState = lifecycleState
+        self.activeWarning = activeWarning
+        self.contextReading = contextReading
+        self.pendingTools = pendingTools
+        self.lastActivity = lastActivity
+        self.linkedApprovalRequest = linkedApprovalRequest
+        self.workingDir = workingDir
+        self.statusMessage = statusMessage
     }
 }

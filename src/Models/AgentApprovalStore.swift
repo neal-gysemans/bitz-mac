@@ -21,6 +21,7 @@ public struct AgentApprovalRequest: Sendable, Identifiable, Equatable {
     public let id: String
     public let agentID: String
     public let agentName: String
+    public let sessionID: String?
     public let toolName: String?
     public let commandSummary: String?
     public let decisionChannel: String?
@@ -34,6 +35,7 @@ public struct AgentApprovalRequest: Sendable, Identifiable, Equatable {
         id: String,
         agentID: String,
         agentName: String,
+        sessionID: String? = nil,
         toolName: String? = nil,
         commandSummary: String? = nil,
         decisionChannel: String? = nil,
@@ -46,6 +48,7 @@ public struct AgentApprovalRequest: Sendable, Identifiable, Equatable {
         self.id = id
         self.agentID = agentID
         self.agentName = agentName
+        self.sessionID = sessionID
         self.toolName = toolName
         self.commandSummary = commandSummary
         self.decisionChannel = decisionChannel
@@ -100,18 +103,23 @@ public final class AgentApprovalStore: ObservableObject {
     /// Connects to `AgentMonitorService` to register incoming requests and dismiss popups on approval (T016).
     public func bind(agentMonitor: AgentMonitorService) {
         let previousHandler = agentMonitor.onEventHandled
-        agentMonitor.onEventHandled = { [weak self] event in
+        agentMonitor.onEventHandled = { [weak self, weak agentMonitor] event in
             previousHandler?(event)
             guard let self else { return }
             if event.kind == .needsApproval {
-                self.registerRequest(from: event)
+                let req = self.registerRequest(from: event)
+                if let req {
+                    let stateKey = AgentMonitorService.makeStateKey(agentID: event.agentID, sessionID: event.sessionID)
+                    agentMonitor?.setLinkedApprovalRequest(req, for: stateKey)
+                }
             } else if event.kind == .done || event.kind == .failed {
-                self.clearRequests(for: event.agentID)
+                self.clearRequests(for: event.agentID, sessionID: event.sessionID)
             }
         }
 
-        self.onDecisionSubmitted = { [weak agentMonitor] _, _ in
+        self.onDecisionSubmitted = { [weak agentMonitor] requestID, _ in
             agentMonitor?.dismissPopup()
+            agentMonitor?.clearLinkedApprovalRequest(requestID: requestID)
         }
     }
 
@@ -131,6 +139,7 @@ public final class AgentApprovalStore: ObservableObject {
             id: requestID,
             agentID: event.agentID,
             agentName: event.agentName,
+            sessionID: event.sessionID,
             toolName: event.toolName,
             commandSummary: event.commandSummary,
             decisionChannel: event.approvalChannel,
@@ -186,9 +195,9 @@ public final class AgentApprovalStore: ObservableObject {
     }
 
     /// Clears any pending requests for an agent when the turn completes or the agent stops.
-    public func clearRequests(for agentID: String) {
-        pendingRequests = pendingRequests.filter { $0.value.agentID != agentID }
-        if activeRequest?.agentID == agentID {
+    public func clearRequests(for agentID: String, sessionID: String? = nil) {
+        pendingRequests = pendingRequests.filter { !($0.value.agentID == agentID && (sessionID == nil || $0.value.sessionID == sessionID)) }
+        if activeRequest?.agentID == agentID && (sessionID == nil || activeRequest?.sessionID == sessionID) {
             activeRequest = nil
         }
     }

@@ -387,10 +387,14 @@ public final class AntigravityTranscriptAdapter: AgentAdapter, @unchecked Sendab
 
                 anyGrew = true
                 session.lastActivityAt = now
-                let events = session.tracker.ingest(
-                    read.lines.flatMap { Self.parseEntries(fromLine: $0, referenceDate: now) },
-                    at: now
-                )
+                var newEntries = read.lines.flatMap { Self.parseEntries(fromLine: $0, referenceDate: now) }
+                if !session.tracker.turnActive,
+                   !newEntries.contains(.prompt),
+                   newEntries.last != .turnEnd(isDone: true),
+                   newEntries.contains(where: { if case .toolCall = $0 { true } else { false } }) {
+                    newEntries.insert(.prompt, at: 0)
+                }
+                let events = session.tracker.ingest(newEntries, at: now)
                 for event in events {
                     if event.kind == .working || event.kind == .done {
                         session.isDatabaseAwaitingApproval = false
@@ -436,10 +440,21 @@ public final class AntigravityTranscriptAdapter: AgentAdapter, @unchecked Sendab
             sessionID: candidate.sessionID
         )
         // History primes turn state silently, so a turn in progress still ends in done (FR-014).
-        tracker.prime(fromSeed: seed.lines.flatMap(Self.entries(fromLine:)))
+        let seedEntries = seed.lines.flatMap(Self.entries(fromLine:))
+        tracker.prime(fromSeed: seedEntries)
         if isStaleFallback {
             // Do not mark an old historic crashed transcript (> activeAttachWindow) as actively running on cold start.
             tracker.markIdle()
+        } else if !tracker.turnActive,
+                  seedEntries.last != .turnEnd(isDone: true),
+                  seedEntries.contains(where: { if case .toolCall = $0 { true } else { false } }) {
+            tracker = AgentSessionTracker(
+                agentID: agentID,
+                agentName: agentName,
+                startsTurnOnPrompt: true,
+                sessionID: candidate.sessionID
+            )
+            tracker.prime(fromSeed: [.prompt] + seedEntries)
         }
         let kind = cachedSubdirs[candidate.subdirKey]?.sessionKind ?? .unknown
         var session = FollowedSession(
@@ -686,7 +701,8 @@ public final class AntigravityTranscriptAdapter: AgentAdapter, @unchecked Sendab
             }
         }
 
-        if type == "USER_INPUT" {
+        let stepIndex = obj["step_index"] as? Int ?? 0
+        if type == "USER_INPUT" || (type == "SYSTEM_MESSAGE" && stepIndex > 0) {
             entries.append(.prompt)
         } else if type == "PLANNER_RESPONSE" {
             // Context = input + cache read (R3).

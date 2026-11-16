@@ -199,6 +199,8 @@ public struct AdvancedSettingsTabView: View {
                         .foregroundStyle(.secondary)
                     shortcutRow(action: "Toggle / Open Settings", keys: ["⌥⌘B"])
                     Divider()
+                    shortcutRow(action: "Toggle / Open Agent Command Deck", keys: ["⌥⌘D", "or", "⌘D"])
+                    Divider()
                     shortcutRow(action: "Start / Stop Meeting Recording", keys: [meetingSettings.recordingHotkey.displayString])
                     Divider()
                     shortcutRow(action: "Move mascot anywhere (drag)", keys: ["⌥ Option", "Drag"])

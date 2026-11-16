@@ -38,6 +38,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
     public let calendarService: CalendarAgendaService
     public let licensingService: LicensingService
     public let meetingRecorder: MeetingRecorderService
+    public let taskKittenRunner: TaskKittenRunnerService
     public var meetingSettings: MeetingSettingsStore { meetingRecorder.settingsStore }
     private var isAwaitingTerminationReply = false
     @Published public private(set) var menuBarTitle: String = "Bitz"
@@ -186,6 +187,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             userDefaults: userDefaults,
             licensingService: resolvedLicensingService
         )
+        self.taskKittenRunner = TaskKittenRunnerService(agentMonitor: self.agentMonitor)
 
         self.audioService.observe(wellnessEngine: self.engine)
         self.audioService.observe(agentMonitor: self.agentMonitor)
@@ -495,15 +497,20 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         }
     }
 
-    public func applicationDidBecomeActive(_ notification: Notification) {
-        Task.detached(priority: .utility) {
-            _ = SpeechFrameworkTranscriptionService.onDeviceLocaleOptions()
-        }
-    }
-
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showSettingsWindow()
         return true
+    }
+
+    public func applicationDidBecomeActive(_ notification: Notification) {
+        if AgentCommandDeckWindowManager.shared.isWindowOpen {
+            AgentCommandDeckWindowManager.shared.window?.makeKeyAndOrderFront(nil)
+        } else if SettingsWindowManager.shared.isWindowOpen {
+            SettingsWindowManager.shared.window?.makeKeyAndOrderFront(nil)
+        }
+        Task.detached(priority: .utility) {
+            _ = SpeechFrameworkTranscriptionService.onDeviceLocaleOptions()
+        }
     }
 
     /// Quitting mid-recording would leave no `metadata.json`, so finalize first; the mix runs only if it fits the cap (#43).
@@ -536,6 +543,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         }
         overlayPanels.removeAll()
         SettingsWindowManager.shared.closeSettingsWindow()
+        AgentCommandDeckWindowManager.shared.closeCommandDeckWindow()
         activityMonitor.stopMonitoring()
         agentMonitor.stopMonitoring()
         telemetryDashboard.stop()
@@ -578,6 +586,14 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         )
         settingsItem.target = self
         appMenu.addItem(settingsItem)
+
+        let commandDeckItem = NSMenuItem(
+            title: "Agent Command Deck...",
+            action: #selector(showCommandDeckWindow),
+            keyEquivalent: "d"
+        )
+        commandDeckItem.target = self
+        appMenu.addItem(commandDeckItem)
         appMenu.addItem(NSMenuItem.separator())
 
         let petItem = NSMenuItem(
@@ -653,6 +669,27 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
 
     @objc public func showSettingsWindow() {
         showSettings(tab: nil)
+    }
+
+    @objc public func showCommandDeckWindow() {
+        AgentCommandDeckWindowManager.shared.showCommandDeckWindow(
+            rootView: AgentCommandDeckView(
+                agentMonitor: agentMonitor,
+                approvalStore: approvalStore,
+                licensingService: licensingService,
+                appActivator: appActivator,
+                diffViewer: diffViewer,
+                taskKittenRunner: taskKittenRunner
+            )
+        )
+    }
+
+    @objc public func toggleCommandDeckWindow() {
+        if AgentCommandDeckWindowManager.shared.isWindowOpen {
+            AgentCommandDeckWindowManager.shared.closeCommandDeckWindow()
+        } else {
+            showCommandDeckWindow()
+        }
     }
 
     /// With a `tab`, an already open window is switched to it (meeting failure bubble's OPEN SETTINGS → Audio).
@@ -751,6 +788,12 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             return true
         }
 
+        // 1a. Toggle / Open Agent Command Deck Window: ⌥⌘D (works from any app)
+        if cmd && opt && !ctrl && (keyCode == 2 || chars == "d") {
+            toggleCommandDeckWindow()
+            return true
+        }
+
         // 1b. Start / Stop Meeting Recording: configurable chord, default ⌃⌥⌘R, Off matches nothing (works from any app, #43)
         if meetingSettings.recordingHotkey.matches(event) {
             toggleMeetingRecordingAction()
@@ -769,6 +812,12 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         // Toggle / Open Settings Window: ⌘,
         if cmd && !opt && !ctrl && (keyCode == 43 || chars == ",") {
             toggleSettingsWindow()
+            return true
+        }
+
+        // Toggle / Open Command Deck Window: ⌘D
+        if cmd && !opt && !ctrl && (keyCode == 2 || chars == "d") {
+            showCommandDeckWindow()
             return true
         }
 
@@ -1077,6 +1126,7 @@ struct BitzMenuBarContentView: View {
     @ObservedObject var meetingSettings: MeetingSettingsStore
     public var licensingService: (any LicensingServiceProtocol)?
     var onOpenSettings: () -> Void
+    var onOpenCommandDeck: () -> Void
 
     public init(
         engine: WellnessPointEngine,
@@ -1094,7 +1144,8 @@ struct BitzMenuBarContentView: View {
         characterStore: AvatarCharacterStore = AvatarCharacterStore(),
         meetingRecorder: MeetingRecorderService = MeetingRecorderService(),
         licensingService: (any LicensingServiceProtocol)? = nil,
-        onOpenSettings: @escaping () -> Void = {}
+        onOpenSettings: @escaping () -> Void = {},
+        onOpenCommandDeck: @escaping () -> Void = {}
     ) {
         self.paletteStore = paletteStore
         self.characterStore = characterStore
@@ -1102,6 +1153,7 @@ struct BitzMenuBarContentView: View {
         self.meetingSettings = meetingRecorder.settingsStore
         self.licensingService = licensingService
         self.onOpenSettings = onOpenSettings
+        self.onOpenCommandDeck = onOpenCommandDeck
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.positionStore = positionStore
@@ -1313,6 +1365,11 @@ struct BitzMenuBarContentView: View {
             Divider()
 
             // MARK: - 3. Settings, Updates & Quit
+            Button("Agent Command Deck...") {
+                onOpenCommandDeck()
+            }
+            .keyboardShortcut("d", modifiers: [.command])
+
             Button("Settings...") {
                 onOpenSettings()
             }
@@ -1373,7 +1430,8 @@ public struct BitzApp: App {
                 characterStore: appDelegate.characterStore,
                 meetingRecorder: appDelegate.meetingRecorder,
                 licensingService: appDelegate.licensingService,
-                onOpenSettings: appDelegate.showSettingsWindow
+                onOpenSettings: appDelegate.showSettingsWindow,
+                onOpenCommandDeck: appDelegate.showCommandDeckWindow
             )
         } label: {
             BitzMenuBarLabel(appDelegate: appDelegate, characterStore: appDelegate.characterStore)

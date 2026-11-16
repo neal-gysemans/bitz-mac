@@ -103,7 +103,25 @@ public struct AgentsSettingsTabView: View {
                 }
             }
 
-            // Section 3: Monitored Agents Catalog
+            // Section 3: Agent Command Deck
+            settingsCard(title: "Agent Command Deck", systemImage: "macwindow.on.rectangle") {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("3D Cyber-Ship Squad Deck")
+                            .font(.subheadline.bold())
+                        Text("Visualize all background agent sessions, context usage, loops, and approval alerts in a real-time isometric spacecraft.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Open Command Deck") {
+                        NSApp.sendAction(#selector(BitzAppDelegate.showCommandDeckWindow), to: nil, from: nil)
+                    }
+                    .accessibilityIdentifier("AgentsTabOpenCommandDeckButton")
+                }
+            }
+
+            // Section 4: Monitored Agents Catalog
             settingsCard(title: "Monitored AI Agents (\(agentMonitor.activeAgentCount) Active)", systemImage: "cpu.fill") {
                 VStack(spacing: 8) {
                     if !(licensingService?.isFeatureUnlocked(.multiAgentSwarm) ?? false) {

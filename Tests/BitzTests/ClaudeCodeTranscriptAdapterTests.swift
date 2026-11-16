@@ -414,6 +414,7 @@ final class ClaudeCodeTranscriptAdapterTests: XCTestCase {
         XCTAssertEqual(concurrentSeed.first?.contextTokens, 2002)
         XCTAssertEqual(concurrentSeed.first?.turnActive, false)
         XCTAssertEqual(concurrentSeed.first?.pendingTools, 0)
+        XCTAssertEqual(adapter.followedSessionCount, 2, "both sessions tracked concurrently")
 
         // The earlier session was never abandoned and still completes its turn cleanly.
         try append([toolResult("a1"), assistant(tokens: (3, 0, 3000), stop: "end_turn")], to: current)

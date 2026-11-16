@@ -46,8 +46,9 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
                 existingWindow.minSize = existingWindow.frameRect(forContentRect: NSRect(origin: .zero, size: Self.minimumContentSize)).size
             }
             existingWindow.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
             isWindowOpen = true
+            AppActivationPolicyCoordinator.refreshActivationPolicy()
+            NSApp.activate(ignoringOtherApps: true)
             refreshVisibility(for: existingWindow)
             return
         }
@@ -74,8 +75,9 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
         self.windowController = controller
 
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
         isWindowOpen = true
+        AppActivationPolicyCoordinator.refreshActivationPolicy()
+        NSApp.activate(ignoringOtherApps: true)
         refreshVisibility(for: window)
     }
 
@@ -129,6 +131,7 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
         }
         let shouldNotify = notifyIfWasOpen && isWindowOpen
         isWindowOpen = false
+        AppActivationPolicyCoordinator.refreshActivationPolicy()
         if shouldNotify {
             onWindowClosed?()
         }
@@ -143,6 +146,23 @@ public final class SettingsWindowManager: NSObject, ObservableObject, NSWindowDe
         }
         if isWindowVisible != visible {
             isWindowVisible = visible
+        }
+    }
+}
+
+@MainActor
+public enum AppActivationPolicyCoordinator {
+    /// Promotes Bitz to `.regular` (visible in ⌘+Tab and Dock) while any standard window
+    /// (Settings or Agent Command Deck) is open, and restores `.accessory` when all close.
+    public static func refreshActivationPolicy() {
+        let hasOpenStandardWindow = SettingsWindowManager.shared.isWindowOpen
+            || AgentCommandDeckWindowManager.shared.isWindowOpen
+        let targetPolicy: NSApplication.ActivationPolicy = hasOpenStandardWindow ? .regular : .accessory
+        if NSApp?.activationPolicy() != targetPolicy {
+            NSApp?.setActivationPolicy(targetPolicy)
+        }
+        if hasOpenStandardWindow {
+            NSApp?.activate(ignoringOtherApps: true)
         }
     }
 }

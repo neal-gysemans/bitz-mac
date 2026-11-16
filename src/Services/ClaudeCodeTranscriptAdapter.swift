@@ -1,7 +1,8 @@
 import Foundation
 
 /// Follows active top-level Claude Code session logs (`~/.claude/projects/<project>/<session>.jsonl`), read-only (C-003),
-/// concurrently (#72), and reports turns, loop warnings and usage readings (FR-004, FR-005, FR-008, FR-014).
+/// concurrently across multiple projects and terminal sessions (#72, #153, #184), and reports turns, loop warnings,
+/// and usage readings (FR-004, FR-005, FR-008, FR-014).
 /// Keeps only byte offsets, token counts, tool names and fingerprints, never line text (NFR-004).
 public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendable {
     public let id = "claude-code-transcript-adapter"
@@ -14,10 +15,38 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
     /// Finished transcripts idle longer than this window are pruned once at least one newer session remains.
     public static let idleRetainWindow: TimeInterval = 1800.0
 
+    public struct SessionCandidate: Equatable, Sendable {
+        public let sessionID: String
+        public let projectSlug: String
+        public let projectURL: URL
+        public let url: URL
+        public let modified: Date
+
+        public init(sessionID: String, projectSlug: String, projectURL: URL, url: URL, modified: Date) {
+            self.sessionID = sessionID
+            self.projectSlug = projectSlug
+            self.projectURL = projectURL
+            self.url = url
+            self.modified = modified
+        }
+    }
+
+    private struct FollowedSession {
+        let sessionID: String
+        let projectSlug: String
+        let projectURL: URL
+        let url: URL
+        var tail: SessionLogTail
+        var tracker: AgentSessionTracker
+        var lastActivityAt: Date
+        var workingDir: String?
+    }
+
     public let projectsURL: URL
     public let pollInterval: TimeInterval
     public let maxIdleScanInterval: TimeInterval
     public let activeAttachWindow: TimeInterval
+    public let idleRetainWindow: TimeInterval
     private let clock: @Sendable () -> Date
     private let lock = NSLock()
     private var eventHandler: (@Sendable (AgentEvent) -> Void)?
@@ -29,24 +58,10 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
         var sessionModifiedByURL: [URL: Date] = [:]
     }
 
-    private struct Candidate {
-        let sessionID: String
-        let url: URL
-        let modified: Date
-    }
-
-    private struct FollowedSession {
-        let sessionID: String
-        let url: URL
-        var tail: SessionLogTail
-        var tracker: AgentSessionTracker
-        var lastActivityAt: Date
-    }
-
     private var followedSessions: [String: FollowedSession] = [:]
     private var cachedProjectsDirModified: Date?
     private var cachedProjects: [URL: CachedProjectEntry] = [:]
-    private var cachedCandidates: [Candidate] = []
+    private var cachedCandidates: [SessionCandidate] = []
     private var lastCandidateScanTime: Date?
     public private(set) var currentScanInterval: TimeInterval
 
@@ -62,12 +77,14 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
         pollInterval: TimeInterval = 1.5,
         maxIdleScanInterval: TimeInterval = 30.0,
         activeAttachWindow: TimeInterval = ClaudeCodeTranscriptAdapter.activeAttachWindow,
+        idleRetainWindow: TimeInterval = ClaudeCodeTranscriptAdapter.idleRetainWindow,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.projectsURL = projectsURL
         self.pollInterval = pollInterval
         self.maxIdleScanInterval = max(pollInterval, maxIdleScanInterval)
         self.activeAttachWindow = max(pollInterval, activeAttachWindow)
+        self.idleRetainWindow = max(pollInterval, idleRetainWindow)
         self.currentScanInterval = pollInterval
         self.clock = clock
     }
@@ -117,6 +134,18 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
         }
     }
 
+    public func followedSessionIDs() -> [String] {
+        lock.withLock {
+            Array(followedSessions.keys)
+        }
+    }
+
+    public var followedSessionCount: Int {
+        lock.withLock {
+            followedSessions.count
+        }
+    }
+
     /// Extracts a unique session identifier (`<project>/<session>`) from `.../<project>/<session>.jsonl`.
     public static func sessionID(fromTranscriptURL url: URL) -> String? {
         let stem = url.deletingPathExtension().lastPathComponent
@@ -128,7 +157,7 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
         return stem
     }
 
-    private func refreshCandidates() -> (candidates: [Candidate], changed: Bool) {
+    private func refreshCandidates() -> (candidates: [SessionCandidate], changed: Bool) {
         guard let projectsModified = SessionLogTail.modificationDate(projectsURL) else {
             let hadCandidates = !cachedCandidates.isEmpty
             cachedProjectsDirModified = nil
@@ -145,12 +174,15 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
             var updatedProjects: [URL: CachedProjectEntry] = [:]
             updatedProjects.reserveCapacity(projects.count)
             for project in projects {
-                let key = project.standardizedFileURL
-                if let existing = cachedProjects[key] {
-                    updatedProjects[key] = existing
-                } else {
-                    changed = true
-                    updatedProjects[key] = CachedProjectEntry(projectURL: project)
+                var isDir: ObjCBool = false
+                if fileManager.fileExists(atPath: project.path, isDirectory: &isDir), isDir.boolValue {
+                    let key = project.standardizedFileURL
+                    if let existing = cachedProjects[key] {
+                        updatedProjects[key] = existing
+                    } else {
+                        changed = true
+                        updatedProjects[key] = CachedProjectEntry(projectURL: project)
+                    }
                 }
             }
             if updatedProjects.count != cachedProjects.count {
@@ -160,7 +192,7 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
             cachedProjectsDirModified = projectsModified
         }
 
-        var updatedCandidates: [Candidate] = []
+        var updatedCandidates: [SessionCandidate] = []
 
         for (key, var entry) in cachedProjects {
             guard let currentProjMod = SessionLogTail.modificationDate(entry.projectURL) else {
@@ -205,9 +237,16 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
                 }
             }
             cachedProjects[key] = entry
+            let projectSlug = entry.projectURL.lastPathComponent
             for (fileURL, mod) in entry.sessionModifiedByURL {
                 if let sessionID = Self.sessionID(fromTranscriptURL: fileURL) {
-                    updatedCandidates.append(Candidate(sessionID: sessionID, url: fileURL, modified: mod))
+                    updatedCandidates.append(SessionCandidate(
+                        sessionID: sessionID,
+                        projectSlug: projectSlug,
+                        projectURL: entry.projectURL,
+                        url: fileURL,
+                        modified: mod
+                    ))
                 }
             }
         }
@@ -230,7 +269,7 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
     }
 
     /// One poll: attach any newly active top-level sessions, turn appended lines across all followed sessions into events,
-    /// and prune long-idle sessions (#72).
+    /// and prune long-idle sessions (#72, #184).
     public func checkForUpdates() {
         lock.lock()
         defer { lock.unlock() }
@@ -265,14 +304,21 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
         for sessionID in orderedIDs {
             guard var session = followedSessions[sessionID] else { continue }
             let read = session.tail.readNew()
-            guard read.grew || !read.lines.isEmpty else { continue }
-
-            anyGrew = true
-            session.lastActivityAt = now
-            session.tracker.ingest(read.lines.flatMap(Self.entries(fromLine:)), at: now).forEach(handler)
-            // Any appended bytes count as activity, even a partial line (R4).
-            if read.grew {
-                handler(session.tracker.usageEvent(at: now, seed: false))
+            if read.grew || !read.lines.isEmpty {
+                anyGrew = true
+                session.lastActivityAt = now
+                if let cwd = Self.extractCwd(from: read.lines) {
+                    session.workingDir = cwd
+                }
+                let entries = read.lines.flatMap(Self.entries(fromLine:))
+                let events = session.tracker.ingest(entries, at: now)
+                for event in events {
+                    handler(Self.enrich(event: event, workingDir: session.workingDir))
+                }
+                // Any appended bytes count as activity, even a partial line (R4).
+                if read.grew {
+                    handler(Self.enrich(event: session.tracker.usageEvent(at: now, seed: false), workingDir: session.workingDir))
+                }
             }
             followedSessions[sessionID] = session
         }
@@ -289,7 +335,7 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
     }
 
     private func attachSession(
-        _ candidate: Candidate,
+        _ candidate: SessionCandidate,
         at now: Date,
         isStaleFallback: Bool,
         handler: @Sendable (AgentEvent) -> Void
@@ -309,21 +355,27 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
             // Do not mark an old historic unfinished transcript (> activeAttachWindow) as actively running on cold start.
             tracker.markIdle()
         }
+        let cwd = Self.extractCwd(from: seed.lines)
+        let workingDir = cwd ?? candidate.projectSlug
         let session = FollowedSession(
             sessionID: candidate.sessionID,
+            projectSlug: candidate.projectSlug,
+            projectURL: candidate.projectURL,
             url: candidate.url,
             tail: tail,
             tracker: tracker,
-            lastActivityAt: candidate.modified
+            lastActivityAt: candidate.modified,
+            workingDir: workingDir
         )
-        handler(session.tracker.usageEvent(at: now, seed: true))
+        let initialUsage = Self.enrich(event: session.tracker.usageEvent(at: now, seed: true), workingDir: session.workingDir)
+        handler(initialUsage)
         followedSessions[candidate.sessionID] = session
     }
 
     private func pruneIdleSessions(at now: Date) {
         let staleIDs = AgentSessionTracker.idleSessionIDsToPrune(
             from: followedSessions,
-            retainWindow: Self.idleRetainWindow,
+            retainWindow: idleRetainWindow,
             now: now,
             lastActivityAt: \.lastActivityAt,
             isBusy: \.tracker.turnActive
@@ -331,6 +383,33 @@ public final class ClaudeCodeTranscriptAdapter: AgentAdapter, @unchecked Sendabl
         for id in staleIDs {
             followedSessions.removeValue(forKey: id)
         }
+    }
+
+    private static func extractCwd(from lines: [Data]) -> String? {
+        for data in lines.reversed() {
+            if let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               let cwd = obj["cwd"] as? String,
+               !cwd.isEmpty {
+                return cwd
+            }
+        }
+        return nil
+    }
+
+    private static func enrich(event: AgentEvent, workingDir: String?) -> AgentEvent {
+        guard let workingDir, !workingDir.isEmpty, event.metadata?[AgentEvent.MetadataKey.workingDir] == nil else {
+            return event
+        }
+        var metadata = event.metadata ?? [:]
+        metadata[AgentEvent.MetadataKey.workingDir] = workingDir
+        return AgentEvent(
+            agentID: event.agentID,
+            agentName: event.agentName,
+            kind: event.kind,
+            message: event.message,
+            timestamp: event.timestamp,
+            metadata: metadata
+        )
     }
 
     /// Maps one Claude Code session-log line to tracker entries; unknown or sidechain lines yield [] (NFR-006).

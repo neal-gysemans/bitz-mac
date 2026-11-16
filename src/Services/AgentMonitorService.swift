@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Combine
+import SQLite3
 
 /// Protocol for agent detection adapters (ProcessAdapter, DropboxAdapter, LogWatcherAdapter).
 public protocol AgentAdapter: AnyObject, Sendable {
@@ -16,6 +17,8 @@ public final class AgentMonitorService: ObservableObject {
     @Published public private(set) var activeAgents: Set<String> = []
     /// Total number of concurrently active agent sessions across all enabled agents (#153).
     @Published public private(set) var activeAgentCount: Int = 0
+    /// Priority-sorted snapshots of all tracked agent sessions for the 3D Command Deck (WP1).
+    @Published public private(set) var sessionSnapshots: [AgentSessionSnapshot] = []
     @Published public private(set) var catalog: [AgentDefinition] = []
     @Published public var popupsEnabled: Bool {
         didSet {
@@ -56,9 +59,17 @@ public final class AgentMonitorService: ObservableObject {
     private var stallTask: Task<Void, Never>? = nil
     private var wakeObserver: NSObjectProtocol? = nil
 
-    /// Per-session stall and context-crossing inputs, keyed by `(agentID, sessionID)` (#153).
+    /// Per-session state, lifecycle, and telemetry inputs, keyed by `(agentID, sessionID)` (#153, WP1).
     private struct SessionState {
         let agentID: String
+        var agentName: String
+        var sessionID: String?
+        var lifecycleState: AgentSessionLifecycleState = .idle
+        var activeWarningReason: AgentWarningReason? = nil
+        var workingDir: String? = nil
+        var autoDerivedLabel: String? = nil
+        var lastMessage: String? = nil
+        var linkedApprovalRequest: AgentApprovalRequest? = nil
         var turnActive = false
         var awaitingApproval = false
         var pendingTools = 0
@@ -84,6 +95,11 @@ public final class AgentMonitorService: ObservableObject {
     private var approvalPopupStateKey: String? = nil
     private let stallSweepInterval: TimeInterval
     public var licensingService: (any LicensingServiceProtocol)?
+    private let summariesDatabaseURL: URL?
+
+    public static var defaultSummariesDatabaseURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini/antigravity/conversation_summaries.db")
+    }
 
     public var onEventHandled: (@MainActor (AgentEvent) -> Void)? = nil
 
@@ -103,13 +119,15 @@ public final class AgentMonitorService: ObservableObject {
         clock: @escaping @Sendable () -> Date = { Date() },
         userDefaults: UserDefaults = .standard,
         stallSweepInterval: TimeInterval = 5,
-        licensingService: (any LicensingServiceProtocol)? = nil
+        licensingService: (any LicensingServiceProtocol)? = nil,
+        summariesDatabaseURL: URL? = nil
     ) {
         self.adapters = adapters
         self.clock = clock
         self.userDefaults = userDefaults
         self.stallSweepInterval = stallSweepInterval
         self.licensingService = licensingService
+        self.summariesDatabaseURL = summariesDatabaseURL
         self.popupsEnabled = userDefaults.object(forKey: Self.popupsEnabledKey) as? Bool ?? true
         self.signalSettings = userDefaults.data(forKey: Self.signalSettingsKey)
             .flatMap { try? JSONDecoder().decode(AgentSignalSettings.self, from: $0) }?
@@ -292,6 +310,7 @@ public final class AgentMonitorService: ObservableObject {
             }).first {
                 pruneOtherSessionState(keepingStateKey: keptKey)
             }
+            recomputeSessionSnapshots()
         }
 
         syncPublishedActiveState()
@@ -306,6 +325,7 @@ public final class AgentMonitorService: ObservableObject {
             latestContext = keptReading
             latestContextStateKey = keptStateKey
         }
+        recomputeSessionSnapshots()
     }
 
     private func clearSessionState(stateKey: String) {
@@ -354,6 +374,7 @@ public final class AgentMonitorService: ObservableObject {
             approvalPopupAgentID = nil
             approvalPopupStateKey = nil
         }
+        recomputeSessionSnapshots()
     }
 
     /// Number of currently active concurrent sessions for a catalog `agentID` (#153).
@@ -422,6 +443,7 @@ public final class AgentMonitorService: ObservableObject {
         activeSessionsByAgent.removeAll()
         syncPublishedActiveState()
         sessions.removeAll()
+        sessionSnapshots.removeAll()
         runawaySinceByAgent.removeAll()
         runawayFiredByAgent.removeAll()
         contextReadings.removeAll()
@@ -435,7 +457,7 @@ public final class AgentMonitorService: ObservableObject {
         approvalPopupStateKey = nil
     }
 
-    private static func makeStateKey(agentID: String, sessionID: String?) -> String {
+    public static func makeStateKey(agentID: String, sessionID: String?) -> String {
         if let sessionID {
             return "\(agentID)::\(sessionID)"
         }
@@ -482,22 +504,53 @@ public final class AgentMonitorService: ObservableObject {
         let name = event.agentName
         let subkey = event.sessionID ?? Self.defaultSessionSubkey
         let stateKey = Self.makeStateKey(agentID: id, sessionID: event.sessionID)
-        var session = sessions[stateKey] ?? SessionState(agentID: id, lastActivity: now)
+        var session = sessions[stateKey] ?? SessionState(
+            agentID: id,
+            agentName: name,
+            sessionID: event.sessionID,
+            lifecycleState: .idle,
+            lastActivity: now
+        )
+
+        session.agentName = name
+        if let sid = event.sessionID { session.sessionID = sid }
+        if let wd = event.workingDir { session.workingDir = wd }
+        if let customLabel = event.metadata?[AgentEvent.MetadataKey.sessionLabel], !customLabel.isEmpty {
+            session.autoDerivedLabel = customLabel
+        }
+        if let msg = event.message, !msg.isEmpty, event.kind != .usage {
+            session.lastMessage = msg
+        }
 
         // Popup priority while a warning is active: data-model.md "Warning slot".
         switch event.kind {
         case .started:
-            if tracksSessionState {
-                registerActiveSession(agentID: id, subkey: subkey)
+            if event.isProcessPresence {
+                session.turnActive = false
+                if session.activeWarningReason == nil {
+                    session.lifecycleState = .idle
+                }
+            } else {
+                if tracksSessionState {
+                    registerActiveSession(agentID: id, subkey: subkey)
+                }
+                session.turnActive = true
+                session.lifecycleState = .working
             }
+            session.lastActivity = now
+            session.stallFired = false
         case .working:
             if tracksSessionState {
                 registerActiveSession(agentID: id, subkey: subkey)
             }
             session.turnActive = true
             session.awaitingApproval = false
+            session.linkedApprovalRequest = nil
             session.lastActivity = now
             session.stallFired = false
+            if session.activeWarningReason == nil {
+                session.lifecycleState = .working
+            }
             if activeWarning == nil {
                 let text = event.message ?? "\(name) is working..."
                 displayPopupIfEnabled(text: text, kind: .working, agentName: name, durationSeconds: 4.0)
@@ -508,7 +561,11 @@ public final class AgentMonitorService: ObservableObject {
             if tracksSessionState {
                 registerActiveSession(agentID: id, subkey: subkey)
             }
+            session.turnActive = true
             session.lastActivity = now
+            if session.activeWarningReason == nil {
+                session.lifecycleState = .almostDone
+            }
             if activeWarning == nil {
                 if signalSettings.almostDoneEnabled {
                     let text = event.message ?? "✨ \(name) is almost done!"
@@ -521,7 +578,26 @@ public final class AgentMonitorService: ObservableObject {
             if tracksSessionState {
                 registerActiveSession(agentID: id, subkey: subkey)
             }
+            session.turnActive = true
             session.awaitingApproval = true
+            session.lastActivity = now
+            session.lifecycleState = .needsApproval
+            if let requestID = event.approvalRequestID {
+                let req = AgentApprovalRequest(
+                    id: requestID,
+                    agentID: id,
+                    agentName: name,
+                    sessionID: event.sessionID,
+                    toolName: event.toolName,
+                    commandSummary: event.commandSummary,
+                    decisionChannel: event.approvalChannel,
+                    owningPID: event.owningPID.map { pid_t($0) },
+                    bundleID: event.bundleID,
+                    workingDir: event.workingDir ?? session.workingDir,
+                    createdAt: now
+                )
+                session.linkedApprovalRequest = req
+            }
             if matchesActiveWarning(agentID: id, stateKey: stateKey) {
                 acknowledgeWarning()
             } else if activeWarning != nil {
@@ -552,7 +628,10 @@ public final class AgentMonitorService: ObservableObject {
             if !event.isProcessPresence {
                 session.turnActive = false
                 session.awaitingApproval = false
+                session.linkedApprovalRequest = nil
                 session.pendingTools = 0
+                session.activeWarningReason = nil
+                session.lifecycleState = .done
                 if matchesActiveWarning(agentID: id, stateKey: stateKey) { acknowledgeWarning() }
             }
             if activeWarning == nil {
@@ -573,7 +652,9 @@ public final class AgentMonitorService: ObservableObject {
             if !event.isProcessPresence {
                 session.turnActive = false
                 session.awaitingApproval = false
+                session.linkedApprovalRequest = nil
                 session.pendingTools = 0
+                session.lifecycleState = .failed
                 if matchesActiveWarning(agentID: id, stateKey: stateKey) { acknowledgeWarning() }
             }
             if activeWarning == nil {
@@ -585,6 +666,8 @@ public final class AgentMonitorService: ObservableObject {
         case .warning:
             let reason = event.warningReason
             if signalSettings.isEnabled(reason) {
+                session.activeWarningReason = reason
+                session.lifecycleState = .warning
                 raiseWarning(
                     AgentWarning(agentID: id, agentName: name, reason: reason,
                                  text: event.message ?? "⚠️ \(name) reported a problem"),
@@ -602,11 +685,19 @@ public final class AgentMonitorService: ObservableObject {
             if let pending = event.pendingTools { session.pendingTools = pending }
             if let turnActive = event.turnActive {
                 session.turnActive = turnActive
-                if tracksSessionState {
-                    if turnActive {
+                if turnActive {
+                    if tracksSessionState {
                         registerActiveSession(agentID: id, subkey: subkey)
-                    } else if !session.awaitingApproval {
+                    }
+                    if session.lifecycleState == .idle || session.lifecycleState == .done {
+                        session.lifecycleState = .working
+                    }
+                } else if !session.awaitingApproval {
+                    if tracksSessionState {
                         unregisterActiveSession(agentID: id, sessionID: event.sessionID, isProcessPresence: false)
+                    }
+                    if session.lifecycleState != .warning && session.lifecycleState != .failed {
+                        session.lifecycleState = .idle
                     }
                 }
             }
@@ -620,6 +711,8 @@ public final class AgentMonitorService: ObservableObject {
                     if !session.contextFired {
                         session.contextFired = true
                         if !event.isSeed && signalSettings.contextWarningEnabled {
+                            session.activeWarningReason = .context
+                            session.lifecycleState = .warning
                             raiseWarning(
                                 AgentWarning(agentID: id, agentName: name, reason: .context,
                                              text: "⚠️ \(name): context at \(reading.percent)%! Consider /compact soon."),
@@ -629,6 +722,12 @@ public final class AgentMonitorService: ObservableObject {
                     }
                 } else {
                     session.contextFired = false
+                    if session.activeWarningReason == .context {
+                        session.activeWarningReason = nil
+                        if session.lifecycleState == .warning {
+                            session.lifecycleState = session.turnActive ? .working : .idle
+                        }
+                    }
                 }
             }
             if let cpuPercent = event.cpuPercent {
@@ -637,6 +736,7 @@ public final class AgentMonitorService: ObservableObject {
         }
         if tracksSessionState && (event.kind != .usage || !event.isProcessPresence || sessions[stateKey] != nil) {
             sessions[stateKey] = session
+            recomputeSessionSnapshots()
         }
         onEventHandled?(event)
     }
@@ -646,16 +746,23 @@ public final class AgentMonitorService: ObservableObject {
         guard signalSettings.stallWarningEnabled else { return }
         let now = clock()
         let minutes = signalSettings.stallTimeoutMinutes
+        var changed = false
         for (stateKey, session) in sessions
         where session.tracksLog && session.turnActive && !session.awaitingApproval && session.pendingTools == 0 && !session.stallFired
             && now.timeIntervalSince(session.lastActivity) >= Double(minutes) * 60 {
             guard let agent = catalog.first(where: { $0.id == session.agentID }), agent.isEnabled else { continue }
             sessions[stateKey]?.stallFired = true
+            sessions[stateKey]?.activeWarningReason = .stall
+            sessions[stateKey]?.lifecycleState = .warning
+            changed = true
             raiseWarning(
                 AgentWarning(agentID: session.agentID, agentName: agent.displayName, reason: .stall,
                              text: "⚠️ \(agent.displayName) may be stuck: no output for \(minutes) min."),
                 stateKey: stateKey
             )
+        }
+        if changed {
+            recomputeSessionSnapshots()
         }
     }
 
@@ -750,14 +857,43 @@ public final class AgentMonitorService: ObservableObject {
     }
 
     /// Clears the warning (Got it / menu Dismiss Agent Warning) and its bubble.
-    public func acknowledgeWarning() {
-        activeWarning = nil
-        activeWarningStateKey = nil
-        approvalOverrideAgentID = nil
-        approvalOverrideStateKey = nil
-        if activePopup?.kind == .warning {
-            dismissPopup()
+    /// Can target a specific session via `stateKey`, or clears active / all warnings when `stateKey` is nil.
+    public func acknowledgeWarning(stateKey: String? = nil) {
+        if let stateKey {
+            if let session = sessions[stateKey] {
+                sessions[stateKey]?.activeWarningReason = nil
+                if sessions[stateKey]?.lifecycleState == .warning {
+                    sessions[stateKey]?.lifecycleState = session.turnActive ? .working : .idle
+                }
+            }
+            if activeWarningStateKey == stateKey {
+                activeWarning = nil
+                activeWarningStateKey = nil
+                approvalOverrideAgentID = nil
+                approvalOverrideStateKey = nil
+                if activePopup?.kind == .warning {
+                    dismissPopup()
+                }
+            }
+        } else {
+            for key in sessions.keys {
+                if sessions[key]?.activeWarningReason != nil {
+                    sessions[key]?.activeWarningReason = nil
+                    if sessions[key]?.lifecycleState == .warning {
+                        let turnActive = sessions[key]?.turnActive ?? false
+                        sessions[key]?.lifecycleState = turnActive ? .working : .idle
+                    }
+                }
+            }
+            activeWarning = nil
+            activeWarningStateKey = nil
+            approvalOverrideAgentID = nil
+            approvalOverrideStateKey = nil
+            if activePopup?.kind == .warning {
+                dismissPopup()
+            }
         }
+        recomputeSessionSnapshots()
     }
 
     private func raiseWarning(_ warning: AgentWarning, stateKey: String) {
@@ -805,6 +941,251 @@ public final class AgentMonitorService: ObservableObject {
         } else {
             latestContext = latestContext.flatMap { contextReadings[$0.agentID] }
         }
+        recomputeSessionSnapshots()
+    }
+
+    /// Sets or clears a linked approval request for a given session.
+    public func setLinkedApprovalRequest(_ request: AgentApprovalRequest?, for stateKey: String) {
+        guard sessions[stateKey] != nil else { return }
+        sessions[stateKey]?.linkedApprovalRequest = request
+        if let request {
+            sessions[stateKey]?.awaitingApproval = true
+            sessions[stateKey]?.lifecycleState = .needsApproval
+            if request.workingDir != nil && sessions[stateKey]?.workingDir == nil {
+                sessions[stateKey]?.workingDir = request.workingDir
+            }
+        } else {
+            sessions[stateKey]?.awaitingApproval = false
+            if sessions[stateKey]?.lifecycleState == .needsApproval {
+                let turnActive = sessions[stateKey]?.turnActive ?? false
+                sessions[stateKey]?.lifecycleState = turnActive ? .working : .idle
+            }
+        }
+        recomputeSessionSnapshots()
+    }
+
+    /// Clears any linked approval request matching the given requestID.
+    public func clearLinkedApprovalRequest(requestID: String) {
+        var changed = false
+        for (stateKey, session) in sessions where session.linkedApprovalRequest?.id == requestID {
+            sessions[stateKey]?.linkedApprovalRequest = nil
+            sessions[stateKey]?.awaitingApproval = false
+            if sessions[stateKey]?.lifecycleState == .needsApproval {
+                let turnActive = session.turnActive
+                sessions[stateKey]?.lifecycleState = turnActive ? .working : .idle
+            }
+            changed = true
+        }
+        if changed {
+            recomputeSessionSnapshots()
+        }
+    }
+
+    /// Removes a specific session snapshot and state.
+    public func removeSession(stateKey: String) {
+        sessions.removeValue(forKey: stateKey)
+        contextReadings.removeValue(forKey: stateKey)
+        recomputeSessionSnapshots()
+    }
+
+    /// Auto-derives readable session label (`<Agent> · <repo/title>`).
+    public func deriveSessionLabel(
+        agentID: String,
+        agentName: String,
+        sessionID: String?,
+        workingDir: String?,
+        fallbackIndex: Int
+    ) -> String {
+        // 1. Antigravity: query conversation_summaries.db
+        if agentID == "antigravity", let sessionID, !sessionID.isEmpty {
+            let dbURL = summariesDatabaseURL ?? Self.defaultSummariesDatabaseURL
+            let (title, folder) = Self.queryConversationSummary(for: sessionID, databaseURL: dbURL)
+            if let title, !title.isEmpty {
+                return "\(agentName) · \(title)"
+            }
+            if let folder, !folder.isEmpty {
+                return "\(agentName) · \(folder)"
+            }
+        }
+
+        // 2. Working directory or project slug
+        if let workingDir, !workingDir.isEmpty {
+            if workingDir.hasPrefix("-") && workingDir.contains("-Code-") {
+                let slug = Self.resolveClaudeProjectSlug(workingDir)
+                return "\(agentName) · \(slug)"
+            }
+            let name = URL(fileURLWithPath: workingDir).lastPathComponent
+            if !name.isEmpty && name != "/" {
+                return "\(agentName) · \(name)"
+            }
+        }
+
+        // 3. Claude Code: sessionID slug resolution
+        if agentID == "claude", let sessionID, sessionID.hasPrefix("-") {
+            let slug = Self.resolveClaudeProjectSlug(sessionID)
+            return "\(agentName) · \(slug)"
+        }
+
+        // 4. Fallback to short session identifier
+        if let sessionID, !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let clean = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let short = String(clean.prefix(6))
+            return "\(agentName) · \(short)"
+        }
+
+        // 5. Fallback index
+        return "\(agentName) · #\(fallbackIndex)"
+    }
+
+    /// Queries Antigravity conversation title and workspace URI from `conversation_summaries.db`.
+    public static func queryConversationSummary(
+        for conversationID: String,
+        databaseURL: URL
+    ) -> (title: String?, workspaceFolder: String?) {
+        guard !conversationID.isEmpty,
+              FileManager.default.fileExists(atPath: databaseURL.path) else {
+            return (nil, nil)
+        }
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(databaseURL.path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else {
+            return (nil, nil)
+        }
+        defer { sqlite3_close(db) }
+        sqlite3_busy_timeout(db, 20)
+
+        var stmt: OpaquePointer?
+        let sql = "SELECT title, workspace_uris FROM conversation_summaries WHERE conversation_id = ? LIMIT 1;"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            return (nil, nil)
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        _ = conversationID.withCString { cStr in
+            sqlite3_bind_text(stmt, 1, cStr, -1, sqliteTransient)
+        }
+
+        guard sqlite3_step(stmt) == SQLITE_ROW else {
+            return (nil, nil)
+        }
+
+        var title: String? = nil
+        if let cTitle = sqlite3_column_text(stmt, 0) {
+            let str = String(cString: cTitle).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !str.isEmpty {
+                title = str
+            }
+        }
+
+        var folder: String? = nil
+        if let cUris = sqlite3_column_text(stmt, 1) {
+            let raw = String(cString: cUris).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let data = raw.data(using: .utf8),
+               let uris = try? JSONDecoder().decode([String].self, from: data),
+               let firstURI = uris.first,
+               let url = URL(string: firstURI) {
+                let name = url.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty && name != "/" {
+                    folder = name
+                }
+            }
+        }
+
+        return (title, folder)
+    }
+
+    /// Resolves a Claude Code project slug (e.g. `-Volumes-DevDrive-Code-bitz-mac`) to a repo folder name.
+    public static func resolveClaudeProjectSlug(_ rawSlug: String) -> String {
+        var slug = rawSlug
+        if let range = slug.range(of: "--claude-worktrees-") {
+            slug = String(slug[..<range.lowerBound])
+        }
+
+        let tokens = slug.split(separator: "-").map(String.init)
+        guard !tokens.isEmpty else { return slug }
+
+        let markers = ["Code", "projects", "repos", "Work", "dev", "src"]
+        for marker in markers {
+            if let mIdx = tokens.firstIndex(where: { $0.caseInsensitiveCompare(marker) == .orderedSame }), mIdx + 1 < tokens.count {
+                return tokens[(mIdx + 1)...].joined(separator: "-")
+            }
+        }
+
+        return tokens.joined(separator: "-")
+    }
+
+    /// Recomputes and publishes priority-sorted session snapshots.
+    private func recomputeSessionSnapshots() {
+        var snapshots: [AgentSessionSnapshot] = []
+        snapshots.reserveCapacity(sessions.count)
+
+        let agentsWithExplicitSessions = Set(sessions.values.compactMap { $0.sessionID != nil ? $0.agentID : nil })
+
+        var agentSessionIndices: [String: Int] = [:]
+
+        for (stateKey, session) in sessions {
+            guard let agentDef = catalog.first(where: { $0.id == session.agentID }), agentDef.isEnabled else {
+                continue
+            }
+
+            // Suppress bare process-presence idle placeholders when explicit named sessions exist for that agent.
+            if session.sessionID == nil,
+               agentsWithExplicitSessions.contains(session.agentID),
+               session.lifecycleState == .idle,
+               !session.tracksLog,
+               session.linkedApprovalRequest == nil,
+               session.activeWarningReason == nil {
+                continue
+            }
+
+            let index = (agentSessionIndices[session.agentID] ?? 0) + 1
+            agentSessionIndices[session.agentID] = index
+
+            let label: String
+            if let cached = session.autoDerivedLabel {
+                label = cached
+            } else {
+                let derived = deriveSessionLabel(
+                    agentID: session.agentID,
+                    agentName: session.agentName,
+                    sessionID: session.sessionID,
+                    workingDir: session.workingDir,
+                    fallbackIndex: index
+                )
+                if !derived.contains(" · #") && (session.sessionID == nil || !derived.hasSuffix(" · \(session.sessionID!.prefix(6))")) {
+                    sessions[stateKey]?.autoDerivedLabel = derived
+                }
+                label = derived
+            }
+
+            let contextReading = contextReadings[stateKey]
+
+            let snapshot = AgentSessionSnapshot(
+                stateKey: stateKey,
+                agentID: session.agentID,
+                agentName: session.agentName,
+                sessionID: session.sessionID,
+                sessionLabel: label,
+                lifecycleState: session.lifecycleState,
+                activeWarning: session.activeWarningReason,
+                contextReading: contextReading,
+                pendingTools: session.pendingTools,
+                lastActivity: session.lastActivity,
+                linkedApprovalRequest: session.linkedApprovalRequest,
+                workingDir: session.workingDir,
+                statusMessage: session.lastMessage
+            )
+            snapshots.append(snapshot)
+        }
+
+        // Sort by attention priority primary, lastActivity descending secondary, stateKey deterministic tertiary
+        snapshots.sort { lhs, rhs in
+            lhs.lifecycleState != rhs.lifecycleState ? lhs.lifecycleState < rhs.lifecycleState
+                : lhs.lastActivity != rhs.lastActivity ? lhs.lastActivity > rhs.lastActivity
+                : lhs.stateKey < rhs.stateKey
+        }
+
+        self.sessionSnapshots = snapshots
     }
 
     private func displayPopupIfEnabled(

@@ -632,4 +632,24 @@ final class AntigravityTranscriptAdapterTests: XCTestCase {
         XCTAssertEqual(workingEventsAfterApprove.count, workingCountBeforeApprove + 1)
         XCTAssertEqual(workingEventsAfterApprove.last?.sessionID, "session-1")
     }
+
+    func testMidConversationSystemMessageWakesTurnToWorking() throws {
+        try append(
+            #"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"start"}"#,
+            #"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"waiting on background command"}"#
+        )
+
+        let collector = Collector()
+        let adapter = attachedAdapter(collector)
+
+        // Initially idle after finished PLANNER_RESPONSE
+        XCTAssertEqual(collector.usages.last?.turnActive, false)
+
+        // Antigravity wakes the agent with a mid-conversation SYSTEM_MESSAGE (step_index > 0)
+        try append(#"{"step_index":2,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","content":"Background task finished"}"#)
+        adapter.checkForUpdates()
+
+        XCTAssertEqual(collector.usages.last?.turnActive, true)
+        XCTAssertTrue(collector.snapshot.contains { $0.kind == .working && $0.sessionID == "session-1" })
+    }
 }
