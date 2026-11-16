@@ -331,15 +331,16 @@ public struct BehaviorSettingsTabView: View {
                             get: { calendarService.settingsStore.isEnabled },
                             set: { newValue in
                                 if newValue {
-                                    if calendarService.authorizationStatus == .notDetermined {
-                                        Task {
-                                            _ = await calendarService.requestAuthorization()
+                                    Task {
+                                        if !calendarService.authorizationStatus.isAuthorized {
+                                            let granted = await calendarService.requestAuthorization()
+                                            if !granted {
+                                                calendarService.settingsStore.setEnabled(false)
+                                            }
+                                        } else {
+                                            calendarService.settingsStore.setEnabled(true)
+                                            await calendarService.refreshEvents()
                                         }
-                                    } else if calendarService.authorizationStatus.isAuthorized {
-                                        calendarService.settingsStore.setEnabled(true)
-                                        Task { await calendarService.refreshEvents() }
-                                    } else {
-                                        calendarService.settingsStore.setEnabled(true)
                                     }
                                 } else {
                                     calendarService.settingsStore.setEnabled(false)
@@ -357,6 +358,14 @@ public struct BehaviorSettingsTabView: View {
                         .font(.subheadline)
                     Spacer()
                     calendarStatusBadge
+                    if calendarService.authorizationStatus == .notDetermined {
+                        Button("Request Access") {
+                            Task {
+                                _ = await calendarService.requestAuthorization()
+                            }
+                        }
+                        .controlSize(.small)
+                    }
                 }
 
                 if calendarService.authorizationStatus == .denied || calendarService.authorizationStatus == .restricted {
@@ -408,7 +417,7 @@ public struct BehaviorSettingsTabView: View {
 
                     // Toggles
                     Toggle(
-                        "Morning Agenda Brief (after 8:00 AM)",
+                        "Morning Agenda Brief (after 6:00 AM)",
                         isOn: Binding(
                             get: { calendarService.settingsStore.isMorningBriefEnabled },
                             set: { calendarService.settingsStore.setMorningBriefEnabled($0) }
@@ -417,7 +426,7 @@ public struct BehaviorSettingsTabView: View {
                     .font(.subheadline)
 
                     Toggle(
-                        "Tomorrow Radar Preview (after 5:30 PM)",
+                        "Tomorrow Radar Preview (after 3:00 PM)",
                         isOn: Binding(
                             get: { calendarService.settingsStore.isEveningPreviewEnabled },
                             set: { calendarService.settingsStore.setEveningPreviewEnabled($0) }

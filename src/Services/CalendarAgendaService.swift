@@ -1,6 +1,6 @@
 import AppKit
 import Combine
-import EventKit
+@preconcurrency import EventKit
 import Foundation
 
 /// Protocol abstracting calendar event store interactions for deterministic unit testing without requiring real EventKit permissions.
@@ -36,15 +36,18 @@ public final class SystemCalendarEventStore: CalendarEventStoreProviding, @unche
 
     public func requestAccess() async throws -> Bool {
         if #available(macOS 14.0, *) {
-            return try await eventStore.requestFullAccessToEvents()
-        } else {
-            return try await withCheckedThrowingContinuation { continuation in
-                eventStore.requestAccess(to: .event) { granted, error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume(returning: granted)
-                    }
+            do {
+                return try await eventStore.requestFullAccessToEvents()
+            } catch {
+                // Fallback to legacy requestAccess
+            }
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            eventStore.requestAccess(to: .event) { granted, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: granted)
                 }
             }
         }
@@ -233,8 +236,9 @@ public final class CalendarAgendaService: ObservableObject {
     public func requestAuthorization() async -> Bool {
         do {
             let granted = try await storeProvider.requestAccess()
-            authorizationStatus = storeProvider.authorizationStatus()
-            if granted && authorizationStatus.isAuthorized {
+            let status = storeProvider.authorizationStatus()
+            self.authorizationStatus = granted ? .fullAccess : status
+            if granted && self.authorizationStatus.isAuthorized {
                 settingsStore.setEnabled(true)
                 await refreshEvents()
                 return true
@@ -366,7 +370,7 @@ public final class CalendarAgendaService: ObservableObject {
         let now = currentDate ?? dateProvider()
 
         let hour = calendar.component(.hour, from: now)
-        guard hour >= 8 && hour < 12 else { return }
+        guard hour >= 6 && hour < 12 else { return }
 
         if let last = lastMorningBriefDate, calendar.isDate(last, inSameDayAs: now) {
             return
@@ -404,8 +408,7 @@ public final class CalendarAgendaService: ObservableObject {
         let now = currentDate ?? dateProvider()
 
         let hour = calendar.component(.hour, from: now)
-        let minute = calendar.component(.minute, from: now)
-        let isAfterCutoff = (hour > 17) || (hour == 17 && minute >= 30)
+        let isAfterCutoff = hour >= 15
         let isWorkdayComplete = continuousWorkMinutes >= 480
 
         guard isAfterCutoff || isWorkdayComplete else { return }

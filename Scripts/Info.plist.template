@@ -32,6 +32,8 @@
     <string>Bitz captures system meeting audio locally when you start a Meeting Audio Recording session.</string>
     <key>NSDocumentsFolderUsageDescription</key>
     <string>Bitz saves meeting recordings and transcripts in the folder you choose, which can be in Documents.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Bitz uses your calendar to display upcoming meeting countdowns and daily agenda briefs.</string>
     <key>NSCalendarsFullAccessUsageDescription</key>
     <string>Bitz uses your calendar to display upcoming meeting countdowns and daily agenda briefs.</string>
 </dict>

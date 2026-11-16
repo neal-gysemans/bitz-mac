@@ -43,7 +43,8 @@ final class BuildScriptsTests: XCTestCase {
             XCTAssertEqual(plist["CFBundleName"] as? String, "Bitz")
             XCTAssertEqual(plist["CFBundleShortVersionString"] as? String, "1.0.0")
             for key in ["NSMicrophoneUsageDescription", "NSSpeechRecognitionUsageDescription",
-                        "NSScreenCaptureUsageDescription", "NSDocumentsFolderUsageDescription"] {
+                        "NSScreenCaptureUsageDescription", "NSDocumentsFolderUsageDescription",
+                        "NSCalendarsUsageDescription", "NSCalendarsFullAccessUsageDescription"] {
                 XCTAssertFalse((plist[key] as? String ?? "").isEmpty, "\(bundleID): \(key)")
             }
         }

@@ -275,10 +275,10 @@ final class CalendarAgendaServiceTests: XCTestCase {
 
     func testCalendarAgendaService_MorningBriefGeneration() async {
         let cal = Calendar.current
-        // Construct a morning time: 08:30 AM
+        // Construct a morning time: 06:15 AM (new 6:00 AM cutoff threshold)
         var components = cal.dateComponents([.year, .month, .day], from: Date())
-        components.hour = 8
-        components.minute = 30
+        components.hour = 6
+        components.minute = 15
         let morningDate = cal.date(from: components)!
 
         let event1 = CalendarEventSnapshot(
@@ -302,8 +302,17 @@ final class CalendarAgendaServiceTests: XCTestCase {
         settings.setMorningBriefEnabled(true)
 
         let service = CalendarAgendaService(storeProvider: mockStore, settingsStore: settings, calendar: cal)
-        service.dateProvider = { morningDate }
 
+        // 1. Before 6:00 AM (05:45 AM) must NOT trigger morning brief
+        var earlyComponents = components
+        earlyComponents.hour = 5
+        earlyComponents.minute = 45
+        let earlyDate = cal.date(from: earlyComponents)!
+        service.triggerMorningBriefIfEligible(at: earlyDate)
+        XCTAssertNil(service.activeAlert)
+
+        // 2. At or after 6:00 AM (06:15 AM) triggers morning brief
+        service.dateProvider = { morningDate }
         await service.refreshEvents(at: morningDate)
         service.triggerMorningBriefIfEligible(at: morningDate)
 
@@ -320,7 +329,7 @@ final class CalendarAgendaServiceTests: XCTestCase {
     func testCalendarAgendaService_EveningPreviewGeneration() async {
         let cal = Calendar.current
         var components = cal.dateComponents([.year, .month, .day], from: Date())
-        components.hour = 18
+        components.hour = 15
         components.minute = 0
         let eveningDate = cal.date(from: components)!
 
@@ -344,15 +353,29 @@ final class CalendarAgendaServiceTests: XCTestCase {
         settings.setEveningPreviewEnabled(true)
 
         let service = CalendarAgendaService(storeProvider: mockStore, settingsStore: settings, calendar: cal)
-        service.dateProvider = { eveningDate }
 
-        await service.refreshEvents(at: eveningDate)
-        service.triggerEveningPreviewIfEligible(at: eveningDate)
+        // 1. Before 3:00 PM (14:30) with 0 work minutes must NOT trigger
+        var earlyComponents = components
+        earlyComponents.hour = 14
+        earlyComponents.minute = 30
+        let earlyDate = cal.date(from: earlyComponents)!
+        service.triggerEveningPreviewIfEligible(at: earlyDate, continuousWorkMinutes: 0)
+        XCTAssertNil(service.activeAlert)
 
+        // 2. Before 3:00 PM (14:30) with 480 work minutes DOES trigger (full workday)
+        service.triggerEveningPreviewIfEligible(at: earlyDate, continuousWorkMinutes: 480)
         XCTAssertNotNil(service.activeAlert)
-        XCTAssertEqual(service.activeAlert?.kind, .eveningPreview)
-        XCTAssertTrue(service.activeAlert?.message.contains("Tomorrow's radar:") ?? false)
-        XCTAssertTrue(service.activeAlert?.message.contains("Design Sync") ?? false)
+
+        // 3. At 3:00 PM (15:00) triggers regardless of continuous work minutes (fresh service on that day)
+        let afternoonService = CalendarAgendaService(storeProvider: mockStore, settingsStore: settings, calendar: cal)
+        afternoonService.dateProvider = { eveningDate }
+        await afternoonService.refreshEvents(at: eveningDate)
+        afternoonService.triggerEveningPreviewIfEligible(at: eveningDate)
+
+        XCTAssertNotNil(afternoonService.activeAlert)
+        XCTAssertEqual(afternoonService.activeAlert?.kind, .eveningPreview)
+        XCTAssertTrue(afternoonService.activeAlert?.message.contains("Tomorrow's radar:") ?? false)
+        XCTAssertTrue(afternoonService.activeAlert?.message.contains("Design Sync") ?? false)
     }
 
     // MARK: - WP3: Speech Bubble Prioritization & Interactivity
