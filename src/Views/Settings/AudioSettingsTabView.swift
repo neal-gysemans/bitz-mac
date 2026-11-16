@@ -283,6 +283,34 @@ public struct AudioSettingsTabView: View {
                 .font(.subheadline)
                 .disabled(meetingRecorder.isRecording)
 
+                HStack(spacing: 8) {
+                    Image(systemName: meetingRecorder.activeOutputDevice.deviceType.systemImage)
+                        .foregroundStyle(.cyan)
+                    Text("Output:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("\(meetingRecorder.activeOutputDevice.name) (\(meetingRecorder.activeOutputDevice.deviceType.displayName))")
+                        .font(.caption.bold())
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.secondary.opacity(0.1))
+                )
+
+                if let notice = meetingRecorder.activeOutputDevice.advisoryRoutingNotice {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .imageScale(.small)
+                        Text(notice)
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                }
+
                 HStack(spacing: 10) {
                     Text("Recordings folder")
                         .font(.subheadline)

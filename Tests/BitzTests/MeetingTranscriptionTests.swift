@@ -326,4 +326,284 @@ final class MeetingTranscriptionTests: XCTestCase {
         )
         XCTAssertEqual(fallback, ["en-US"])
     }
+
+    // MARK: - Long-Audio Windowing & Audio Slicing (#200)
+
+    func testMaxWindowDurationConstant() {
+        XCTAssertEqual(SpeechFrameworkTranscriptionService.maxWindowDuration, 180.0)
+    }
+
+    func testWindowContinuationGateResumesOnce() async {
+        let gate = WindowContinuationGate()
+        gate.finish(.success(()))
+        gate.finish(.failure(MeetingTranscriptionError.timedOut(1)))
+        do {
+            try await withCheckedThrowingContinuation { gate.install($0) }
+        } catch {
+            XCTFail("Should not have thrown after success")
+        }
+    }
+
+    func testWindowContinuationGateHandlesCancellation() async {
+        let gate = WindowContinuationGate()
+        gate.finish(.failure(CancellationError()))
+        do {
+            try await withCheckedThrowingContinuation { gate.install($0) }
+            XCTFail("Expected CancellationError")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
+    func testSliceAudioCreatesValidPCMFile() throws {
+        // Create a 5-second 48kHz stereo test CAF file
+        let sampleRate: Double = 48_000
+        let format = MeetingTrackWriter.canonicalPCMFormat
+        let tempDir = FileManager.default.temporaryDirectory
+        let sourceURL = tempDir.appendingPathComponent("test_slice_src_\(UUID().uuidString).caf")
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+
+        let frameCount: AVAudioFrameCount = 48_000 * 5 // 5 seconds
+        let sourceFile = try AVAudioFile(
+            forWriting: sourceURL,
+            settings: [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: 2,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false
+            ],
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+        buffer.frameLength = frameCount
+        try sourceFile.write(from: buffer)
+
+        // Slice 2 seconds starting at second 1.0
+        let sliceURL = try SpeechFrameworkTranscriptionService.sliceAudio(
+            from: sourceURL,
+            startSeconds: 1.0,
+            durationSeconds: 2.0
+        )
+        defer { try? FileManager.default.removeItem(at: sliceURL) }
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sliceURL.path))
+        let slicedFile = try AVAudioFile(forReading: sliceURL)
+        XCTAssertEqual(slicedFile.fileFormat.sampleRate, sampleRate)
+        XCTAssertEqual(slicedFile.fileFormat.channelCount, 2)
+        // 2 seconds * 48000 = 96000 frames
+        XCTAssertEqual(slicedFile.length, 96_000)
+
+        // Slicing beyond end of file must throw
+        XCTAssertThrowsError(
+            try SpeechFrameworkTranscriptionService.sliceAudio(
+                from: sourceURL,
+                startSeconds: 10.0,
+                durationSeconds: 1.0
+            )
+        )
+    }
+
+    func testMultiWindowOffsetAccumulation() {
+        let accumulator = UtteranceAccumulator()
+
+        // Window 0 (0s - 180s)
+        let win0Segments = [
+            MeetingTranscriptSegment(text: "Hello", startTime: 10.0, endTime: 10.5, confidence: 0.9),
+            MeetingTranscriptSegment(text: "world", startTime: 10.6, endTime: 11.0, confidence: 0.9)
+        ]
+        accumulator.add(segments: win0Segments, formattedString: "Hello world")
+
+        // Window 1 (180s - 360s, offset = 180s)
+        let win1Segments = [
+            MeetingTranscriptSegment(text: "Second", startTime: 185.0, endTime: 185.5, confidence: 0.9),
+            MeetingTranscriptSegment(text: "window", startTime: 185.6, endTime: 186.0, confidence: 0.9)
+        ]
+        accumulator.add(segments: win1Segments, formattedString: "Second window")
+
+        let transcript = accumulator.transcript(sessionID: "test", localeIdentifier: "nl-BE")
+        XCTAssertEqual(transcript.fullText, "Hello world Second window")
+        XCTAssertEqual(transcript.segments.count, 4)
+        XCTAssertEqual(transcript.segments[0].startTime, 10.0)
+        XCTAssertEqual(transcript.segments[2].startTime, 185.0)
+    }
+
+    // MARK: - Dual-Track Speaker Attribution & Gain Boost (#202)
+
+    func testMeetingTranscriptSegmentSpeakerAttributionAndEncoding() throws {
+        let segYou = MeetingTranscriptSegment(text: "Hello", startTime: 1.0, endTime: 1.5, confidence: 0.95, speaker: "You")
+        let segPart = MeetingTranscriptSegment(text: "Hi", startTime: 2.0, endTime: 2.4, confidence: 0.92, speaker: "Participants")
+        let segLegacy = MeetingTranscriptSegment(text: "Legacy", startTime: 3.0, endTime: 3.5, confidence: 0.90)
+
+        XCTAssertEqual(segYou.speaker, "You")
+        XCTAssertEqual(segPart.speaker, "Participants")
+        XCTAssertNil(segLegacy.speaker)
+
+        // Test round-trip encoding/decoding
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+
+        let dataYou = try encoder.encode(segYou)
+        let decodedYou = try decoder.decode(MeetingTranscriptSegment.self, from: dataYou)
+        XCTAssertEqual(decodedYou.speaker, "You")
+        XCTAssertEqual(decodedYou.text, "Hello")
+
+        // Test backwards compatibility: JSON without "speaker" key decodes as nil
+        let jsonWithoutSpeaker = """
+        {"text":"Old","start_time":0.5,"end_time":1.0,"confidence":0.88}
+        """.data(using: .utf8)!
+        let decodedLegacy = try decoder.decode(MeetingTranscriptSegment.self, from: jsonWithoutSpeaker)
+        XCTAssertNil(decodedLegacy.speaker)
+        XCTAssertEqual(decodedLegacy.text, "Old")
+    }
+
+    func testMeetingTranscriptFormattedPlainTextSpeakerTurns() {
+        let segments = [
+            MeetingTranscriptSegment(text: "Hello", startTime: 1.0, endTime: 1.4, confidence: 0.9, speaker: "You"),
+            MeetingTranscriptSegment(text: "everyone.", startTime: 1.5, endTime: 2.0, confidence: 0.9, speaker: "You"),
+            MeetingTranscriptSegment(text: "Good", startTime: 3.0, endTime: 3.3, confidence: 0.9, speaker: "Participants"),
+            MeetingTranscriptSegment(text: "morning!", startTime: 3.4, endTime: 3.8, confidence: 0.9, speaker: "Participants"),
+            MeetingTranscriptSegment(text: "Can", startTime: 5.0, endTime: 5.3, confidence: 0.9, speaker: "You"),
+            MeetingTranscriptSegment(text: "you", startTime: 5.4, endTime: 5.6, confidence: 0.9, speaker: "You"),
+            MeetingTranscriptSegment(text: "hear", startTime: 5.7, endTime: 5.9, confidence: 0.9, speaker: "You"),
+            MeetingTranscriptSegment(text: "me?", startTime: 6.0, endTime: 6.3, confidence: 0.9, speaker: "You"),
+            MeetingTranscriptSegment(text: "Yes", startTime: 7.0, endTime: 7.2, confidence: 0.9, speaker: "Participants"),
+            MeetingTranscriptSegment(text: "clearly.", startTime: 7.3, endTime: 7.6, confidence: 0.9, speaker: "Participants")
+        ]
+
+        let transcript = MeetingTranscript(
+            sessionID: "test_session",
+            localeIdentifier: "en-US",
+            generatedAt: Date(),
+            fullText: "Hello everyone. Good morning! Can you hear me? Yes clearly.",
+            segments: segments
+        )
+
+        let plainText = transcript.formattedPlainText()
+        let expectedLines = [
+            "# Bitz Meeting Transcript (test_session)",
+            "Locale: en-US",
+            "",
+            "[00:01] You: Hello everyone.",
+            "[00:03] Participants: Good morning!",
+            "[00:05] You: Can you hear me?",
+            "[00:07] Participants: Yes clearly.",
+            ""
+        ]
+        XCTAssertEqual(plainText, expectedLines.joined(separator: "\n"))
+    }
+
+    func testSliceAudioBoostGainScalingAndClipping() throws {
+        let sampleRate: Double = 48_000
+        let format = MeetingTrackWriter.canonicalPCMFormat
+        let tempDir = FileManager.default.temporaryDirectory
+        let sourceURL = tempDir.appendingPathComponent("test_boost_src_\(UUID().uuidString).caf")
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+
+        let frameCount: AVAudioFrameCount = 48_000 // 1 second
+        let sourceFile = try AVAudioFile(
+            forWriting: sourceURL,
+            settings: [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: 2,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false
+            ],
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+        buffer.frameLength = frameCount
+        // Populate channel 0 with 0.20 and channel 1 with 0.70
+        let ch0 = buffer.floatChannelData![0]
+        let ch1 = buffer.floatChannelData![1]
+        for i in 0..<Int(frameCount) {
+            ch0[i] = 0.20
+            ch1[i] = 0.70
+        }
+        try sourceFile.write(from: buffer)
+
+        // Slice with boostGain: 2.5. 0.20 * 2.5 = 0.50. 0.70 * 2.5 = 1.75 -> clipped to 1.0
+        let sliceURL = try SpeechFrameworkTranscriptionService.sliceAudio(
+            from: sourceURL,
+            startSeconds: 0.0,
+            durationSeconds: 0.5,
+            boostGain: 2.5
+        )
+        defer { try? FileManager.default.removeItem(at: sliceURL) }
+
+        let slicedFile = try AVAudioFile(forReading: sliceURL)
+        let readBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(slicedFile.length))!
+        try slicedFile.read(into: readBuffer)
+
+        let readCh0 = readBuffer.floatChannelData![0]
+        let readCh1 = readBuffer.floatChannelData![1]
+        XCTAssertEqual(readCh0[100], 0.50, accuracy: 0.02)
+        XCTAssertEqual(readCh1[100], 1.00, accuracy: 0.02)
+    }
+
+    func testTranscribeDualTrackMergesAndSortsChronologically() async throws {
+        struct DualMockService: MeetingTranscriptionProviding {
+            func transcribe(
+                audioFileURL: URL,
+                sessionID: String,
+                locale: Locale?
+            ) async throws -> MeetingTranscript {
+                MeetingTranscript(
+                    sessionID: sessionID,
+                    localeIdentifier: locale?.identifier ?? "en-US",
+                    generatedAt: Date(),
+                    fullText: "Fallback audio",
+                    segments: []
+                )
+            }
+
+            func transcribeDualTrack(
+                micURL: URL?,
+                systemURL: URL?,
+                fallbackURL: URL,
+                sessionID: String,
+                locale: Locale?
+            ) async throws -> MeetingTranscript {
+                let micSegments = [
+                    MeetingTranscriptSegment(text: "Hello", startTime: 1.0, endTime: 1.5, confidence: 0.9, speaker: "You"),
+                    MeetingTranscriptSegment(text: "there", startTime: 1.6, endTime: 2.0, confidence: 0.9, speaker: "You")
+                ]
+                let systemSegments = [
+                    MeetingTranscriptSegment(text: "Hi", startTime: 2.5, endTime: 2.8, confidence: 0.9, speaker: "Participants"),
+                    MeetingTranscriptSegment(text: "Bitz", startTime: 2.9, endTime: 3.2, confidence: 0.9, speaker: "Participants")
+                ]
+                let merged = (micSegments + systemSegments).sorted { $0.startTime < $1.startTime }
+                return MeetingTranscript(
+                    sessionID: sessionID,
+                    localeIdentifier: "en-US",
+                    generatedAt: Date(),
+                    fullText: merged.map(\.text).joined(separator: " "),
+                    segments: merged
+                )
+            }
+        }
+
+        let service = DualMockService()
+        let result = try await service.transcribeDualTrack(
+            micURL: URL(fileURLWithPath: "/tmp/mic.caf"),
+            systemURL: URL(fileURLWithPath: "/tmp/system.caf"),
+            fallbackURL: URL(fileURLWithPath: "/tmp/audio.m4a"),
+            sessionID: "sess_dual",
+            locale: Locale(identifier: "en-US")
+        )
+
+        XCTAssertEqual(result.segments.count, 4)
+        XCTAssertEqual(result.segments[0].speaker, "You")
+        XCTAssertEqual(result.segments[1].speaker, "You")
+        XCTAssertEqual(result.segments[2].speaker, "Participants")
+        XCTAssertEqual(result.segments[3].speaker, "Participants")
+        XCTAssertEqual(result.fullText, "Hello there Hi Bitz")
+    }
 }

@@ -431,4 +431,26 @@ final class MeetingTrackWriterTests: XCTestCase {
         }
         XCTAssertThrowsError(try MeetingTrackMixer.verifyMix(at: tempDir.appendingPathComponent("missing.m4a"), expectedFrames: 0))
     }
+
+    func testMixSessionPreservesTracksWhenDeleteTracksIsFalseAndAppliesSystemGain() throws {
+        try writeTrack(MeetingTrackWriter.micFileName, value: 0.20, frames: 48_000)
+        try writeTrack(MeetingTrackWriter.systemFileName, value: 0.10, frames: 48_000)
+
+        // Mix with deleteTracks: false and systemGain: 2.5
+        let outcome = MeetingTrackMixer.mixSession(in: tempDir, deleteTracks: false, systemGain: 2.5)
+
+        XCTAssertTrue(outcome.mixed)
+        XCTAssertEqual(outcome.warnings, [])
+
+        // Both raw tracks must be preserved on disk for downstream transcription (#202)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent(MeetingTrackWriter.micFileName).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent(MeetingTrackWriter.systemFileName).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("audio.m4a").path))
+
+        // System audio (0.10) boosted by 2.5 is 0.25. Mic is 0.20.
+        // With dual tracks, mixBuffers uses headroomGain (0.85) on the sum (0.20 + 0.25 = 0.45), giving ~0.3825
+        let samples = try readSamples(tempDir.appendingPathComponent("audio.m4a"))
+        XCTAssertEqual(samples.count, 48_000)
+        XCTAssertEqual(samples[24_000], (0.20 + 0.10 * 2.5) * MeetingTrackMixer.headroomGain, accuracy: 0.02)
+    }
 }

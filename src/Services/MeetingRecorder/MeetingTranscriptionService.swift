@@ -47,6 +47,27 @@ public protocol MeetingTranscriptionProviding: Sendable {
         sessionID: String,
         locale: Locale?
     ) async throws -> MeetingTranscript
+
+    /// Transcribes both local microphone (`mic.caf`) and system output (`system.caf`) tracks with speaker attribution (#202).
+    func transcribeDualTrack(
+        micURL: URL?,
+        systemURL: URL?,
+        fallbackURL: URL,
+        sessionID: String,
+        locale: Locale?
+    ) async throws -> MeetingTranscript
+}
+
+extension MeetingTranscriptionProviding {
+    public func transcribeDualTrack(
+        micURL: URL?,
+        systemURL: URL?,
+        fallbackURL: URL,
+        sessionID: String,
+        locale: Locale?
+    ) async throws -> MeetingTranscript {
+        try await transcribe(audioFileURL: fallbackURL, sessionID: sessionID, locale: locale)
+    }
 }
 
 // MARK: - Native Apple Speech.framework On-Device Transcription Service
@@ -377,10 +398,139 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
         }
     }
 
+    /// Maximum duration (in seconds) of a single audio window passed to `SFSpeechURLRecognitionRequest`.
+    /// On-device `SFSpeechRecognitionTask` has a daemon session quota around 5 minutes; keeping each window
+    /// at 180s (3 minutes) guarantees the engine never terminates early or hits daemon session timeouts (#200).
+    public static let maxWindowDuration: TimeInterval = 180.0
+
+    /// Slices an audio file into a temporary 16-bit PCM CAF file from `startSeconds` with duration `durationSeconds`,
+    /// optionally scaling samples by `boostGain` with hard clipping at `[-1.0, 1.0]` (#202).
+    public static func sliceAudio(
+        from sourceURL: URL,
+        startSeconds: TimeInterval,
+        durationSeconds: TimeInterval,
+        boostGain: Float = 1.0
+    ) throws -> URL {
+        let sourceFile = try AVAudioFile(forReading: sourceURL)
+        let sampleRate = sourceFile.fileFormat.sampleRate
+        let totalFrames = sourceFile.length
+        let startFrame = AVAudioFramePosition(max(0, startSeconds * sampleRate))
+        guard startFrame < totalFrames else {
+            throw MeetingTranscriptionError.recognitionFailed("Slice start beyond end of audio")
+        }
+        let availableFrames = totalFrames - startFrame
+        let targetFrames = AVAudioFramePosition(durationSeconds * sampleRate)
+        let frameCount = AVAudioFrameCount(min(availableFrames, targetFrames))
+        guard frameCount > 0 else {
+            throw MeetingTranscriptionError.recognitionFailed("Empty slice requested")
+        }
+
+        sourceFile.framePosition = startFrame
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: sourceFile.processingFormat, frameCapacity: frameCount) else {
+            throw MeetingTranscriptionError.recognitionFailed("Failed to allocate PCM buffer for audio slice")
+        }
+        try sourceFile.read(into: buffer, frameCount: frameCount)
+
+        if boostGain != 1.0, let channels = buffer.floatChannelData {
+            let count = Int(buffer.frameLength)
+            for ch in 0..<Int(buffer.format.channelCount) {
+                let ptr = channels[ch]
+                for i in 0..<count {
+                    ptr[i] = max(-1.0, min(1.0, ptr[i] * boostGain))
+                }
+            }
+        }
+
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("bitz_slice_\(UUID().uuidString).caf")
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: Int(sourceFile.processingFormat.channelCount),
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false
+        ]
+        let tempFile = try AVAudioFile(forWriting: tempURL, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+        try tempFile.write(from: buffer)
+        return tempURL
+    }
+
+    /// Transcribes a single audio window file (either the original file or a temporary slice) and accumulates its utterances.
+    private func transcribeWindow(
+        audioFileURL: URL,
+        recognizer: SFSpeechRecognizer,
+        timeOffset: TimeInterval,
+        audioDuration: TimeInterval,
+        utterances: UtteranceAccumulator,
+        resolvedLocaleID: String,
+        speaker: String? = nil
+    ) async throws {
+        let timeout = Self.recognitionTimeout(forAudioDuration: audioDuration)
+        let state = WindowContinuationGate()
+        let request = Self.makeRecognitionRequest(audioFileURL: audioFileURL)
+
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                state.install(continuation)
+                @Sendable func finish(_ step: RecognitionStep) {
+                    switch step {
+                    case .accumulate:
+                        return
+                    case .finishSuccess, .finishPartial:
+                        state.finish(.success(()))
+                    case .finishFailure(let error):
+                        state.finish(.failure(error))
+                    }
+                }
+                let task = recognizer.recognitionTask(with: request) { result, error in
+                    let utterance = result.map { result in
+                        (
+                            segments: result.bestTranscription.segments.map { seg in
+                                MeetingTranscriptSegment(
+                                    text: seg.substring,
+                                    startTime: timeOffset + seg.timestamp,
+                                    endTime: timeOffset + seg.timestamp + seg.duration,
+                                    confidence: seg.confidence,
+                                    speaker: speaker
+                                )
+                            },
+                            text: result.bestTranscription.formattedString,
+                            isFinal: result.isFinal
+                        )
+                    }
+                    finish(Self.recognitionStep(result: utterance, error: error, utterances: utterances, resolvedLocaleID: resolvedLocaleID))
+                }
+                state.attach(task)
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
+                    finish(Self.recognitionStep(result: nil, error: MeetingTranscriptionError.timedOut(timeout), utterances: utterances, resolvedLocaleID: resolvedLocaleID))
+                }
+            }
+        } onCancel: {
+            state.finish(.failure(CancellationError()))
+        }
+    }
+
     public func transcribe(
         audioFileURL: URL,
         sessionID: String,
         locale: Locale? = nil
+    ) async throws -> MeetingTranscript {
+        try await transcribe(
+            audioFileURL: audioFileURL,
+            sessionID: sessionID,
+            locale: locale,
+            speaker: nil,
+            boostGain: 1.0
+        )
+    }
+
+    public func transcribe(
+        audioFileURL: URL,
+        sessionID: String,
+        locale: Locale? = nil,
+        speaker: String? = nil,
+        boostGain: Float = 1.0
     ) async throws -> MeetingTranscript {
         if let locale, !Self.isRecognizerReady(for: locale) {
             _ = await Self.ensureOnDeviceAssetInstalled(for: locale)
@@ -404,56 +554,178 @@ public struct SpeechFrameworkTranscriptionService: MeetingTranscriptionProviding
         }
 
         let resolvedLocaleID = recognizer.locale.identifier
-        let request = Self.makeRecognitionRequest(audioFileURL: audioFileURL)
-
         let audioDuration = (try? AVAudioFile(forReading: audioFileURL))
             .map { Double($0.length) / max(1, $0.fileFormat.sampleRate) } ?? 0
-        let timeout = Self.recognitionTimeout(forAudioDuration: audioDuration)
-        let state = ContinuationGate()
+
         let utterances = UtteranceAccumulator()
-        // The task is cancelled if its recognizer is deallocated, so keep it alive until the result arrives
+        // The task is cancelled if its recognizer is deallocated, so keep it alive until all results arrive
         defer { withExtendedLifetime(recognizer) {} }
 
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                state.install(continuation)
-                @Sendable func finish(_ step: RecognitionStep) {
-                    switch step {
-                    case .accumulate:
-                        return
-                    case .finishSuccess:
-                        state.finish(.success(utterances.transcript(sessionID: sessionID, localeIdentifier: resolvedLocaleID)))
-                    case .finishPartial(let warning):
-                        state.finish(.success(utterances.transcript(sessionID: sessionID, localeIdentifier: resolvedLocaleID, warning: warning)))
-                    case .finishFailure(let error):
-                        state.finish(.failure(error))
-                    }
-                }
-                let task = recognizer.recognitionTask(with: request) { result, error in
-                    let utterance = result.map { result in
-                        (
-                            segments: result.bestTranscription.segments.map { seg in
-                                MeetingTranscriptSegment(
-                                    text: seg.substring,
-                                    startTime: seg.timestamp,
-                                    endTime: seg.timestamp + seg.duration,
-                                    confidence: seg.confidence
-                                )
-                            },
-                            text: result.bestTranscription.formattedString,
-                            isFinal: result.isFinal
-                        )
-                    }
-                    finish(Self.recognitionStep(result: utterance, error: error, utterances: utterances, resolvedLocaleID: resolvedLocaleID))
-                }
-                state.attach(task)
-                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
-                    finish(Self.recognitionStep(result: nil, error: MeetingTranscriptionError.timedOut(timeout), utterances: utterances, resolvedLocaleID: resolvedLocaleID))
+        var capturedWarning: String?
+
+        if audioDuration <= Self.maxWindowDuration {
+            // Short meeting: single-pass recognition. If boostGain is requested, generate a boosted slice.
+            let targetURL: URL
+            let isTempSlice: Bool
+            if boostGain != 1.0, let sliceURL = try? Self.sliceAudio(from: audioFileURL, startSeconds: 0, durationSeconds: audioDuration, boostGain: boostGain) {
+                targetURL = sliceURL
+                isTempSlice = true
+            } else {
+                targetURL = audioFileURL
+                isTempSlice = false
+            }
+            defer {
+                if isTempSlice {
+                    try? FileManager.default.removeItem(at: targetURL)
                 }
             }
-        } onCancel: {
-            state.finish(.failure(CancellationError()))
+
+            do {
+                try await transcribeWindow(
+                    audioFileURL: targetURL,
+                    recognizer: recognizer,
+                    timeOffset: 0.0,
+                    audioDuration: audioDuration,
+                    utterances: utterances,
+                    resolvedLocaleID: resolvedLocaleID,
+                    speaker: speaker
+                )
+            } catch let error as MeetingTranscriptionError {
+                guard !utterances.isEmpty else { throw error }
+                capturedWarning = "Transcript may be incomplete: \(error.localizedDescription)"
+            }
+        } else {
+            // Long meeting (> maxWindowDuration): slice into sequential time windows to prevent on-device daemon timeout (#200)
+            var windowStart: Double = 0.0
+            while windowStart < audioDuration {
+                try Task.checkCancellation()
+                let windowEnd = min(audioDuration, windowStart + Self.maxWindowDuration)
+                let duration = windowEnd - windowStart
+
+                guard let sliceURL = try? Self.sliceAudio(from: audioFileURL, startSeconds: windowStart, durationSeconds: duration, boostGain: boostGain) else {
+                    break
+                }
+                defer { try? FileManager.default.removeItem(at: sliceURL) }
+
+                do {
+                    try await transcribeWindow(
+                        audioFileURL: sliceURL,
+                        recognizer: recognizer,
+                        timeOffset: windowStart,
+                        audioDuration: duration,
+                        utterances: utterances,
+                        resolvedLocaleID: resolvedLocaleID,
+                        speaker: speaker
+                    )
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    if utterances.isEmpty && windowEnd >= audioDuration {
+                        throw error
+                    }
+                    capturedWarning = "Transcript may be incomplete: \(error.localizedDescription)"
+                }
+
+                windowStart = windowEnd
+            }
         }
+
+        return utterances.transcript(sessionID: sessionID, localeIdentifier: resolvedLocaleID, warning: capturedWarning)
+    }
+
+    /// Transcribes both local microphone (`mic.caf`) and system output (`system.caf`) tracks sequentially with speaker attribution (#202).
+    public func transcribeDualTrack(
+        micURL: URL?,
+        systemURL: URL?,
+        fallbackURL: URL,
+        sessionID: String,
+        locale: Locale?
+    ) async throws -> MeetingTranscript {
+        let hasMic = micURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        let hasSystem = systemURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+
+        // If neither track exists, fall back to fallbackURL (typically audio.m4a)
+        guard hasMic || hasSystem else {
+            return try await transcribe(audioFileURL: fallbackURL, sessionID: sessionID, locale: locale)
+        }
+
+        // If only one track exists, transcribe that single track
+        if hasMic && !hasSystem, let micURL {
+            return try await transcribe(audioFileURL: micURL, sessionID: sessionID, locale: locale, speaker: "You")
+        }
+        if hasSystem && !hasMic, let systemURL {
+            return try await transcribe(audioFileURL: systemURL, sessionID: sessionID, locale: locale, speaker: "Participants", boostGain: 2.5)
+        }
+
+        // Both tracks exist: transcribe sequentially to avoid on-device Neural Engine contention (#202)
+        guard let micURL, let systemURL else {
+            return try await transcribe(audioFileURL: fallbackURL, sessionID: sessionID, locale: locale)
+        }
+
+        var micTranscript: MeetingTranscript?
+        var systemTranscript: MeetingTranscript?
+        var warnings: [String] = []
+
+        do {
+            micTranscript = try await transcribe(
+                audioFileURL: micURL,
+                sessionID: sessionID,
+                locale: locale,
+                speaker: "You"
+            )
+        } catch {
+            warnings.append("Mic transcription note: \(error.localizedDescription)")
+        }
+
+        do {
+            systemTranscript = try await transcribe(
+                audioFileURL: systemURL,
+                sessionID: sessionID,
+                locale: locale,
+                speaker: "Participants",
+                boostGain: 2.5
+            )
+        } catch {
+            warnings.append("Participants transcription note: \(error.localizedDescription)")
+        }
+
+        // If both failed, try fallbackURL
+        if micTranscript == nil && systemTranscript == nil {
+            return try await transcribe(audioFileURL: fallbackURL, sessionID: sessionID, locale: locale)
+        }
+
+        // Merge segments chronologically
+        let micSegments = micTranscript?.segments ?? []
+        let systemSegments = systemTranscript?.segments ?? []
+        let allSegments = (micSegments + systemSegments).sorted { a, b in
+            if a.startTime != b.startTime {
+                return a.startTime < b.startTime
+            }
+            return a.endTime < b.endTime
+        }
+
+        let combinedFullText: String
+        if !allSegments.isEmpty {
+            combinedFullText = allSegments.map(\.text).joined(separator: " ")
+        } else {
+            combinedFullText = [micTranscript?.fullText, systemTranscript?.fullText]
+                .compactMap { $0 }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+        }
+
+        let chosenLocaleID = micTranscript?.localeIdentifier ?? systemTranscript?.localeIdentifier ?? locale?.identifier ?? "en-US"
+        let allWarnings = warnings + [micTranscript?.warning, systemTranscript?.warning].compactMap { $0 }
+        let mergedWarning = allWarnings.isEmpty ? nil : allWarnings.joined(separator: " ")
+
+        return MeetingTranscript(
+            sessionID: sessionID,
+            localeIdentifier: chosenLocaleID,
+            generatedAt: Date(),
+            fullText: combinedFullText,
+            segments: allSegments,
+            warning: mergedWarning
+        )
     }
 }
 
@@ -532,6 +804,49 @@ final class ContinuationGate: @unchecked Sendable {
         self.task = nil
         lock.unlock()
         // A timeout can finish with a partial transcript (success) while the task still runs, so always cancel it
+        task?.cancel()
+        continuation?.resume(with: result)
+    }
+}
+
+/// Resumes a window transcription continuation exactly once across the result callback, timeout, and cancellation.
+final class WindowContinuationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var task: SFSpeechRecognitionTask?
+    private var outcome: Result<Void, Error>?
+
+    func install(_ continuation: CheckedContinuation<Void, Error>) {
+        lock.lock()
+        if let outcome {
+            lock.unlock()
+            continuation.resume(with: outcome)
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func attach(_ task: SFSpeechRecognitionTask) {
+        lock.lock()
+        let isFinished = outcome != nil
+        if !isFinished { self.task = task }
+        lock.unlock()
+        if isFinished { task.cancel() }
+    }
+
+    func finish(_ result: Result<Void, Error>) {
+        lock.lock()
+        guard outcome == nil else {
+            lock.unlock()
+            return
+        }
+        outcome = result
+        let continuation = self.continuation
+        let task = self.task
+        self.continuation = nil
+        self.task = nil
+        lock.unlock()
         task?.cancel()
         continuation?.resume(with: result)
     }

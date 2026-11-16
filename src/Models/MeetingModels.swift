@@ -84,6 +84,10 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
     public var transcriptLocale: String?
     /// File name of the transcript copy in the export folder (nil when export is off or failed). No path is stored.
     public var transcriptExportFileName: String?
+    /// Name of the active audio output device at recording time (#198).
+    public var outputDeviceName: String?
+    /// Categorized type of the audio output device (e.g. headphones, builtInSpeakers, virtualDriver) (#198).
+    public var outputDeviceType: String?
 
     public init(
         sessionID: String,
@@ -99,7 +103,9 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
         mixedTracks: [String]? = nil,
         transcriptStatus: TranscriptStatus = .pending,
         transcriptLocale: String? = nil,
-        transcriptExportFileName: String? = nil
+        transcriptExportFileName: String? = nil,
+        outputDeviceName: String? = nil,
+        outputDeviceType: String? = nil
     ) {
         self.sessionID = sessionID
         self.startedAt = startedAt
@@ -115,6 +121,8 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
         self.transcriptStatus = transcriptStatus
         self.transcriptLocale = transcriptLocale
         self.transcriptExportFileName = transcriptExportFileName
+        self.outputDeviceName = outputDeviceName
+        self.outputDeviceType = outputDeviceType
     }
 
     enum CodingKeys: String, CodingKey {
@@ -132,6 +140,8 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
         case transcriptStatus = "transcript_status"
         case transcriptLocale = "transcript_locale"
         case transcriptExportFileName = "transcript_export_file_name"
+        case outputDeviceName = "output_device_name"
+        case outputDeviceType = "output_device_type"
     }
 
     /// Keys written by earlier builds of this branch.
@@ -170,6 +180,8 @@ public struct MeetingRecordingMetadata: Codable, Equatable, Sendable {
         transcriptLocale = try optional(.transcriptLocale, .transcriptLocale)
         transcriptExportFileName = try container.decodeIfPresent(String.self, forKey: .transcriptExportFileName)
             ?? legacy.decodeIfPresent(String.self, forKey: .transcriptExportPath).map { ($0 as NSString).lastPathComponent }
+        outputDeviceName = try container.decodeIfPresent(String.self, forKey: .outputDeviceName)
+        outputDeviceType = try container.decodeIfPresent(String.self, forKey: .outputDeviceType)
     }
 }
 
@@ -179,24 +191,38 @@ public struct MeetingTranscriptSegment: Codable, Equatable, Sendable {
     public let startTime: TimeInterval
     public let endTime: TimeInterval
     public let confidence: Float
+    /// Attributed speaker (e.g. "You" for local mic or "Participants" for system audio). Nil for un-attributed single-track audio (#202).
+    public let speaker: String?
 
     enum CodingKeys: String, CodingKey {
         case text
         case startTime = "start_time"
         case endTime = "end_time"
         case confidence
+        case speaker
     }
 
     public init(
         text: String,
         startTime: TimeInterval,
         endTime: TimeInterval,
-        confidence: Float
+        confidence: Float,
+        speaker: String? = nil
     ) {
         self.text = text
         self.startTime = startTime
         self.endTime = endTime
         self.confidence = confidence
+        self.speaker = speaker
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        text = try container.decode(String.self, forKey: .text)
+        startTime = try container.decode(TimeInterval.self, forKey: .startTime)
+        endTime = try container.decode(TimeInterval.self, forKey: .endTime)
+        confidence = try container.decode(Float.self, forKey: .confidence)
+        speaker = try container.decodeIfPresent(String.self, forKey: .speaker)
     }
 }
 
@@ -257,28 +283,38 @@ public struct MeetingTranscript: Codable, Equatable, Sendable {
         }
 
         if !segments.isEmpty {
-            // Group word-level segments into readable ~10-second or sentence-ending phrases
+            // Group word-level segments into readable phrases, breaking on speaker changes, sentence ends, or ~10s duration
             var currentPhraseWords: [String] = []
             var currentStart: TimeInterval = segments[0].startTime
+            var currentSpeaker: String? = segments[0].speaker
+
+            func flushCurrentPhrase() {
+                guard !currentPhraseWords.isEmpty else { return }
+                let stamp = MeetingFormatting.formatDuration(Int(currentStart.rounded(.down)))
+                let prefix = currentSpeaker.map { "\($0): " } ?? ""
+                lines.append("[\(stamp)] \(prefix)\(currentPhraseWords.joined(separator: " "))")
+                currentPhraseWords.removeAll(keepingCapacity: true)
+            }
+
             for segment in segments {
                 let word = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !word.isEmpty else { continue }
                 if currentPhraseWords.isEmpty {
                     currentStart = segment.startTime
+                    currentSpeaker = segment.speaker
+                } else if segment.speaker != currentSpeaker {
+                    flushCurrentPhrase()
+                    currentStart = segment.startTime
+                    currentSpeaker = segment.speaker
                 }
                 currentPhraseWords.append(word)
                 let elapsedInPhrase = segment.endTime - currentStart
                 let endsSentence = word.hasSuffix(".") || word.hasSuffix("?") || word.hasSuffix("!")
                 if endsSentence || elapsedInPhrase >= 10.0 || currentPhraseWords.count >= 18 {
-                    let stamp = MeetingFormatting.formatDuration(Int(currentStart.rounded(.down)))
-                    lines.append("[\(stamp)] \(currentPhraseWords.joined(separator: " "))")
-                    currentPhraseWords.removeAll(keepingCapacity: true)
+                    flushCurrentPhrase()
                 }
             }
-            if !currentPhraseWords.isEmpty {
-                let stamp = MeetingFormatting.formatDuration(Int(currentStart.rounded(.down)))
-                lines.append("[\(stamp)] \(currentPhraseWords.joined(separator: " "))")
-            }
+            flushCurrentPhrase()
         } else {
             lines.append(fullText.trimmingCharacters(in: .whitespacesAndNewlines))
         }

@@ -14,8 +14,11 @@ public final class MeetingRecorderService: ObservableObject {
     /// The meeting bubble on screen, nil when none (#43 D5).
     @Published public private(set) var bubble: MeetingBubble?
     @Published public private(set) var statusMessage: String = "Ready to record meetings locally (transcribed on-device)."
+    /// Currently detected default audio output device (speakers, headphones, external display, or virtual driver) (#198).
+    @Published public private(set) var activeOutputDevice: AudioOutputDeviceInfo
 
     public let settingsStore: MeetingSettingsStore
+    public let audioDeviceDetector: (any AudioDeviceDetecting)?
     private let captureEngine: any MeetingAudioCapturing
     private let transcriptionService: any MeetingTranscriptionProviding
     private let permissionChecker: any MeetingPermissionChecking
@@ -81,6 +84,7 @@ public final class MeetingRecorderService: ObservableObject {
         transcriptionService: (any MeetingTranscriptionProviding)? = nil,
         permissionChecker: (any MeetingPermissionChecking)? = nil,
         licensingService: (any LicensingServiceProtocol)? = nil,
+        audioDeviceDetector: (any AudioDeviceDetecting)? = nil,
         nowProvider: @escaping () -> Date = { Date() },
         freeBytesProvider: @escaping (URL) -> Int64? = MeetingRecorderService.availableBytes(at:),
         onRevealURL: @escaping (URL) -> Void = { url in
@@ -94,11 +98,19 @@ public final class MeetingRecorderService: ObservableObject {
         self.permissionChecker = resolvedPermissionChecker
         self.permissionState = resolvedPermissionChecker.currentPermissions()
         self.licensingService = licensingService
+        let resolvedAudioDeviceDetector = audioDeviceDetector ?? SystemAudioDeviceDetector()
+        self.audioDeviceDetector = resolvedAudioDeviceDetector
+        self.activeOutputDevice = resolvedAudioDeviceDetector.currentOutputDevice
         self.nowProvider = nowProvider
         self.freeBytesProvider = freeBytesProvider
         self.onRevealURL = onRevealURL
         self.captureEngine.onCaptureInterrupted = { [weak self] source, message in
             Task { @MainActor in self?.handleCaptureInterruption(source, message) }
+        }
+        resolvedAudioDeviceDetector.onOutputDeviceChanged = { [weak self] updated in
+            Task { @MainActor in
+                self?.activeOutputDevice = updated
+            }
         }
     }
 
@@ -310,7 +322,9 @@ public final class MeetingRecorderService: ObservableObject {
             detectedAppNames: activeDetectedApps,
             audioFileNames: MeetingTrackMixer.audioFileNames(in: sessionDir),
             audioStatus: .unmixed,
-            transcriptStatus: shouldTranscribe ? .pending : .skipped
+            transcriptStatus: shouldTranscribe ? .pending : .skipped,
+            outputDeviceName: activeOutputDevice.name,
+            outputDeviceType: activeOutputDevice.deviceType.rawValue
         )
         // Written before the mix, so a quit that cuts the mix short still leaves metadata pointing at the tracks
         Self.writeMetadata(metadata, to: metadataURL)
@@ -320,10 +334,11 @@ public final class MeetingRecorderService: ObservableObject {
             warnings.append("Bitz quit before mixing the audio tracks; they are kept and mixed at next launch.")
             mixed = false
         } else {
-            // Off the main actor; if quit's safety net cuts it short, mic.caf / system.caf stay intact
+            // Off the main actor; if quit's safety net cuts it short, mic.caf / system.caf stay intact.
+            // If shouldTranscribe is true, preserve tracks for dual-track speaker attribution (#202).
             let beforeMix = metadata
             let outcome = await Task.detached(priority: .userInitiated) {
-                MeetingTrackMixer.mixSession(in: sessionDir) { names in
+                MeetingTrackMixer.mixSession(in: sessionDir, deleteTracks: !shouldTranscribe, systemGain: 2.5) { names in
                     var recorded = beforeMix
                     recorded.mixedTracks = names
                     Self.writeMetadata(recorded, to: metadataURL)
@@ -501,7 +516,15 @@ public final class MeetingRecorderService: ObservableObject {
         statusMessage = "✨ Meeting saved! Transcribing audio on-device..."
         present(.transcribing)
         transcribingMetadata = (metadata, metadataURL)
-        defer { transcribingMetadata = nil }
+        defer {
+            transcribingMetadata = nil
+            // Clean up any raw tracks covered by audio.m4a once transcription attempt finishes (#202)
+            MeetingTrackMixer.tracksCoveredByMix(in: sessionDir, mixedTracks: metadata.mixedTracks)
+                .forEach { try? FileManager.default.removeItem(at: $0) }
+            metadata.audioStatus = MeetingTrackMixer.audioStatus(in: sessionDir)
+            metadata.audioFileNames = MeetingTrackMixer.audioFileNames(in: sessionDir)
+            Self.writeMetadata(metadata, to: metadataURL)
+        }
         // Only a Transcribe Again finds transcript files here; a fresh session folder has none. Read before the run:
         // the previous export is replaced only while it still holds exactly these bytes (not edited by hand).
         let previousTxtURL = sessionDir.appendingPathComponent("transcript.txt")
@@ -523,10 +546,17 @@ public final class MeetingRecorderService: ObservableObject {
             ? nil
             : (localeOverride ?? settingsStore.transcriptionLocaleIdentifier.map(Locale.init(identifier:)))
         lastFailedTranscriptionLocaleID = nil
+        let micURL = sessionDir.appendingPathComponent(MeetingTrackWriter.micFileName)
+        let systemURL = sessionDir.appendingPathComponent(MeetingTrackWriter.systemFileName)
+        let hasMic = FileManager.default.fileExists(atPath: micURL.path)
+        let hasSystem = FileManager.default.fileExists(atPath: systemURL.path)
+
         let transcript: MeetingTranscript
         do {
-            transcript = try await transcriptionService.transcribe(
-                audioFileURL: audioURL,
+            transcript = try await transcriptionService.transcribeDualTrack(
+                micURL: hasMic ? micURL : nil,
+                systemURL: hasSystem ? systemURL : nil,
+                fallbackURL: audioURL,
                 sessionID: sessionID,
                 locale: chosenLocale
             )

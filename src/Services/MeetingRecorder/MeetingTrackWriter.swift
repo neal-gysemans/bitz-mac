@@ -363,12 +363,14 @@ public enum MeetingTrackMixer {
         }
     }
 
-    /// Mixes the session's tracks into `audio.m4a`, verifies it, then deletes the tracks that went in.
+    /// Mixes the session's tracks into `audio.m4a`, verifies it, then optionally deletes the tracks that went in.
     /// `recordMixedTracks` gets their names just before `audio.m4a` appears, so the caller can store them in metadata
     /// and a cleanup cut short later deletes only those. On failure the tracks stay and `mixed` is false;
     /// `warnings` also lists tracks that could not be read.
     static func mixSession(
         in sessionDirectory: URL,
+        deleteTracks: Bool = true,
+        systemGain: Float = 2.5,
         recordMixedTracks: ([String]) -> Void = { _ in }
     ) -> (mixed: Bool, mixedTracks: [String], warnings: [String]) {
         var warnings: [String] = []
@@ -378,6 +380,7 @@ public enum MeetingTrackMixer {
             let mixedTracks = try mixTracks(
                 trackURLs(in: sessionDirectory),
                 into: outputURL,
+                systemGain: systemGain,
                 warnings: &warnings,
                 beforeCommit: { recordMixedTracks($0.map(\.lastPathComponent)) }
             )
@@ -386,7 +389,9 @@ public enum MeetingTrackMixer {
                 try? FileManager.default.removeItem(at: outputURL)
                 throw MeetingTrackMixError.tracksChanged
             }
-            mixedTracks.forEach { try? FileManager.default.removeItem(at: $0) }
+            if deleteTracks {
+                mixedTracks.forEach { try? FileManager.default.removeItem(at: $0) }
+            }
             return (true, mixedTracks.map(\.lastPathComponent), warnings)
         } catch {
             warnings.append("Audio tracks were kept, but mixing them into audio.m4a failed: \(error.localizedDescription)")
@@ -405,6 +410,7 @@ public enum MeetingTrackMixer {
         into outputURL: URL,
         chunkFrames: AVAudioFrameCount = chunkFrames,
         outputSettings: [String: Any] = m4aSettings,
+        systemGain: Float = 1.0,
         warnings: inout [String],
         beforeCommit: ([URL]) -> Void = { _ in }
     ) throws -> [URL] {
@@ -443,6 +449,16 @@ public enum MeetingTrackMixer {
                     for (reader, buffer) in zip(readers, buffers) {
                         if reader.framePosition < reader.length {
                             try reader.read(into: buffer, frameCount: chunkFrames)
+                            if systemGain != 1.0 && reader.url.lastPathComponent == MeetingTrackWriter.systemFileName,
+                               let channels = buffer.floatChannelData {
+                                let count = Int(buffer.frameLength)
+                                for ch in 0..<Int(buffer.format.channelCount) {
+                                    let ptr = channels[ch]
+                                    for i in 0..<count {
+                                        ptr[i] = max(-1.0, min(1.0, ptr[i] * systemGain))
+                                    }
+                                }
+                            }
                         } else {
                             buffer.frameLength = 0
                         }
