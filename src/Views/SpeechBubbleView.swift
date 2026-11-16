@@ -1,21 +1,25 @@
 import SwiftUI
 
-/// What Bitz's speech bubble shows, in priority order: Agent Monitor popup, update alert, thermal warning (`FR-004`),
-/// meeting recorder bubble (#43 D5), other wellness text and personality commentary, then telemetry carousel (T016).
-public enum SpeechBubbleContent {
+/// What Bitz's speech bubble shows, in priority order: Agent Monitor popup, calendar agenda alert (#186), update alert,
+/// thermal warning (`FR-004`), meeting recorder bubble (#43 D5), other wellness text and personality commentary,
+/// then telemetry carousel (T016).
+public enum SpeechBubbleContent: Equatable {
     case agentPopup(AgentPopupState)
+    case agenda(CalendarAgendaAlert)
     case update(GitHubReleaseInfo)
     case meeting(MeetingBubble)
     case wellness(String)
     case carousel(String)
 
-    /// Update alert, agent warning, and meeting bubbles with buttons are the only bubbles that take clicks.
+    /// Update alert, agent warning, calendar agenda alerts, and meeting bubbles with buttons are the only bubbles that take clicks.
     public var isInteractive: Bool {
         switch self {
         case .update:
             return true
         case .agentPopup(let popup):
             return popup.kind == .warning
+        case .agenda(let alert):
+            return alert.isInteractive
         case .meeting(let bubble):
             return bubble.isInteractive
         case .wellness, .carousel:
@@ -34,6 +38,7 @@ public enum SpeechBubbleContent {
     public static func current(
         engine: WellnessPointEngine,
         agentMonitor: AgentMonitorService,
+        calendarService: CalendarAgendaService? = nil,
         updateStore: AppUpdateStore,
         telemetryDashboard: TelemetryDashboardService,
         telemetrySettings: TelemetrySettingsStore,
@@ -41,6 +46,9 @@ public enum SpeechBubbleContent {
     ) -> SpeechBubbleContent? {
         if let popup = agentMonitor.activePopup {
             return .agentPopup(popup)
+        }
+        if let alert = calendarService?.activeAlert {
+            return .agenda(alert)
         }
         if updateStore.isSpeechBubbleAlertActive, let release = updateStore.latestRelease {
             return .update(release)
@@ -76,6 +84,7 @@ public struct SpeechBubbleView: View {
     public let telemetryDashboard: TelemetryDashboardService
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
     @ObservedObject public var paletteStore: AvatarPaletteStore
+    @ObservedObject public var calendarService: CalendarAgendaService
     @ObservedObject public var meetingRecorder: MeetingRecorderService
 
     public init(
@@ -86,7 +95,8 @@ public struct SpeechBubbleView: View {
         telemetryDashboard: TelemetryDashboardService,
         telemetrySettings: TelemetrySettingsStore,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
-        meetingRecorder: MeetingRecorderService
+        meetingRecorder: MeetingRecorderService,
+        calendarService: CalendarAgendaService? = nil
     ) {
         self.paletteStore = paletteStore
         self.meetingRecorder = meetingRecorder
@@ -96,6 +106,7 @@ public struct SpeechBubbleView: View {
         self.updateStore = updateStore
         self.telemetryDashboard = telemetryDashboard
         self.telemetrySettings = telemetrySettings
+        self.calendarService = calendarService ?? CalendarAgendaService(storeProvider: MockCalendarEventStore())
     }
 
     public var body: some View {
@@ -118,6 +129,8 @@ public struct SpeechBubbleView: View {
                 let colors = agentPopupColors(for: popup.kind)
                 textBubble(popup.text, fill: colors.fill, stroke: colors.stroke)
             }
+        } else if let alert = calendarService.activeAlert {
+            agendaBubbleView(for: alert)
         } else if updateStore.isSpeechBubbleAlertActive, let release = updateStore.latestRelease {
             updateBubbleView(for: release)
         } else if let thermal = SpeechBubbleContent.thermalWarning(engine) {
@@ -139,6 +152,63 @@ public struct SpeechBubbleView: View {
         } else {
             EmptyView()
         }
+    }
+
+    private func agendaBubbleView(for alert: CalendarAgendaAlert) -> some View {
+        let accentColor = Color(red: 0.20, green: 0.70, blue: 1.0)
+        let bgColor = Color(red: 0.05, green: 0.08, blue: 0.14).opacity(0.96)
+        return VStack(spacing: 5) {
+            Text(alert.message)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .multilineTextAlignment(.center)
+                .lineLimit(4)
+                .minimumScaleFactor(0.75)
+                .foregroundStyle(Color.white)
+
+            HStack(spacing: 6) {
+                if let event = alert.event, let _ = alert.meetingURL {
+                    Button(action: { calendarService.joinMeeting(for: event) }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "video.fill")
+                                .font(.system(size: 8))
+                            Text("JOIN")
+                                .font(.system(size: 8, weight: .heavy, design: .monospaced))
+                        }
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color(red: 0.10, green: 0.85, blue: 0.45)))
+                        .foregroundStyle(Color.black)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Join Meeting")
+                }
+
+                Button(action: { calendarService.dismissAlert() }) {
+                    Text(alert.meetingURL != nil ? "LATER" : "GOT IT")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Group {
+                                if alert.meetingURL != nil {
+                                    Capsule().stroke(Color.gray.opacity(0.6), lineWidth: 1)
+                                } else {
+                                    Capsule().fill(accentColor)
+                                }
+                            }
+                        )
+                        .foregroundStyle(alert.meetingURL != nil ? Color.white.opacity(0.85) : Color.black)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(alert.meetingURL != nil ? "Dismiss meeting alert later" : "Acknowledge alert")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: Self.maxBubbleWidth)
+        .background(RoundedRectangle(cornerRadius: 8).fill(bgColor))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(accentColor, lineWidth: 1.5))
+        .shadow(color: accentColor.opacity(0.6), radius: 6)
     }
 
     private func textBubble(_ text: String, fill: Color, stroke: Color) -> some View {

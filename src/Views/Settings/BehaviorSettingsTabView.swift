@@ -7,18 +7,21 @@ public struct BehaviorSettingsTabView: View {
     @ObservedObject public var activityMonitor: ActivityMonitorService
     @ObservedObject public var flowShieldSettings: FlowShieldSettingsStore
     @ObservedObject public var flowShieldService: FlowShieldService
+    @ObservedObject public var calendarService: CalendarAgendaService
 
     public init(
         engine: WellnessPointEngine,
         activityMonitor: ActivityMonitorService,
         flowShieldSettings: FlowShieldSettingsStore? = nil,
-        flowShieldService: FlowShieldService? = nil
+        flowShieldService: FlowShieldService? = nil,
+        calendarService: CalendarAgendaService? = nil
     ) {
         self.engine = engine
         self.activityMonitor = activityMonitor
         let resolvedSettings = flowShieldSettings ?? FlowShieldSettingsStore()
         self.flowShieldSettings = resolvedSettings
         self.flowShieldService = flowShieldService ?? FlowShieldService(settingsStore: resolvedSettings)
+        self.calendarService = calendarService ?? CalendarAgendaService()
     }
 
     public var body: some View {
@@ -56,7 +59,10 @@ public struct BehaviorSettingsTabView: View {
             // Section 2: Auto Flow Shield (macOS Focus)
             flowShieldCard
 
-            // Section 3: Application Classification Rules
+            // Section 3: macOS Calendar & Agenda (#186)
+            calendarAgendaCard
+
+            // Section 4: Application Classification Rules
             settingsCard(title: "Application Productivity Rules", systemImage: "app.badge.checkmark") {
                 VStack(alignment: .leading, spacing: 12) {
                     if let frontmost = activityMonitor.lastFrontmostAppName {
@@ -302,6 +308,181 @@ public struct BehaviorSettingsTabView: View {
             .padding(.vertical, 4)
             .background(badgeColor.opacity(0.15))
             .foregroundStyle(badgeColor)
+            .cornerRadius(6)
+    }
+
+    // MARK: - Calendar & Agenda Section (#186)
+
+    private var calendarAgendaCard: some View {
+        settingsCard(title: "macOS Calendar & Agenda", systemImage: "calendar.badge.clock") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Enable Calendar Agenda")
+                            .font(.subheadline.bold())
+                        Text("Surfaces upcoming meeting countdowns, 1-click video join, and daily schedule briefs.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Toggle(
+                        "",
+                        isOn: Binding(
+                            get: { calendarService.settingsStore.isEnabled },
+                            set: { newValue in
+                                if newValue {
+                                    if calendarService.authorizationStatus == .notDetermined {
+                                        Task {
+                                            _ = await calendarService.requestAuthorization()
+                                        }
+                                    } else if calendarService.authorizationStatus.isAuthorized {
+                                        calendarService.settingsStore.setEnabled(true)
+                                        Task { await calendarService.refreshEvents() }
+                                    } else {
+                                        calendarService.settingsStore.setEnabled(true)
+                                    }
+                                } else {
+                                    calendarService.settingsStore.setEnabled(false)
+                                }
+                            }
+                        )
+                    )
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .accessibilityLabel("Enable Calendar Agenda")
+                }
+
+                HStack {
+                    Text("Permission Status:")
+                        .font(.subheadline)
+                    Spacer()
+                    calendarStatusBadge
+                }
+
+                if calendarService.authorizationStatus == .denied || calendarService.authorizationStatus == .restricted {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Calendar Access Denied")
+                                .font(.caption.bold())
+                            Text("Grant access in macOS System Settings > Privacy & Security > Calendars to see upcoming meetings.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Open Privacy Settings") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .controlSize(.small)
+                    }
+                    .padding(10)
+                    .background(Color.orange.opacity(0.12))
+                    .cornerRadius(8)
+                }
+
+                if calendarService.settingsStore.isEnabled && calendarService.authorizationStatus.isAuthorized {
+                    Divider()
+
+                    // Reminder Notice Offset Picker
+                    HStack {
+                        Text("Meeting Reminder Notice:")
+                            .font(.subheadline)
+                        Spacer()
+                        Picker(
+                            "",
+                            selection: Binding(
+                                get: { calendarService.settingsStore.reminderOffsetMinutes },
+                                set: { calendarService.settingsStore.setReminderOffsetMinutes($0) }
+                            )
+                        ) {
+                            Text("5 minutes before").tag(5)
+                            Text("10 minutes before (Default)").tag(10)
+                            Text("15 minutes before").tag(15)
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 200)
+                    }
+
+                    // Toggles
+                    Toggle(
+                        "Morning Agenda Brief (after 8:00 AM)",
+                        isOn: Binding(
+                            get: { calendarService.settingsStore.isMorningBriefEnabled },
+                            set: { calendarService.settingsStore.setMorningBriefEnabled($0) }
+                        )
+                    )
+                    .font(.subheadline)
+
+                    Toggle(
+                        "Tomorrow Radar Preview (after 5:30 PM)",
+                        isOn: Binding(
+                            get: { calendarService.settingsStore.isEveningPreviewEnabled },
+                            set: { calendarService.settingsStore.setEveningPreviewEnabled($0) }
+                        )
+                    )
+                    .font(.subheadline)
+
+                    Toggle(
+                        "1-Click Join Button for Video Calls (Zoom, Meet, Teams)",
+                        isOn: Binding(
+                            get: { calendarService.settingsStore.showMeetingURLQuickJoin },
+                            set: { calendarService.settingsStore.setShowMeetingURLQuickJoin($0) }
+                        )
+                    )
+                    .font(.subheadline)
+
+                    HStack {
+                        if !calendarService.todayEvents.isEmpty {
+                            Text("\(calendarService.todayEvents.count) event\(calendarService.todayEvents.count == 1 ? "" : "s") loaded today")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("No events scheduled today")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            Task {
+                                await calendarService.refreshEvents()
+                            }
+                        } label: {
+                            Label(calendarService.isRefreshing ? "Refreshing..." : "Refresh Calendar", systemImage: "arrow.clockwise")
+                        }
+                        .controlSize(.small)
+                        .disabled(calendarService.isRefreshing)
+                    }
+                }
+            }
+        }
+    }
+
+    private var calendarStatusBadge: some View {
+        let status = calendarService.authorizationStatus
+        let (color, text): (Color, String) = {
+            switch status {
+            case .fullAccess:
+                return (.green, "Connected (Full Access)")
+            case .notDetermined:
+                return (.secondary, "Not Connected")
+            case .restricted:
+                return (.orange, "Restricted")
+            case .denied:
+                return (.red, "Access Denied")
+            case .writeOnly:
+                return (.orange, "Write Only")
+            }
+        }()
+
+        return Text(text)
+            .font(.caption.bold())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(color.opacity(0.15))
+            .foregroundStyle(color)
             .cornerRadius(6)
     }
 

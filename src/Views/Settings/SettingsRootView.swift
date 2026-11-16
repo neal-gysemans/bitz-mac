@@ -51,6 +51,7 @@ public struct SettingsRootView: View {
     @ObservedObject public var paletteStore: AvatarPaletteStore
     @ObservedObject public var characterStore: AvatarCharacterStore
     @ObservedObject public var personalitySettings: PersonalitySettingsStore
+    @ObservedObject public var calendarService: CalendarAgendaService
     @ObservedObject public var licensingService: LicensingService
     @ObservedObject public var meetingRecorder: MeetingRecorderService
 
@@ -78,6 +79,7 @@ public struct SettingsRootView: View {
         personalitySettings: PersonalitySettingsStore? = nil,
         licensingService: LicensingService? = nil,
         meetingRecorder: MeetingRecorderService,
+        calendarService: CalendarAgendaService? = nil,
         initialTab: SettingsTab = .general
     ) {
         self._selectedTab = State(initialValue: initialTab)
@@ -86,6 +88,7 @@ public struct SettingsRootView: View {
         self.paletteStore = paletteStore
         self.characterStore = characterStore
         self.personalitySettings = personalitySettings ?? PersonalitySettingsStore()
+        self.calendarService = calendarService ?? CalendarAgendaService()
         self.licensingService = licensingService ?? LicensingService()
         self.meetingRecorder = meetingRecorder
         self.engine = engine
@@ -227,7 +230,8 @@ public struct SettingsRootView: View {
                 engine: engine,
                 activityMonitor: activityMonitor,
                 flowShieldSettings: flowShieldSettings,
-                flowShieldService: flowShieldService
+                flowShieldService: flowShieldService,
+                calendarService: calendarService
             )
         case .agents:
             AgentsSettingsTabView(

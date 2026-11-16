@@ -74,6 +74,10 @@ public final class SpeechBubblePanel: NSPanel {
         false
     }
 
+    /// Determines whether the given bubble content requires mouse interactivity (buttons clickable, FR-008).
+    nonisolated public static func isInteractiveContent(_ content: SpeechBubbleContent?) -> Bool {
+        content?.isInteractive ?? false
+    }
     /// Whether this panel is currently configured to accept mouse events.
     public var isInteractive: Bool {
         get { !ignoresMouseEvents }

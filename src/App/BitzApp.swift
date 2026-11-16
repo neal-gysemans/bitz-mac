@@ -34,6 +34,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
     public let approvalStore: AgentApprovalStore
     public let appActivator: any AppActivating
     public let diffViewer: any DiffViewing
+    public let calendarSettings: CalendarSettingsStore
+    public let calendarService: CalendarAgendaService
     public let licensingService: LicensingService
     public let meetingRecorder: MeetingRecorderService
     public var meetingSettings: MeetingSettingsStore { meetingRecorder.settingsStore }
@@ -98,6 +100,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         diffViewer: (any DiffViewing)? = nil,
         licensingService: LicensingService? = nil,
         meetingRecorder: MeetingRecorderService? = nil,
+        calendarSettings: CalendarSettingsStore? = nil,
+        calendarService: CalendarAgendaService? = nil,
         userDefaults: UserDefaults = .standard
     ) {
         self.userDefaults = userDefaults
@@ -112,6 +116,9 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         self.approvalStore = resolvedApprovalStore
         self.appActivator = appActivator ?? WorkspaceAppActivator()
         self.diffViewer = diffViewer ?? SystemDiffViewer()
+        let resolvedCalendarSettings = calendarSettings ?? CalendarSettingsStore(userDefaults: userDefaults)
+        self.calendarSettings = resolvedCalendarSettings
+        self.calendarService = calendarService ?? CalendarAgendaService(settingsStore: resolvedCalendarSettings)
         self.paletteStore = paletteStore ?? AvatarPaletteStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
         self.characterStore = characterStore ?? AvatarCharacterStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
         let resolvedPersonalitySettings = personalitySettings ?? PersonalitySettingsStore(
@@ -223,14 +230,15 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             self?.agentMonitor.hookActionMessage = nil
             self?.agentMonitor.isHookActionError = false
         }
-        // An agent popup, pending approval, or meeting bubble can show buttons; a thermal warning hides the meeting bubble's
-        self.bubbleInteractivityCancellable = Publishers.Merge5(
-            self.updateStore.$isSpeechBubbleAlertActive.map { _ in () },
-            self.agentMonitor.$activePopup.map { _ in () },
-            self.approvalStore.$activeRequest.map { _ in () },
-            self.meetingRecorder.$bubble.map { _ in () },
-            self.engine.$currentState.map { $0 == .overheating }.removeDuplicates().map { _ in () }
-        )
+        // An agent popup, pending approval, calendar alert, or meeting bubble can show buttons; a thermal warning hides the meeting bubble's
+        self.bubbleInteractivityCancellable = Publishers.MergeMany([
+            self.updateStore.$isSpeechBubbleAlertActive.map { _ in () }.eraseToAnyPublisher(),
+            self.agentMonitor.$activePopup.map { _ in () }.eraseToAnyPublisher(),
+            self.approvalStore.$activeRequest.map { _ in () }.eraseToAnyPublisher(),
+            self.calendarService.$activeAlert.map { _ in () }.eraseToAnyPublisher(),
+            self.meetingRecorder.$bubble.map { _ in () }.eraseToAnyPublisher(),
+            self.engine.$currentState.map { $0 == .overheating }.removeDuplicates().map { _ in () }.eraseToAnyPublisher()
+        ])
         .receive(on: DispatchQueue.main)
         .sink { [weak self] in
             self?.updatePanelsInteractivity()
@@ -297,6 +305,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.triggerPersonalityTick(bypassRateLimit: false)
+                self?.calendarService.checkDailyBriefs(continuousWorkMinutes: self?.engine.continuousWorkMinutes ?? 0)
             }
 
         self.personalityEnabledCancellable = self.personalitySettings.$isEnabled
@@ -400,6 +409,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         let currentContent = SpeechBubbleContent.current(
             engine: engine,
             agentMonitor: agentMonitor,
+            calendarService: calendarService,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
@@ -421,6 +431,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         activityMonitor.startMonitoring()
         agentMonitor.startMonitoring()
         telemetryDashboard.start()
+        calendarService.start()
         updateStore.startPeriodicChecks()
         Task { [meetingRecorder] in
             await meetingRecorder.runLaunchMaintenance()
@@ -669,6 +680,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
                 personalitySettings: personalitySettings,
                 licensingService: licensingService,
                 meetingRecorder: meetingRecorder,
+                calendarService: calendarService,
                 initialTab: tab ?? .general
             ),
             replacingContent: tab != nil
@@ -898,7 +910,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
                     telemetryDashboard: telemetryDashboard,
                     telemetrySettings: telemetrySettings,
                     paletteStore: paletteStore,
-                    meetingRecorder: meetingRecorder
+                    meetingRecorder: meetingRecorder,
+                    calendarService: calendarService
                 ),
                 approvalStore: approvalStore,
                 agentMonitor: agentMonitor,
@@ -1331,6 +1344,7 @@ struct BitzMenuBarContentView: View {
             .keyboardShortcut("q", modifiers: [.command])
         }
     }
+
 }
 
 /// SwiftUI `App` definition providing a lightweight Menu Bar status item for inspecting

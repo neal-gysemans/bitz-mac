@@ -70,6 +70,36 @@ final class MascotOverlayLayoutTests: XCTestCase {
         try assertBubbleFitsItsWindow(fixture.bubbleView)
     }
 
+    func testAgendaBubbleWithJoinButtonAtLargestScaleIsNotClippedByItsWindow() throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        fixture.scaleStore.setScale(AvatarScaleStore.maxScaleFactor)
+        let event = CalendarEventSnapshot(
+            id: "m1",
+            title: "Sprint Retrospective & Roadmap Planning",
+            startDate: Date().addingTimeInterval(600),
+            endDate: Date().addingTimeInterval(2400),
+            meetingURL: URL(string: "https://meet.google.com/abc-defg-hij")
+        )
+        fixture.showAgendaAlert(CalendarAgendaAlert(
+            kind: .upcomingMeeting,
+            message: "Meeting in 10m: Sprint Retrospective & Roadmap Planning 📅",
+            event: event,
+            meetingURL: event.meetingURL
+        ))
+        XCTAssertNotNil(fixture.calendarService.activeAlert, "Agenda alert must be showing")
+        try assertBubbleFitsItsWindow(fixture.bubbleView)
+    }
+
+    func testAgendaBriefBubbleIsNotClippedByItsWindow() throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        fixture.showAgendaAlert(CalendarAgendaAlert(
+            kind: .morningBrief,
+            message: "Good morning! 4 meetings scheduled today starting with Standup at 09:30 📅"
+        ))
+        XCTAssertNotNil(fixture.calendarService.activeAlert, "Morning brief must be showing")
+        try assertBubbleFitsItsWindow(fixture.bubbleView)
+    }
+
     func testMascotWithWarningVisorStaysInsidePanel() throws {
         let fixture = OverlayFixture(defaults: defaults)
         fixture.engine.setWarningVisor(active: true)

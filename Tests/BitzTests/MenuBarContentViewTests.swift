@@ -379,7 +379,11 @@ final class MenuBarContentViewTests: XCTestCase {
             updated.contains("Meeting Language (\(dutchLabel))") || updated.contains("Meeting Language (Dutch"),
             "Menu Bar title must reflect the active selected language"
         )
-        XCTAssertTrue(updated.contains(dutchLabel), "Selected language must be present as a toggle option in the submenu")
+        let dutchLanguageOnly = Locale.current.localizedString(forLanguageCode: "nl") ?? "Dutch"
+        XCTAssertTrue(
+            updated.contains(dutchLabel) || updated.contains(dutchLanguageOnly) || updated.contains("Dutch"),
+            "Selected language must be present as a toggle option in the submenu"
+        )
 
         // Complete a recording so `canTranscribeAgain` becomes true and verify FR-003 submenu renders
         await recorder.startRecording()

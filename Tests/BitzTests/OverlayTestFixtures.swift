@@ -18,6 +18,8 @@ final class OverlayFixture {
     let updateStore: AppUpdateStore
     let telemetrySettings: TelemetrySettingsStore
     let telemetryDashboard: TelemetryDashboardService
+    let calendarSettings: CalendarSettingsStore
+    let calendarService: CalendarAgendaService
     let meetingRecorder: MeetingRecorderService
 
     static let release = GitHubReleaseInfo(
@@ -61,6 +63,13 @@ final class OverlayFixture {
             agents: AgentTelemetry(activeCount: 3),
             cpu: CPUTelemetry(loadPercentage: 12, temperatureCelsius: 52)
         )
+        calendarSettings = CalendarSettingsStore(userDefaults: defaults)
+        calendarService = CalendarAgendaService(storeProvider: MockCalendarEventStore(status: .fullAccess), settingsStore: calendarSettings)
+    }
+
+    func showAgendaAlert(_ alert: CalendarAgendaAlert) {
+        calendarSettings.setEnabled(true)
+        calendarService.setActiveAlertForTesting(alert)
     }
 
     func showApprovalPopup(_ message: String) {
@@ -96,7 +105,8 @@ final class OverlayFixture {
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
-            meetingRecorder: meetingRecorder
+            meetingRecorder: meetingRecorder,
+            calendarService: calendarService
         )
     }
 }
