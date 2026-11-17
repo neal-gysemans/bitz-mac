@@ -1,11 +1,16 @@
 import SwiftUI
 import AppKit
 
-/// Settings tab for managing AI Coding Agent detection, speech bubble popups, and Claude Code hook installation.
+/// Settings tab for managing AI Coding Agent detection, speech bubble popups, Claude Code hook installation, and GitHub notifications.
 public struct AgentsSettingsTabView: View {
     @ObservedObject public var agentMonitor: AgentMonitorService
+    @ObservedObject public var githubService: GitHubNotificationService
     public var claudeSettingsURL: URL
     public var licensingService: (any LicensingServiceProtocol)?
+
+    @State private var patInput: String = ""
+    @State private var patActionMessage: String? = nil
+    @State private var isPATActionError: Bool = false
 
     /// Agents whose window picker sits on Custom; needed because a preset value would otherwise snap the picker back.
     @State private var customWindowAgentIDs: Set<String> = []
@@ -22,10 +27,12 @@ public struct AgentsSettingsTabView: View {
 
     public init(
         agentMonitor: AgentMonitorService,
+        githubService: GitHubNotificationService? = nil,
         claudeSettingsURL: URL = AgentHookInstaller.defaultClaudeSettingsURL,
         licensingService: (any LicensingServiceProtocol)? = nil
     ) {
         self.agentMonitor = agentMonitor
+        self.githubService = githubService ?? GitHubNotificationService()
         self.claudeSettingsURL = claudeSettingsURL
         self.licensingService = licensingService
     }
@@ -240,7 +247,235 @@ public struct AgentsSettingsTabView: View {
                     }
                 }
             }
+
+            // Section 5: GitHub Notifications & PR/CI Watcher (#188)
+            githubSection
         }
+    }
+
+    // MARK: - GitHub Notifications Section (#188)
+
+    private var githubSection: some View {
+        settingsCard(title: "GitHub Notifications & PR Watcher", systemImage: "chevron.left.forwardslash.chevron.right") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Enable GitHub Watcher")
+                            .font(.subheadline.bold())
+                        Text("Surfaces floating cyber-bubbles for review requests, CI failures, and PR status.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Toggle(
+                        "",
+                        isOn: Binding(
+                            get: { githubService.settingsStore.isEnabled },
+                            set: { newValue in
+                                githubService.settingsStore.setEnabled(newValue)
+                                if newValue {
+                                    githubService.start()
+                                } else {
+                                    githubService.stop()
+                                }
+                            }
+                        )
+                    )
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .accessibilityLabel("Enable GitHub Watcher")
+                }
+
+                HStack {
+                    Text("Connection Status:")
+                        .font(.subheadline)
+                    Spacer()
+                    githubStatusBadge
+                }
+
+                if githubService.settingsStore.isEnabled {
+                    Divider()
+
+                    // Auth mode
+                    HStack {
+                        Text("Authentication Mode:")
+                            .font(.subheadline)
+                        Spacer()
+                        Picker(
+                            "",
+                            selection: Binding(
+                                get: { githubService.settingsStore.authMode },
+                                set: { githubService.settingsStore.setAuthMode($0) }
+                            )
+                        ) {
+                            Text("Auto (GitHub CLI 'gh')").tag(GitHubAuthMode.auto)
+                            Text("Personal Access Token (PAT)").tag(GitHubAuthMode.manualPAT)
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 220)
+                    }
+
+                    if githubService.settingsStore.authMode == .manualPAT || !githubService.authState.isAuthenticated {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Personal Access Token (PAT):")
+                                .font(.caption.bold())
+                            HStack(spacing: 8) {
+                                SecureField("ghp_xxxxxxxxxxxx", text: $patInput)
+                                    .textFieldStyle(.roundedBorder)
+
+                                Button("Save Token") {
+                                    do {
+                                        try githubService.credentialsStore.saveManualPAT(patInput)
+                                        patInput = ""
+                                        patActionMessage = "Token saved to Keychain!"
+                                        isPATActionError = false
+                                        Task {
+                                            await githubService.checkAuthentication()
+                                            if githubService.authState.isAuthenticated {
+                                                await githubService.pollNotificationsOnce()
+                                            }
+                                        }
+                                    } catch {
+                                        patActionMessage = "Save failed: \(error.localizedDescription)"
+                                        isPATActionError = true
+                                    }
+                                }
+                                .disabled(patInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                                if githubService.credentialsStore.hasManualPAT() {
+                                    Button("Delete") {
+                                        do {
+                                            try githubService.credentialsStore.deleteManualPAT()
+                                            patActionMessage = "Token removed from Keychain."
+                                            isPATActionError = false
+                                            Task { await githubService.checkAuthentication() }
+                                        } catch {
+                                            patActionMessage = "Delete failed: \(error.localizedDescription)"
+                                            isPATActionError = true
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let msg = patActionMessage {
+                                Text(msg)
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(isPATActionError ? Color.red : Color.green)
+                            }
+
+                            hint("Stored securely in macOS Keychain. Requires 'repo', 'read:org', and 'notifications' scopes.")
+                        }
+                        .padding(10)
+                        .background(Color.secondary.opacity(0.08))
+                        .cornerRadius(8)
+                    }
+
+                    // Polling interval
+                    HStack {
+                        Text("Check Frequency:")
+                            .font(.subheadline)
+                        Spacer()
+                        Picker(
+                            "",
+                            selection: Binding(
+                                get: { githubService.settingsStore.pollIntervalSeconds },
+                                set: { githubService.settingsStore.setPollIntervalSeconds($0) }
+                            )
+                        ) {
+                            Text("Every 30 seconds").tag(30)
+                            Text("Every 60 seconds (Default)").tag(60)
+                            Text("Every 2 minutes").tag(120)
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 200)
+                    }
+
+                    // Notification types
+                    Toggle(
+                        "Review Requests (e.g. '@teammate requested your review')",
+                        isOn: Binding(
+                            get: { githubService.settingsStore.notifyReviewRequests },
+                            set: { githubService.settingsStore.setNotifyReviewRequests($0) }
+                        )
+                    )
+                    .font(.subheadline)
+
+                    Toggle(
+                        "CI / Build Failures (Actions runs, Check suites)",
+                        isOn: Binding(
+                            get: { githubService.settingsStore.notifyCIFailures },
+                            set: { githubService.settingsStore.setNotifyCIFailures($0) }
+                        )
+                    )
+                    .font(.subheadline)
+
+                    Toggle(
+                        "CI / Build Passes",
+                        isOn: Binding(
+                            get: { githubService.settingsStore.notifyCIPasses },
+                            set: { githubService.settingsStore.setNotifyCIPasses($0) }
+                        )
+                    )
+                    .font(.subheadline)
+
+                    Toggle(
+                        "PR Status Announcements (Merged, Closed, Approvals)",
+                        isOn: Binding(
+                            get: { githubService.settingsStore.notifyPRStatus },
+                            set: { githubService.settingsStore.setNotifyPRStatus($0) }
+                        )
+                    )
+                    .font(.subheadline)
+
+                    HStack {
+                        Button {
+                            Task {
+                                await githubService.checkAuthentication()
+                                if githubService.authState.isAuthenticated {
+                                    await githubService.pollNotificationsOnce()
+                                }
+                            }
+                        } label: {
+                            Label(githubService.isPolling ? "Checking..." : "Check Notifications Now", systemImage: "arrow.clockwise")
+                        }
+                        .controlSize(.small)
+                        .disabled(githubService.isPolling)
+
+                        Spacer()
+
+                        Button {
+                            githubService.triggerTestAlert()
+                        } label: {
+                            Label("Test Bubble Alert", systemImage: "sparkles")
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
+        }
+    }
+
+    private var githubStatusBadge: some View {
+        let (color, text): (Color, String) = {
+            switch githubService.authState {
+            case .authenticated(let username, let source):
+                return (.green, "Connected as @\(username) (\(source.rawValue))")
+            case .validating:
+                return (.orange, "Validating...")
+            case .unauthenticated:
+                return (.secondary, "Not Connected")
+            case .error(let msg):
+                return (.red, "Error: \(msg)")
+            }
+        }()
+
+        return Text(text)
+            .font(.caption.bold())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(color.opacity(0.15))
+            .foregroundStyle(color)
+            .cornerRadius(6)
     }
 
     // MARK: - Helpers

@@ -100,6 +100,37 @@ final class MascotOverlayLayoutTests: XCTestCase {
         try assertBubbleFitsItsWindow(fixture.bubbleView)
     }
 
+    func testGitHubAlertBubbleIsNotClippedByItsWindow() throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        let alert = GitHubEventAlert(
+            kind: .reviewRequested,
+            title: "🔍 Review Requested",
+            message: "Review requested on bitz-mac: #188 (GitHub Notifications & PR Watcher)",
+            repositoryName: "bitz-mac",
+            targetURL: URL(string: "https://github.com/AkramKs/bitz-mac/issues/188"),
+            actionTitle: "VIEW PR"
+        )
+        fixture.showGitHubAlert(alert)
+        XCTAssertNotNil(fixture.githubService.activeAlert, "GitHub alert must be showing")
+        try assertBubbleFitsItsWindow(fixture.bubbleView)
+    }
+
+    func testGitHubAlertBubbleAtLargestScaleIsNotClippedByItsWindow() throws {
+        let fixture = OverlayFixture(defaults: defaults)
+        fixture.scaleStore.setScale(AvatarScaleStore.maxScaleFactor)
+        let alert = GitHubEventAlert(
+            kind: .ciFailed,
+            title: "🚨 CI Failed",
+            message: "CI failed on bitz-mac: Run Integration & Snapshot Tests (branch: feat/auth)",
+            repositoryName: "bitz-mac",
+            targetURL: URL(string: "https://github.com/AkramKs/bitz-mac/actions/runs/12345"),
+            actionTitle: "VIEW LOGS"
+        )
+        fixture.showGitHubAlert(alert)
+        XCTAssertNotNil(fixture.githubService.activeAlert, "GitHub alert must be showing")
+        try assertBubbleFitsItsWindow(fixture.bubbleView)
+    }
+
     func testMascotWithWarningVisorStaysInsidePanel() throws {
         let fixture = OverlayFixture(defaults: defaults)
         fixture.engine.setWarningVisor(active: true)

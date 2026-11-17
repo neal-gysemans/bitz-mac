@@ -36,6 +36,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
     public let diffViewer: any DiffViewing
     public let calendarSettings: CalendarSettingsStore
     public let calendarService: CalendarAgendaService
+    public let githubSettings: GitHubSettingsStore
+    public let githubService: GitHubNotificationService
     public let licensingService: LicensingService
     public let meetingRecorder: MeetingRecorderService
     public let whisperModelManager: WhisperKitModelManager
@@ -104,6 +106,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         meetingRecorder: MeetingRecorderService? = nil,
         calendarSettings: CalendarSettingsStore? = nil,
         calendarService: CalendarAgendaService? = nil,
+        githubSettings: GitHubSettingsStore? = nil,
+        githubService: GitHubNotificationService? = nil,
         userDefaults: UserDefaults = .standard
     ) {
         self.userDefaults = userDefaults
@@ -129,6 +133,9 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         let resolvedCalendarSettings = calendarSettings ?? CalendarSettingsStore(userDefaults: userDefaults)
         self.calendarSettings = resolvedCalendarSettings
         self.calendarService = calendarService ?? CalendarAgendaService(settingsStore: resolvedCalendarSettings)
+        let resolvedGitHubSettings = githubSettings ?? GitHubSettingsStore(userDefaults: userDefaults)
+        self.githubSettings = resolvedGitHubSettings
+        self.githubService = githubService ?? GitHubNotificationService(settingsStore: resolvedGitHubSettings)
         self.paletteStore = paletteStore ?? AvatarPaletteStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
         self.characterStore = characterStore ?? AvatarCharacterStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
         let resolvedPersonalitySettings = personalitySettings ?? PersonalitySettingsStore(
@@ -241,18 +248,23 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             self?.agentMonitor.hookActionMessage = nil
             self?.agentMonitor.isHookActionError = false
         }
-        // An agent popup, pending approval, calendar alert, or meeting bubble can show buttons; a thermal warning hides the meeting bubble's
+        // An agent popup, pending approval, calendar alert, GitHub alert, or meeting bubble can show buttons; a thermal warning hides the meeting bubble's
         self.bubbleInteractivityCancellable = Publishers.MergeMany([
             self.updateStore.$isSpeechBubbleAlertActive.map { _ in () }.eraseToAnyPublisher(),
             self.agentMonitor.$activePopup.map { _ in () }.eraseToAnyPublisher(),
             self.approvalStore.$activeRequest.map { _ in () }.eraseToAnyPublisher(),
             self.calendarService.$activeAlert.map { _ in () }.eraseToAnyPublisher(),
+            self.githubService.$activeAlert.map { _ in () }.eraseToAnyPublisher(),
             self.meetingRecorder.$bubble.map { _ in () }.eraseToAnyPublisher(),
             self.engine.$currentState.map { $0 == .overheating }.removeDuplicates().map { _ in () }.eraseToAnyPublisher()
         ])
         .receive(on: DispatchQueue.main)
         .sink { [weak self] in
             self?.updatePanelsInteractivity()
+        }
+
+        self.githubService.onPlaySound = { [weak self] event in
+            self?.audioService.play(event, bypassCooldown: true)
         }
 
         self.meetingRecorder.onPlaySound = { [weak self] event in
@@ -421,6 +433,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             engine: engine,
             agentMonitor: agentMonitor,
             calendarService: calendarService,
+            githubService: githubService,
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
@@ -443,6 +456,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         agentMonitor.startMonitoring()
         telemetryDashboard.start()
         calendarService.start()
+        githubService.start()
         updateStore.startPeriodicChecks()
         Task { [meetingRecorder] in
             await meetingRecorder.runLaunchMaintenance()
@@ -728,6 +742,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
                 meetingRecorder: meetingRecorder,
                 whisperModelManager: whisperModelManager,
                 calendarService: calendarService,
+                githubService: githubService,
                 initialTab: tab ?? .general
             ),
             replacingContent: tab != nil
@@ -970,7 +985,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
                     telemetrySettings: telemetrySettings,
                     paletteStore: paletteStore,
                     meetingRecorder: meetingRecorder,
-                    calendarService: calendarService
+                    calendarService: calendarService,
+                    githubService: githubService
                 ),
                 approvalStore: approvalStore,
                 agentMonitor: agentMonitor,

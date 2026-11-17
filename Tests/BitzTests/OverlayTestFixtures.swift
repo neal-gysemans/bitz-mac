@@ -20,6 +20,8 @@ final class OverlayFixture {
     let telemetryDashboard: TelemetryDashboardService
     let calendarSettings: CalendarSettingsStore
     let calendarService: CalendarAgendaService
+    let githubSettings: GitHubSettingsStore
+    let githubService: GitHubNotificationService
     let meetingRecorder: MeetingRecorderService
 
     static let release = GitHubReleaseInfo(
@@ -65,11 +67,22 @@ final class OverlayFixture {
         )
         calendarSettings = CalendarSettingsStore(userDefaults: defaults)
         calendarService = CalendarAgendaService(storeProvider: MockCalendarEventStore(status: .fullAccess), settingsStore: calendarSettings)
+        githubSettings = GitHubSettingsStore(userDefaults: defaults)
+        githubService = GitHubNotificationService(
+            settingsStore: githubSettings,
+            credentialsStore: GitHubCredentialsStore(tokenStorage: InMemoryGitHubTokenStorage()),
+            httpRequester: MockHTTPRequester()
+        )
     }
 
     func showAgendaAlert(_ alert: CalendarAgendaAlert) {
         calendarSettings.setEnabled(true)
         calendarService.setActiveAlertForTesting(alert)
+    }
+
+    func showGitHubAlert(_ alert: GitHubEventAlert) {
+        githubSettings.setEnabled(true)
+        githubService.setActiveAlertForTesting(alert)
     }
 
     func showApprovalPopup(_ message: String) {
@@ -106,7 +119,8 @@ final class OverlayFixture {
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
             meetingRecorder: meetingRecorder,
-            calendarService: calendarService
+            calendarService: calendarService,
+            githubService: githubService
         )
     }
 }

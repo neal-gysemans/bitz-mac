@@ -1,17 +1,18 @@
 import SwiftUI
 
-/// What Bitz's speech bubble shows, in priority order: Agent Monitor popup, calendar agenda alert (#186), update alert,
-/// thermal warning (`FR-004`), meeting recorder bubble (#43 D5), other wellness text and personality commentary,
-/// then telemetry carousel (T016).
+/// What Bitz's speech bubble shows, in priority order: Agent Monitor popup, calendar agenda alert (#186),
+/// GitHub notifications alert (#188), update alert, thermal warning (`FR-004`), meeting recorder bubble (#43 D5),
+/// other wellness text and personality commentary, then telemetry carousel (T016).
 public enum SpeechBubbleContent: Equatable {
     case agentPopup(AgentPopupState)
     case agenda(CalendarAgendaAlert)
+    case github(GitHubEventAlert)
     case update(GitHubReleaseInfo)
     case meeting(MeetingBubble)
     case wellness(String)
     case carousel(String)
 
-    /// Update alert, agent warning, calendar agenda alerts, and meeting bubbles with buttons are the only bubbles that take clicks.
+    /// Update alert, agent warning, calendar agenda alerts, GitHub alerts, and meeting bubbles with buttons are the only bubbles that take clicks.
     public var isInteractive: Bool {
         switch self {
         case .update:
@@ -19,6 +20,8 @@ public enum SpeechBubbleContent: Equatable {
         case .agentPopup(let popup):
             return popup.kind == .warning
         case .agenda(let alert):
+            return alert.isInteractive
+        case .github(let alert):
             return alert.isInteractive
         case .meeting(let bubble):
             return bubble.isInteractive
@@ -39,6 +42,7 @@ public enum SpeechBubbleContent: Equatable {
         engine: WellnessPointEngine,
         agentMonitor: AgentMonitorService,
         calendarService: CalendarAgendaService? = nil,
+        githubService: GitHubNotificationService? = nil,
         updateStore: AppUpdateStore,
         telemetryDashboard: TelemetryDashboardService,
         telemetrySettings: TelemetrySettingsStore,
@@ -49,6 +53,9 @@ public enum SpeechBubbleContent: Equatable {
         }
         if let alert = calendarService?.activeAlert {
             return .agenda(alert)
+        }
+        if let alert = githubService?.activeAlert {
+            return .github(alert)
         }
         if updateStore.isSpeechBubbleAlertActive, let release = updateStore.latestRelease {
             return .update(release)
@@ -85,6 +92,7 @@ public struct SpeechBubbleView: View {
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
     @ObservedObject public var paletteStore: AvatarPaletteStore
     @ObservedObject public var calendarService: CalendarAgendaService
+    @ObservedObject public var githubService: GitHubNotificationService
     @ObservedObject public var meetingRecorder: MeetingRecorderService
 
     public init(
@@ -96,7 +104,8 @@ public struct SpeechBubbleView: View {
         telemetrySettings: TelemetrySettingsStore,
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         meetingRecorder: MeetingRecorderService,
-        calendarService: CalendarAgendaService? = nil
+        calendarService: CalendarAgendaService? = nil,
+        githubService: GitHubNotificationService? = nil
     ) {
         self.paletteStore = paletteStore
         self.meetingRecorder = meetingRecorder
@@ -107,6 +116,7 @@ public struct SpeechBubbleView: View {
         self.telemetryDashboard = telemetryDashboard
         self.telemetrySettings = telemetrySettings
         self.calendarService = calendarService ?? CalendarAgendaService(storeProvider: MockCalendarEventStore())
+        self.githubService = githubService ?? GitHubNotificationService()
     }
 
     public var body: some View {
@@ -131,6 +141,8 @@ public struct SpeechBubbleView: View {
             }
         } else if let alert = calendarService.activeAlert {
             agendaBubbleView(for: alert)
+        } else if let alert = githubService.activeAlert {
+            githubBubbleView(for: alert)
         } else if updateStore.isSpeechBubbleAlertActive, let release = updateStore.latestRelease {
             updateBubbleView(for: release)
         } else if let thermal = SpeechBubbleContent.thermalWarning(engine) {
@@ -209,6 +221,78 @@ public struct SpeechBubbleView: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(bgColor))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(accentColor, lineWidth: 1.5))
         .shadow(color: accentColor.opacity(0.6), radius: 6)
+    }
+
+    private func githubAccentColor(for kind: GitHubEventAlert.Kind) -> Color {
+        switch kind {
+        case .reviewRequested:
+            return Color(red: 0.65, green: 0.45, blue: 1.0)
+        case .ciFailed:
+            return Color(red: 1.0, green: 0.25, blue: 0.30)
+        case .ciPassed:
+            return Color(red: 0.10, green: 0.85, blue: 0.45)
+        case .prStatus:
+            return Color(red: 0.20, green: 0.70, blue: 1.0)
+        case .mention:
+            return Color(red: 1.0, green: 0.80, blue: 0.20)
+        case .general:
+            return Color(red: 0.65, green: 0.45, blue: 1.0)
+        }
+    }
+
+    private func githubBubbleView(for alert: GitHubEventAlert) -> some View {
+        let accentColor = githubAccentColor(for: alert.kind)
+        let bgColor = Color(red: 0.05, green: 0.07, blue: 0.12).opacity(0.96)
+
+        return VStack(spacing: 5) {
+            Text(alert.message)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .multilineTextAlignment(.center)
+                .lineLimit(4)
+                .minimumScaleFactor(0.75)
+                .foregroundStyle(Color.white)
+
+            HStack(spacing: 6) {
+                if alert.targetURL != nil {
+                    Button(action: { githubService.openTargetURL(for: alert) }) {
+                        Text(alert.actionTitle)
+                            .font(.system(size: 8, weight: .heavy, design: .monospaced))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(accentColor))
+                            .foregroundStyle(Color.black)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open \(alert.actionTitle) in browser")
+                    .accessibilityLabel(alert.actionTitle)
+                }
+
+                Button(action: { githubService.dismissAlert() }) {
+                    Text("GOT IT")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Group {
+                                if alert.targetURL != nil {
+                                    Capsule().stroke(Color.gray.opacity(0.6), lineWidth: 1)
+                                } else {
+                                    Capsule().fill(accentColor)
+                                }
+                            }
+                        )
+                        .foregroundStyle(alert.targetURL != nil ? Color.white.opacity(0.85) : Color.black)
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss GitHub alert")
+                .accessibilityLabel("Dismiss GitHub Alert")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: Self.maxBubbleWidth)
+        .background(RoundedRectangle(cornerRadius: 8).fill(bgColor).shadow(color: accentColor.opacity(0.6), radius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(accentColor, lineWidth: 1.5))
     }
 
     private func textBubble(_ text: String, fill: Color, stroke: Color) -> some View {
