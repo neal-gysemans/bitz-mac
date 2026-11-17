@@ -60,6 +60,7 @@ public final class GitHubNotificationService: ObservableObject {
     public let settingsStore: GitHubSettingsStore
     public let credentialsStore: GitHubCredentialsStore
     public let httpRequester: any HTTPRequestPerforming
+    public let localGitWatcher: LocalGitEventWatcher
     public let clock: @Sendable () -> Date
 
     @Published public private(set) var authState: GitHubAuthState = .unauthenticated
@@ -93,15 +94,22 @@ public final class GitHubNotificationService: ObservableObject {
         settingsStore: GitHubSettingsStore = GitHubSettingsStore(),
         credentialsStore: GitHubCredentialsStore = GitHubCredentialsStore(),
         httpRequester: any HTTPRequestPerforming = URLSessionHTTPRequester(),
+        localGitWatcher: LocalGitEventWatcher? = nil,
         clock: @escaping @Sendable () -> Date = Date.init
     ) {
         self.settingsStore = settingsStore
         self.credentialsStore = credentialsStore
         self.httpRequester = httpRequester
+        let resolvedWatcher = localGitWatcher ?? LocalGitEventWatcher()
+        self.localGitWatcher = resolvedWatcher
         self.clock = clock
 
         self.onOpenURL = { url in
             NSWorkspace.shared.open(url)
+        }
+
+        resolvedWatcher.onEvent = { [weak self] event in
+            self?.handleLocalGitEvent(event)
         }
 
         bindSettings()
@@ -117,6 +125,10 @@ public final class GitHubNotificationService: ObservableObject {
     public func start() {
         guard settingsStore.isEnabled else { return }
 
+        if settingsStore.notifyGitActivity {
+            localGitWatcher.start(installHooks: true)
+        }
+
         Task {
             await checkAuthentication()
             if authState.isAuthenticated {
@@ -129,6 +141,7 @@ public final class GitHubNotificationService: ObservableObject {
         pollTask?.cancel()
         pollTask = nil
         isPolling = false
+        localGitWatcher.stop()
     }
 
     private func bindSettings() {
@@ -628,6 +641,48 @@ public final class GitHubNotificationService: ObservableObject {
                 presentAlert(alert)
                 break
             }
+        }
+    }
+
+    public func handleLocalGitEvent(_ event: LocalGitEvent) {
+        guard settingsStore.isEnabled, settingsStore.notifyGitActivity else { return }
+        presentAlert(makeAlert(from: event))
+    }
+
+    public func makeAlert(from event: LocalGitEvent) -> GitHubEventAlert {
+        switch event.kind {
+        case .push:
+            let remote = event.detail.isEmpty ? "origin" : event.detail
+            return GitHubEventAlert(
+                id: "local-push-\(UUID().uuidString)",
+                kind: .ciPassed,
+                title: "🚀 Code Pushed",
+                message: "Pushed \(event.repo) (\(event.branch)) → \(remote)",
+                repositoryName: event.repo,
+                targetURL: event.webURL,
+                actionTitle: "VIEW REPO"
+            )
+        case .commit:
+            let summary = event.detail.isEmpty ? "new commit" : event.detail
+            return GitHubEventAlert(
+                id: "local-commit-\(UUID().uuidString)",
+                kind: .prStatus,
+                title: "💾 Committed",
+                message: "\(event.repo) (\(event.branch)): \(summary)",
+                repositoryName: event.repo,
+                targetURL: event.webURL,
+                actionTitle: "VIEW REPO"
+            )
+        case .merge:
+            return GitHubEventAlert(
+                id: "local-merge-\(UUID().uuidString)",
+                kind: .prStatus,
+                title: "🔀 Branch Merged",
+                message: "Merged into \(event.repo) (\(event.branch))",
+                repositoryName: event.repo,
+                targetURL: event.webURL,
+                actionTitle: "VIEW REPO"
+            )
         }
     }
 
