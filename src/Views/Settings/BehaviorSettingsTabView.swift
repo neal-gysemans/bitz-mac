@@ -8,13 +8,15 @@ public struct BehaviorSettingsTabView: View {
     @ObservedObject public var flowShieldSettings: FlowShieldSettingsStore
     @ObservedObject public var flowShieldService: FlowShieldService
     @ObservedObject public var calendarService: CalendarAgendaService
+    @ObservedObject public var workShiftTracker: WorkShiftTrackerService
 
     public init(
         engine: WellnessPointEngine,
         activityMonitor: ActivityMonitorService,
         flowShieldSettings: FlowShieldSettingsStore? = nil,
         flowShieldService: FlowShieldService? = nil,
-        calendarService: CalendarAgendaService? = nil
+        calendarService: CalendarAgendaService? = nil,
+        workShiftTracker: WorkShiftTrackerService? = nil
     ) {
         self.engine = engine
         self.activityMonitor = activityMonitor
@@ -22,6 +24,7 @@ public struct BehaviorSettingsTabView: View {
         self.flowShieldSettings = resolvedSettings
         self.flowShieldService = flowShieldService ?? FlowShieldService(settingsStore: resolvedSettings)
         self.calendarService = calendarService ?? CalendarAgendaService()
+        self.workShiftTracker = workShiftTracker ?? WorkShiftTrackerService()
     }
 
     public var body: some View {
@@ -56,7 +59,10 @@ public struct BehaviorSettingsTabView: View {
                 }
             }
 
-            // Section 2: Auto Flow Shield (macOS Focus)
+            // Section 2: Work Shift & Daily Hours (#187)
+            workShiftCard
+
+            // Section 3: Auto Flow Shield (macOS Focus)
             flowShieldCard
 
             // Section 3: macOS Calendar & Agenda (#186)
@@ -154,6 +160,72 @@ public struct BehaviorSettingsTabView: View {
     }
 
     // MARK: - Auto Flow Shield Card
+
+    private var workShiftCard: some View {
+        settingsCard(title: "Work Shift & Daily Hours", systemImage: "clock.arrow.2.circlepath") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Daily Target:")
+                        .font(.subheadline)
+                    Spacer()
+                    Text(WorkShiftDialogueBank.formatHours(workShiftTracker.workdayGoalHours))
+                        .font(.subheadline.monospacedDigit().bold())
+                        .foregroundStyle(.secondary)
+                }
+
+                Slider(
+                    value: $workShiftTracker.workdayGoalHours,
+                    in: WorkShiftTrackerService.minGoalHours...WorkShiftTrackerService.maxGoalHours,
+                    step: 0.5
+                )
+                .accessibilityLabel("Daily work shift target hours")
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Today's Active Work:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(WorkShiftDialogueBank.formatDuration(workShiftTracker.dailyActiveSeconds)) / \(WorkShiftDialogueBank.formatDuration(workShiftTracker.goalSeconds))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(workShiftTracker.isGoalReachedToday ? .green : .secondary)
+                    }
+                    ProgressView(value: workShiftTracker.progressFraction)
+                        .tint(workShiftTracker.isGoalReachedToday ? .green : .accentColor)
+                }
+
+                if !workShiftTracker.weeklyHistory.isEmpty {
+                    let maxScale = max(
+                        workShiftTracker.goalSeconds,
+                        workShiftTracker.weeklyHistory.map(\.activeSeconds).max() ?? 1
+                    )
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Past 7 Days")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        HStack(alignment: .bottom, spacing: 8) {
+                            ForEach(workShiftTracker.weeklyHistory) { record in
+                                let barHeight = max(4, CGFloat(record.activeSeconds / maxScale) * 52)
+                                let reached = record.activeSeconds >= (record.goalHours * 3600)
+                                VStack(spacing: 4) {
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(reached ? Color.green : Color.accentColor.opacity(0.75))
+                                        .frame(height: barHeight)
+                                    Text(String(record.dateKey.suffix(5)))
+                                        .font(.system(size: 9, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                        }
+                        .frame(height: 70, alignment: .bottom)
+                    }
+                    .padding(.top, 4)
+                }
+            }
+        }
+    }
 
     private var flowShieldCard: some View {
         settingsCard(title: "Auto Flow Shield (macOS Focus)", systemImage: "shield.checkered") {

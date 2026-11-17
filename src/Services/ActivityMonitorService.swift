@@ -813,6 +813,7 @@ public final class ActivityMonitorService: ObservableObject {
 
     public let engine: WellnessPointEngine
     public let telemetry: ActivityTelemetryProviding
+    public let workShiftTracker: WorkShiftTrackerService?
     public let productiveBundleIDs: Set<String>
     public let idleBreakThresholdSeconds: TimeInterval
     public let overheatingTemperatureThresholdCelsius: Double
@@ -854,10 +855,13 @@ public final class ActivityMonitorService: ObservableObject {
     private var lastTabSample: (url: String?, title: String?, isVideoPlaying: Bool) = (nil, nil, false)
     private var sleepWakeObservers: [NSObjectProtocol] = []
     private var sleepRecordedAt: Date? = nil
+    private var isSystemAsleepOrLocked: Bool = false
+    private var lastWorkShiftTickAt: Date? = nil
 
     public init(
         engine: WellnessPointEngine,
         telemetry: ActivityTelemetryProviding = SystemActivityTelemetryProvider(),
+        workShiftTracker: WorkShiftTrackerService? = nil,
         productiveBundleIDs: Set<String> = ActivityMonitorService.defaultProductiveBundleIDs,
         idleBreakThresholdSeconds: TimeInterval = 60.0,
         overheatingTemperatureThresholdCelsius: Double = 80.0,
@@ -866,6 +870,7 @@ public final class ActivityMonitorService: ObservableObject {
     ) {
         self.engine = engine
         self.telemetry = telemetry
+        self.workShiftTracker = workShiftTracker
         self.productiveBundleIDs = productiveBundleIDs
         self.idleBreakThresholdSeconds = idleBreakThresholdSeconds
         self.overheatingTemperatureThresholdCelsius = overheatingTemperatureThresholdCelsius
@@ -1042,11 +1047,31 @@ public final class ActivityMonitorService: ObservableObject {
                 self?.handleSystemWakeOrUnlock()
             }
         }
-        sleepWakeObservers = [sleepObs, wakeObs, screenSleepObs, screenWakeObs]
+        let sessionResignObs = workspace.addObserver(
+            forName: NSWorkspace.sessionDidResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleSystemSleepOrLock()
+            }
+        }
+        let sessionActiveObs = workspace.addObserver(
+            forName: NSWorkspace.sessionDidBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleSystemWakeOrUnlock()
+            }
+        }
+        sleepWakeObservers = [sleepObs, wakeObs, screenSleepObs, screenWakeObs, sessionResignObs, sessionActiveObs]
     }
 
     /// Handles system or display going to sleep / screen lock.
     public func handleSystemSleepOrLock() {
+        isSystemAsleepOrLocked = true
+        lastWorkShiftTickAt = nil
         if sleepRecordedAt == nil {
             sleepRecordedAt = telemetry.now()
         }
@@ -1054,8 +1079,12 @@ public final class ActivityMonitorService: ObservableObject {
 
     /// Handles system or display wake / unlock, restoring points for offline breaks (> 2.0 min).
     public func handleSystemWakeOrUnlock() {
+        isSystemAsleepOrLocked = false
+        lastWorkShiftTickAt = nil
+        let now = telemetry.now()
+        workShiftTracker?.handleDayRolloverIfNeeded(now: now)
         guard let slept = sleepRecordedAt else { return }
-        let elapsedMinutes = max(0.0, telemetry.now().timeIntervalSince(slept) / 60.0)
+        let elapsedMinutes = max(0.0, now.timeIntervalSince(slept) / 60.0)
         sleepRecordedAt = nil
         if elapsedMinutes > 2.0 {
             engine.applyOfflineBreak(minutes: elapsedMinutes)
@@ -1074,6 +1103,7 @@ public final class ActivityMonitorService: ObservableObject {
             center.removeObserver(obs)
         }
         sleepWakeObservers.removeAll()
+        lastWorkShiftTickAt = nil
         isMonitoring = false
     }
 
@@ -1127,6 +1157,7 @@ public final class ActivityMonitorService: ObservableObject {
         let watchingMediaOrDistraction = isWatchingMediaOrDistraction
 
         if isManualOverrideActive {
+            lastWorkShiftTickAt = nil
             let state = telemetry.thermalState()
             let tempCelsius = telemetry.cpuTemperatureCelsius()
             let cpuLoad = telemetry.cpuLoadPercentage()
@@ -1137,6 +1168,15 @@ public final class ActivityMonitorService: ObservableObject {
             engine.latestCPULoadPercentage = cpuLoad
             return
         }
+
+        let shiftDelta = lastWorkShiftTickAt.map { max(0.0, currentTime.timeIntervalSince($0)) } ?? 0.0
+        lastWorkShiftTickAt = currentTime
+        workShiftTracker?.recordActivityTick(
+            deltaSeconds: shiftDelta,
+            idleSeconds: idleSeconds,
+            isSystemAsleep: isSystemAsleepOrLocked,
+            now: currentTime
+        )
 
         evaluateThermalSample()
 

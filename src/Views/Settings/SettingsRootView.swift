@@ -56,6 +56,7 @@ public struct SettingsRootView: View {
     @ObservedObject public var licensingService: LicensingService
     @ObservedObject public var meetingRecorder: MeetingRecorderService
     @ObservedObject public var whisperModelManager: WhisperKitModelManager
+    @ObservedObject public var workShiftTracker: WorkShiftTrackerService
 
     @State private var selectedTab: SettingsTab
 
@@ -84,6 +85,7 @@ public struct SettingsRootView: View {
         whisperModelManager: WhisperKitModelManager = WhisperKitModelManager(),
         calendarService: CalendarAgendaService? = nil,
         githubService: GitHubNotificationService? = nil,
+        workShiftTracker: WorkShiftTrackerService? = nil,
         initialTab: SettingsTab = .general
     ) {
         self._selectedTab = State(initialValue: initialTab)
@@ -94,6 +96,7 @@ public struct SettingsRootView: View {
         self.personalitySettings = personalitySettings ?? PersonalitySettingsStore()
         self.calendarService = calendarService ?? CalendarAgendaService()
         self.githubService = githubService ?? GitHubNotificationService()
+        self.workShiftTracker = workShiftTracker ?? WorkShiftTrackerService()
         self.licensingService = licensingService ?? LicensingService()
         self.meetingRecorder = meetingRecorder
         self.whisperModelManager = whisperModelManager
@@ -237,7 +240,8 @@ public struct SettingsRootView: View {
                 activityMonitor: activityMonitor,
                 flowShieldSettings: flowShieldSettings,
                 flowShieldService: flowShieldService,
-                calendarService: calendarService
+                calendarService: calendarService,
+                workShiftTracker: workShiftTracker
             )
         case .agents:
             AgentsSettingsTabView(

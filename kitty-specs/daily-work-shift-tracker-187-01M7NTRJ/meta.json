@@ -1,0 +1,15 @@
+{
+  "created_at": "2026-11-17T22:41:39.195305+00:00",
+  "flattened": false,
+  "friendly_name": "Daily Work Shift Tracker & 8-Hour Clock Out (#187)",
+  "mission_id": "01M7NTRJA8XDJ1ZR2G1588ZFRF",
+  "mission_number": null,
+  "mission_slug": "daily-work-shift-tracker-187-01M7NTRJ",
+  "mission_type": "software-dev",
+  "pr_bound": true,
+  "purpose_context": "This mission advances Daily Work Shift Tracker & 8-Hour Clock Out (#187) on feat/187-daily-work-shift-tracker so stakeholders can track the work from mission creation onward.",
+  "purpose_tldr": "Daily Work Shift Tracker & 8-Hour Clock Out (#187)",
+  "slug": "daily-work-shift-tracker-187-01M7NTRJ",
+  "target_branch": "feat/187-daily-work-shift-tracker",
+  "topology": "single_branch"
+}

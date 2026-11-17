@@ -8,11 +8,12 @@ public enum SpeechBubbleContent: Equatable {
     case agenda(CalendarAgendaAlert)
     case github(GitHubEventAlert)
     case update(GitHubReleaseInfo)
+    case workShift(WorkShiftAlert)
     case meeting(MeetingBubble)
     case wellness(String)
     case carousel(String)
 
-    /// Update alert, agent warning, calendar agenda alerts, GitHub alerts, and meeting bubbles with buttons are the only bubbles that take clicks.
+    /// Update alert, agent warning, calendar agenda alerts, GitHub alerts, work-shift alerts, and meeting bubbles with buttons are the only bubbles that take clicks.
     public var isInteractive: Bool {
         switch self {
         case .update:
@@ -22,6 +23,8 @@ public enum SpeechBubbleContent: Equatable {
         case .agenda(let alert):
             return alert.isInteractive
         case .github(let alert):
+            return alert.isInteractive
+        case .workShift(let alert):
             return alert.isInteractive
         case .meeting(let bubble):
             return bubble.isInteractive
@@ -46,7 +49,8 @@ public enum SpeechBubbleContent: Equatable {
         updateStore: AppUpdateStore,
         telemetryDashboard: TelemetryDashboardService,
         telemetrySettings: TelemetrySettingsStore,
-        meetingRecorder: MeetingRecorderService? = nil
+        meetingRecorder: MeetingRecorderService? = nil,
+        workShiftTracker: WorkShiftTrackerService? = nil
     ) -> SpeechBubbleContent? {
         if let popup = agentMonitor.activePopup {
             return .agentPopup(popup)
@@ -62,6 +66,9 @@ public enum SpeechBubbleContent: Equatable {
         }
         if let text = thermalWarning(engine) {
             return .wellness(text)
+        }
+        if let alert = workShiftTracker?.activeAlert {
+            return .workShift(alert)
         }
         if let bubble = meetingRecorder?.bubble {
             return .meeting(bubble)
@@ -94,6 +101,8 @@ public struct SpeechBubbleView: View {
     @ObservedObject public var calendarService: CalendarAgendaService
     @ObservedObject public var githubService: GitHubNotificationService
     @ObservedObject public var meetingRecorder: MeetingRecorderService
+    public let workShiftTracker: WorkShiftTrackerService
+    @State private var workShiftAlert: WorkShiftAlert?
 
     public init(
         engine: WellnessPointEngine,
@@ -105,7 +114,8 @@ public struct SpeechBubbleView: View {
         paletteStore: AvatarPaletteStore = AvatarPaletteStore(),
         meetingRecorder: MeetingRecorderService,
         calendarService: CalendarAgendaService? = nil,
-        githubService: GitHubNotificationService? = nil
+        githubService: GitHubNotificationService? = nil,
+        workShiftTracker: WorkShiftTrackerService? = nil
     ) {
         self.paletteStore = paletteStore
         self.meetingRecorder = meetingRecorder
@@ -117,6 +127,9 @@ public struct SpeechBubbleView: View {
         self.telemetrySettings = telemetrySettings
         self.calendarService = calendarService ?? CalendarAgendaService(storeProvider: MockCalendarEventStore())
         self.githubService = githubService ?? GitHubNotificationService()
+        let resolvedWorkShiftTracker = workShiftTracker ?? WorkShiftTrackerService()
+        self.workShiftTracker = resolvedWorkShiftTracker
+        self._workShiftAlert = State(initialValue: resolvedWorkShiftTracker.activeAlert)
     }
 
     public var body: some View {
@@ -125,6 +138,9 @@ public struct SpeechBubbleView: View {
             bubble
                 .padding(Self.glowPadding)
                 .scaleEffect(scale, anchor: .topLeading)
+        }
+        .onReceive(workShiftTracker.$activeAlert.removeDuplicates()) { alert in
+            workShiftAlert = alert
         }
     }
 
@@ -147,6 +163,8 @@ public struct SpeechBubbleView: View {
             updateBubbleView(for: release)
         } else if let thermal = SpeechBubbleContent.thermalWarning(engine) {
             textBubble(thermal, fill: Color(red: 0.75, green: 0.06, blue: 0.10).opacity(0.95), stroke: visorColor)
+        } else if let alert = workShiftAlert {
+            workShiftBubbleView(for: alert)
         } else if let meeting = meetingRecorder.bubble {
             meetingBubbleView(meeting, visorColor: visorColor)
         } else if let text = engine.displayedSpeechBubbleText {
@@ -221,6 +239,55 @@ public struct SpeechBubbleView: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(bgColor))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(accentColor, lineWidth: 1.5))
         .shadow(color: accentColor.opacity(0.6), radius: 6)
+    }
+
+    private func workShiftBubbleView(for alert: WorkShiftAlert) -> some View {
+        let accentColor = Color(red: 0.15, green: 0.90, blue: 0.65)
+        let bgColor = Color(red: 0.06, green: 0.09, blue: 0.14).opacity(0.96)
+        return VStack(spacing: 5) {
+            Text(alert.message)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .multilineTextAlignment(.center)
+                .lineLimit(5)
+                .minimumScaleFactor(0.75)
+                .foregroundStyle(Color.white)
+
+            HStack(spacing: 6) {
+                Button(action: {
+                    workShiftTracker.logOffForToday()
+                    engine.triggerPetInteraction()
+                }) {
+                    Text("LOGGING OFF")
+                        .font(.system(size: 8, weight: .heavy, design: .monospaced))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(accentColor))
+                        .foregroundStyle(Color.black)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Log off for today")
+
+                Button(action: { workShiftTracker.snooze() }) {
+                    Text("SNOOZE 30M")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().stroke(Color.gray.opacity(0.6), lineWidth: 1))
+                        .foregroundStyle(Color.white.opacity(0.85))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Snooze clock-out reminder for 30 minutes")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: Self.maxBubbleWidth)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(bgColor)
+                .shadow(color: accentColor.opacity(0.6), radius: 6)
+        )
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(accentColor, lineWidth: 1.5))
     }
 
     private func githubAccentColor(for kind: GitHubEventAlert.Kind) -> Color {

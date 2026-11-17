@@ -42,6 +42,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
     public let meetingRecorder: MeetingRecorderService
     public let whisperModelManager: WhisperKitModelManager
     public let taskKittenRunner: TaskKittenRunnerService
+    public let workShiftTracker: WorkShiftTrackerService
     public var meetingSettings: MeetingSettingsStore { meetingRecorder.settingsStore }
     private var isAwaitingTerminationReply = false
     @Published public private(set) var menuBarTitle: String = "Bitz"
@@ -154,7 +155,13 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         self.fileDropService = fileDropService ?? FileDropInboxService()
         self.riveController = riveController
         self.engine = WellnessPointEngine(riveController: riveController, userDefaults: userDefaults)
-        self.activityMonitor = ActivityMonitorService(engine: self.engine, telemetry: telemetryProvider)
+        let resolvedWorkShiftTracker = WorkShiftTrackerService(userDefaults: userDefaults)
+        self.workShiftTracker = resolvedWorkShiftTracker
+        self.activityMonitor = ActivityMonitorService(
+            engine: self.engine,
+            telemetry: telemetryProvider,
+            workShiftTracker: resolvedWorkShiftTracker
+        )
         self.scaleStore = scaleStore
         self.opacityStore = opacityStore
         self.positionStore = positionStore
@@ -255,6 +262,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             self.approvalStore.$activeRequest.map { _ in () }.eraseToAnyPublisher(),
             self.calendarService.$activeAlert.map { _ in () }.eraseToAnyPublisher(),
             self.githubService.$activeAlert.map { _ in () }.eraseToAnyPublisher(),
+            self.workShiftTracker.$activeAlert.map { _ in () }.eraseToAnyPublisher(),
             self.meetingRecorder.$bubble.map { _ in () }.eraseToAnyPublisher(),
             self.engine.$currentState.map { $0 == .overheating }.removeDuplicates().map { _ in () }.eraseToAnyPublisher()
         ])
@@ -265,6 +273,10 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
 
         self.githubService.onPlaySound = { [weak self] event in
             self?.audioService.play(event, bypassCooldown: true)
+        }
+
+        self.workShiftTracker.onGoalReached = { [weak self] in
+            self?.audioService.play(.allAgentsDone, bypassCooldown: true)
         }
 
         self.meetingRecorder.onPlaySound = { [weak self] event in
@@ -437,7 +449,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             updateStore: updateStore,
             telemetryDashboard: telemetryDashboard,
             telemetrySettings: telemetrySettings,
-            meetingRecorder: meetingRecorder
+            meetingRecorder: meetingRecorder,
+            workShiftTracker: workShiftTracker
         )
         let bubbleIsInteractive = (currentContent?.isInteractive ?? false)
             || approvalStore.matchingActiveRequest(for: agentMonitor.activePopup) != nil
@@ -743,6 +756,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
                 whisperModelManager: whisperModelManager,
                 calendarService: calendarService,
                 githubService: githubService,
+                workShiftTracker: workShiftTracker,
                 initialTab: tab ?? .general
             ),
             replacingContent: tab != nil
@@ -986,7 +1000,8 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
                     paletteStore: paletteStore,
                     meetingRecorder: meetingRecorder,
                     calendarService: calendarService,
-                    githubService: githubService
+                    githubService: githubService,
+                    workShiftTracker: workShiftTracker
                 ),
                 approvalStore: approvalStore,
                 agentMonitor: agentMonitor,
