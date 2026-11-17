@@ -11,6 +11,7 @@ public struct AudioSettingsTabView: View {
     @ObservedObject public var meetingRecorder: MeetingRecorderService
     public var licensingService: (any LicensingServiceProtocol)?
     @ObservedObject public var characterStore: AvatarCharacterStore
+    @ObservedObject public var whisperModelManager: WhisperKitModelManager
     enum SpeechModelNotice: Equatable {
         case ready
         case downloading
@@ -31,7 +32,8 @@ public struct AudioSettingsTabView: View {
         audioPlayer: (any CyberAudioPlaying)? = nil,
         meetingRecorder: MeetingRecorderService,
         licensingService: (any LicensingServiceProtocol)? = nil,
-        characterStore: AvatarCharacterStore = AvatarCharacterStore()
+        characterStore: AvatarCharacterStore = AvatarCharacterStore(),
+        whisperModelManager: WhisperKitModelManager = WhisperKitModelManager()
     ) {
         self.settingsStore = settingsStore
         self.audioPlayer = audioPlayer
@@ -39,6 +41,7 @@ public struct AudioSettingsTabView: View {
         self.meetingRecorder = meetingRecorder
         self.licensingService = licensingService
         self.characterStore = characterStore
+        self.whisperModelManager = whisperModelManager
     }
 
     private var isMeetingRecorderUnlocked: Bool {
@@ -62,6 +65,7 @@ public struct AudioSettingsTabView: View {
         }
         .onAppear {
             Task { await meetingRecorder.refreshPermissions() }
+            whisperModelManager.refreshAllStatuses()
             updateRecordingsFolderWarning()
             updateExportFolderWarning()
             loadTranscriptionLocaleOptions()
@@ -386,13 +390,12 @@ public struct AudioSettingsTabView: View {
                 HStack(spacing: 12) {
                     permissionPill(label: "Microphone", status: meetingRecorder.permissionState.microphone)
                     permissionPill(label: "System audio", status: meetingRecorder.permissionState.screenAudio)
-                    permissionPill(label: "Speech recognition", status: meetingRecorder.permissionState.speechRecognition)
 
                     Spacer()
 
                     Button("Check / Request Permissions") {
                         Task {
-                            await meetingRecorder.requestPermissions(includeSpeech: true)
+                            await meetingRecorder.requestPermissions()
                         }
                     }
                     .buttonStyle(.bordered)
@@ -415,67 +418,7 @@ public struct AudioSettingsTabView: View {
 
                 caption("Transcripts are made on this Mac and saved next to the recording.", enabled: true)
 
-                Picker("Language", selection: Binding(
-                    get: { meetingSettings.transcriptionLocaleIdentifier },
-                    set: { meetingSettings.setTranscriptionLocaleIdentifier($0) }
-                )) {
-                    Text("Automatic").tag(String?.none)
-                    ForEach(languageOptions, id: \.id) { option in
-                        Text(option.label).tag(Optional(option.id))
-                    }
-                }
-                .font(.subheadline)
-                .disabled(meetingRecorder.hasUnfinalizedRecording || meetingRecorder.isTranscribing || speechModelNotice == .downloading)
-
-                HStack(spacing: 4) {
-                    Text("Don't see your language?")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button {
-                        SpeechFrameworkTranscriptionService.openDictationSettings()
-                    } label: {
-                        HStack(spacing: 3) {
-                            Text("Add in macOS Settings…")
-                            Image(systemName: "arrow.up.forward.app")
-                                .imageScale(.small)
-                        }
-                    }
-                    .buttonStyle(.link)
-                    .font(.caption)
-                }
-
-                caption("Transcription uses one language per recording. Only languages enabled in System Settings → Keyboard → Dictation appear here; selecting one downloads its on-device model automatically on macOS 26+.", enabled: true)
-
-                switch speechModelNotice {
-                case .ready:
-                    HStack(spacing: 6) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                        Text("On-device speech model is installed on this Mac.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                case .downloading:
-                    HStack(spacing: 6) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("Downloading on-device speech model from macOS…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                case .needsDownload(let title):
-                    missingSpeechModelNotice(title: title)
-                case .unsupported:
-                    HStack(spacing: 6) {
-                        Image(systemName: "info.circle.fill")
-                            .foregroundStyle(.secondary)
-                        Text("On-device speech recognition is not supported for this locale.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                case nil:
-                    EmptyView()
-                }
+                whisperSettingsSection
 
                 Toggle("Copy transcript path to clipboard", isOn: Binding(
                     get: { meetingSettings.copyTranscriptPathToClipboard },
@@ -848,6 +791,184 @@ public struct AudioSettingsTabView: View {
         case .meetingRecordingSaved:
             return "Fanfare when a meeting recording is saved — plays while the mic is in use; system mute, Focus suppression and Enable Cyber Audio still silence it"
         }
+    }
+
+    @ViewBuilder
+    private var whisperSettingsSection: some View {
+        Picker("Whisper Model", selection: Binding(
+            get: { meetingSettings.whisperModelVariant },
+            set: { meetingSettings.setWhisperModelVariant($0) }
+        )) {
+            ForEach(WhisperModelVariant.allCases, id: \.self) { variant in
+                Text(variant.displayName).tag(variant)
+            }
+        }
+        .font(.subheadline)
+        .disabled(meetingRecorder.hasUnfinalizedRecording || meetingRecorder.isTranscribing)
+
+        whisperModelStatusRow
+
+        Picker("Language", selection: Binding(
+            get: { meetingSettings.transcriptionLocaleIdentifier },
+            set: { meetingSettings.setTranscriptionLocaleIdentifier($0) }
+        )) {
+            Text("Automatic (Auto-detect)").tag(String?.none)
+            ForEach(Self.whisperLanguageOptions(selected: meetingSettings.transcriptionLocaleIdentifier), id: \.id) { option in
+                Text(option.label).tag(Optional(option.id))
+            }
+        }
+        .font(.subheadline)
+        .disabled(meetingRecorder.hasUnfinalizedRecording || meetingRecorder.isTranscribing)
+
+        caption(
+            "Whisper AI runs 100% on-device via Apple Neural Engine. Dual-track recordings label You (mic) and Participants (system audio) separately.",
+            enabled: true
+        )
+    }
+
+    @ViewBuilder
+    private var whisperModelStatusRow: some View {
+        let variant = meetingSettings.whisperModelVariant
+        let modelState = whisperModelManager.state(for: variant)
+        HStack(spacing: 8) {
+            switch modelState {
+            case .downloaded(let bytes):
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("Ready on this Mac (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Delete Cache") {
+                    try? whisperModelManager.deleteModel(variant)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(meetingRecorder.isTranscribing)
+            case .downloading(let progress):
+                ProgressView(value: progress)
+                    .frame(width: 90)
+                Text("Downloading Whisper AI model (\(Int((progress * 100).rounded()))%)…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") {
+                    whisperModelManager.cancelDownload(for: variant)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            case .notDownloaded:
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                Text("Model not downloaded yet (\(variant.approximateSizeLabel)); downloads automatically on first transcription.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Download") {
+                    Task { _ = try? await whisperModelManager.ensureModelDownloaded(variant) }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            case .failed(let message):
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("Download failed: \(message)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+                Button("Retry") {
+                    Task { _ = try? await whisperModelManager.ensureModelDownloaded(variant) }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var appleDictationSettingsSection: some View {
+        Picker("Language", selection: Binding(
+            get: { meetingSettings.transcriptionLocaleIdentifier },
+            set: { meetingSettings.setTranscriptionLocaleIdentifier($0) }
+        )) {
+            Text("Automatic").tag(String?.none)
+            ForEach(languageOptions, id: \.id) { option in
+                Text(option.label).tag(Optional(option.id))
+            }
+        }
+        .font(.subheadline)
+        .disabled(meetingRecorder.hasUnfinalizedRecording || meetingRecorder.isTranscribing || speechModelNotice == .downloading)
+
+        HStack(spacing: 4) {
+            Text("Don't see your language?")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button {
+                SpeechFrameworkTranscriptionService.openDictationSettings()
+            } label: {
+                HStack(spacing: 3) {
+                    Text("Add in macOS Settings…")
+                    Image(systemName: "arrow.up.forward.app")
+                        .imageScale(.small)
+                }
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+        }
+
+        caption("Transcription uses one language per recording. Only languages enabled in System Settings → Keyboard → Dictation appear here; selecting one downloads its on-device model automatically on macOS 26+.", enabled: true)
+
+        switch speechModelNotice {
+        case .ready:
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("On-device speech model is installed on this Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .downloading:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Downloading on-device speech model from macOS…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .needsDownload(let title):
+            missingSpeechModelNotice(title: title)
+        case .unsupported:
+            HStack(spacing: 6) {
+                Image(systemName: "info.circle.fill")
+                    .foregroundStyle(.secondary)
+                Text("On-device speech recognition is not supported for this locale.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case nil:
+            EmptyView()
+        }
+    }
+
+    static func whisperLanguageOptions(selected: String?) -> [(id: String, label: String)] {
+        let common: [(id: String, label: String)] = [
+            ("en", "English"),
+            ("nl", "Dutch / Flemish"),
+            ("fr", "French"),
+            ("de", "German"),
+            ("es", "Spanish"),
+            ("it", "Italian"),
+            ("pt", "Portuguese"),
+            ("ja", "Japanese"),
+            ("zh", "Chinese"),
+            ("ko", "Korean")
+        ]
+        guard let selected, !common.contains(where: { $0.id == selected }) else {
+            return common
+        }
+        let label = Locale.current.localizedString(forIdentifier: selected) ?? selected
+        return [(id: selected, label: label)] + common
     }
 }
 

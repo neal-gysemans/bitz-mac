@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "mission_slug": "whisperkit-asr-204-01M7K1PH",
+  "mission_id": "01M7K1PH40KPTJQX5VTQ3G1T2C",
+  "mission_branch": "kitty/mission-whisperkit-asr-204-01M7K1PH",
+  "target_branch": "feat/whisperkit-asr-204",
+  "lanes": [
+    {
+      "lane_id": "lane-a",
+      "wp_ids": [
+        "WP01"
+      ],
+      "write_scope": [
+        "src/**"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "legacy-cleanup"
+      ],
+      "depends_on_lanes": [],
+      "parallel_group": 0
+    }
+  ],
+  "computed_at": "2026-11-16T20:48:29.316125+00:00",
+  "computed_from": "dependency_graph+ownership",
+  "planning_artifact_wps": [],
+  "planning_commit_sha": "dc5ae5a3503772b38a79b917abcbcb9c759b777f"
+}

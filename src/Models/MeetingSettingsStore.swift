@@ -1,5 +1,41 @@
 import Foundation
 
+// MARK: - Transcription Engine & Whisper Model Variants (#204)
+
+public enum MeetingTranscriptionEngine: String, Codable, CaseIterable, Sendable {
+    case whisperAI = "whisper_ai"
+    case appleDictation = "apple_dictation"
+
+    public var displayName: String {
+        switch self {
+        case .whisperAI: return "Whisper AI (Recommended)"
+        case .appleDictation: return "Apple Dictation (Legacy)"
+        }
+    }
+}
+
+public enum WhisperModelVariant: String, Codable, CaseIterable, Sendable {
+    case compact = "openai_whisper-small_216MB"
+    case largeV3Turbo = "openai_whisper-large-v3-v20240930_turbo_632MB"
+    case largeV3 = "openai_whisper-large-v3-v20240930_626MB"
+
+    public var displayName: String {
+        switch self {
+        case .compact: return "Compact (~216 MB, balanced)"
+        case .largeV3Turbo: return "Large v3 Turbo (~632 MB, recommended)"
+        case .largeV3: return "Large v3 (~626 MB, max accuracy)"
+        }
+    }
+
+    public var approximateSizeLabel: String {
+        switch self {
+        case .compact: return "~216 MB"
+        case .largeV3Turbo: return "~632 MB"
+        case .largeV3: return "~626 MB"
+        }
+    }
+}
+
 // MARK: - Meeting Settings Store
 
 /// Persists user preferences for the Local Meeting Recorder & On-Device Transcription (#43).
@@ -12,6 +48,8 @@ public final class MeetingSettingsStore: ObservableObject {
     public static let copyTranscriptPathKey = keyPrefix + "copyTranscriptPath"
     public static let meetingsDirectoryPathKey = keyPrefix + "directoryPath"
     public static let transcriptionLocaleKey = keyPrefix + "transcriptionLocale"
+    public static let transcriptionEngineKey = keyPrefix + "transcriptionEngine"
+    public static let whisperModelVariantKey = keyPrefix + "whisperModelVariant"
     public static let transcriptExportDirectoryPathKey = keyPrefix + "transcriptExportDirectoryPath"
     public static let recordingHotkeyKey = keyPrefix + "recordingHotkey"
     public static let consentAcknowledgedKey = keyPrefix + "consentAcknowledged"
@@ -39,6 +77,8 @@ public final class MeetingSettingsStore: ObservableObject {
     @Published public private(set) var meetingsRootDirectoryURL: URL
     /// nil = Automatic; otherwise a locale identifier such as `nl-BE`.
     @Published public private(set) var transcriptionLocaleIdentifier: String?
+    @Published public private(set) var transcriptionEngine: MeetingTranscriptionEngine
+    @Published public private(set) var whisperModelVariant: WhisperModelVariant
     /// Optional folder that also receives a copy of each `transcript.txt` (nil = off).
     @Published public private(set) var transcriptExportDirectoryURL: URL?
     @Published public private(set) var recordingHotkey: MeetingRecordingHotkey
@@ -135,6 +175,10 @@ public final class MeetingSettingsStore: ObservableObject {
         }
 
         self.transcriptionLocaleIdentifier = userDefaults.string(forKey: Self.transcriptionLocaleKey)
+        self.transcriptionEngine = userDefaults.string(forKey: Self.transcriptionEngineKey)
+            .flatMap(MeetingTranscriptionEngine.init(rawValue:)) ?? .whisperAI
+        self.whisperModelVariant = userDefaults.string(forKey: Self.whisperModelVariantKey)
+            .flatMap(WhisperModelVariant.init(rawValue:)) ?? .largeV3Turbo
 
         if let savedExportPath = userDefaults.string(forKey: Self.transcriptExportDirectoryPathKey),
            !savedExportPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -211,5 +255,15 @@ public final class MeetingSettingsStore: ObservableObject {
     public func setTranscriptionLocaleIdentifier(_ identifier: String?) {
         transcriptionLocaleIdentifier = identifier
         userDefaults.set(identifier, forKey: Self.transcriptionLocaleKey)
+    }
+
+    public func setTranscriptionEngine(_ engine: MeetingTranscriptionEngine) {
+        transcriptionEngine = engine
+        userDefaults.set(engine.rawValue, forKey: Self.transcriptionEngineKey)
+    }
+
+    public func setWhisperModelVariant(_ variant: WhisperModelVariant) {
+        whisperModelVariant = variant
+        userDefaults.set(variant.rawValue, forKey: Self.whisperModelVariantKey)
     }
 }

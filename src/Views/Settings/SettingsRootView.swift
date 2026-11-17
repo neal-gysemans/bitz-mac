@@ -54,6 +54,7 @@ public struct SettingsRootView: View {
     @ObservedObject public var calendarService: CalendarAgendaService
     @ObservedObject public var licensingService: LicensingService
     @ObservedObject public var meetingRecorder: MeetingRecorderService
+    @ObservedObject public var whisperModelManager: WhisperKitModelManager
 
     @State private var selectedTab: SettingsTab
 
@@ -79,6 +80,7 @@ public struct SettingsRootView: View {
         personalitySettings: PersonalitySettingsStore? = nil,
         licensingService: LicensingService? = nil,
         meetingRecorder: MeetingRecorderService,
+        whisperModelManager: WhisperKitModelManager = WhisperKitModelManager(),
         calendarService: CalendarAgendaService? = nil,
         initialTab: SettingsTab = .general
     ) {
@@ -91,6 +93,7 @@ public struct SettingsRootView: View {
         self.calendarService = calendarService ?? CalendarAgendaService()
         self.licensingService = licensingService ?? LicensingService()
         self.meetingRecorder = meetingRecorder
+        self.whisperModelManager = whisperModelManager
         self.engine = engine
         self.activityMonitor = activityMonitor
         self.scaleStore = scaleStore
@@ -249,7 +252,8 @@ public struct SettingsRootView: View {
                 audioPlayer: audioPlayer,
                 meetingRecorder: meetingRecorder,
                 licensingService: licensingService,
-                characterStore: characterStore
+                characterStore: characterStore,
+                whisperModelManager: whisperModelManager
             )
         case .telemetry:
             TelemetrySettingsTabView(

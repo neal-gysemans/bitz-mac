@@ -38,6 +38,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
     public let calendarService: CalendarAgendaService
     public let licensingService: LicensingService
     public let meetingRecorder: MeetingRecorderService
+    public let whisperModelManager: WhisperKitModelManager
     public let taskKittenRunner: TaskKittenRunnerService
     public var meetingSettings: MeetingSettingsStore { meetingRecorder.settingsStore }
     private var isAwaitingTerminationReply = false
@@ -109,8 +110,16 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         let resolvedLicensingService = licensingService ?? LicensingService(backendClient: SupabaseLicensingClient())
         resolvedLicensingService.startPeriodicValidationSchedule()
         self.licensingService = resolvedLicensingService
+        let resolvedWhisperModelManager = WhisperKitModelManager()
+        self.whisperModelManager = resolvedWhisperModelManager
+        let resolvedMeetingSettings = MeetingSettingsStore(userDefaults: userDefaults)
+        let whisperService = WhisperKitTranscriptionService(
+            modelManager: resolvedWhisperModelManager,
+            variantProvider: { resolvedMeetingSettings.whisperModelVariant }
+        )
         self.meetingRecorder = meetingRecorder ?? MeetingRecorderService(
-            settingsStore: MeetingSettingsStore(userDefaults: userDefaults),
+            settingsStore: resolvedMeetingSettings,
+            transcriptionService: whisperService,
             licensingService: resolvedLicensingService
         )
         let resolvedApprovalStore = approvalStore ?? AgentApprovalStore()
@@ -717,6 +726,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
                 personalitySettings: personalitySettings,
                 licensingService: licensingService,
                 meetingRecorder: meetingRecorder,
+                whisperModelManager: whisperModelManager,
                 calendarService: calendarService,
                 initialTab: tab ?? .general
             ),
@@ -1231,11 +1241,10 @@ struct BitzMenuBarContentView: View {
                 .keyboardShortcut(meetingSettings.recordingHotkey.menuShortcut)
             }
 
-            let rawLocaleOptions = SpeechFrameworkTranscriptionService.cachedOnDeviceLocaleOptions()
-            let localeOptions = AudioSettingsTabView.languageOptions(
-                selected: meetingSettings.transcriptionLocaleIdentifier,
-                loaded: rawLocaleOptions
+            let localeOptions = AudioSettingsTabView.whisperLanguageOptions(
+                selected: meetingSettings.transcriptionLocaleIdentifier
             )
+            let rawLocaleOptions = localeOptions
             let currentLanguageLabel = meetingSettings.transcriptionLocaleIdentifier.map { id in
                 localeOptions.first { $0.id == id }?.label
                     ?? Locale.current.localizedString(forIdentifier: id)

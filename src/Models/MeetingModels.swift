@@ -283,7 +283,7 @@ public struct MeetingTranscript: Codable, Equatable, Sendable {
         }
 
         if !segments.isEmpty {
-            // Group word-level segments into readable phrases, breaking on speaker changes, sentence ends, or ~10s duration
+            // Group word-level or phrase-level segments into readable phrases, breaking on speaker changes, sentence ends, or ~10s duration
             var currentPhraseWords: [String] = []
             var currentStart: TimeInterval = segments[0].startTime
             var currentSpeaker: String? = segments[0].speaker
@@ -291,8 +291,12 @@ public struct MeetingTranscript: Codable, Equatable, Sendable {
             func flushCurrentPhrase() {
                 guard !currentPhraseWords.isEmpty else { return }
                 let stamp = MeetingFormatting.formatDuration(Int(currentStart.rounded(.down)))
-                let prefix = currentSpeaker.map { "\($0): " } ?? ""
-                lines.append("[\(stamp)] \(prefix)\(currentPhraseWords.joined(separator: " "))")
+                let body = currentPhraseWords.joined(separator: " ")
+                if let speaker = currentSpeaker, !speaker.isEmpty {
+                    lines.append("[\(stamp)] \(speaker): \(body)")
+                } else {
+                    lines.append("[\(stamp)] \(body)")
+                }
                 currentPhraseWords.removeAll(keepingCapacity: true)
             }
 

@@ -146,13 +146,18 @@ public final class MeetingRecorderService: ObservableObject {
         permissionState = await permissionChecker.refreshedPermissions()
     }
 
+    private var canTranscribeWithCurrentEngine: Bool {
+        settingsStore.transcriptionEngine == .whisperAI || permissionState.canTranscribe
+    }
+
     /// `includeSpeech`: also ask for Speech Recognition when auto-transcribe is off (Settings button; Transcribe Again needs it).
     @discardableResult
     public func requestPermissions(includeSpeech: Bool = false) async -> MeetingPermissionState {
+        let needsAppleSpeech = includeSpeech || (settingsStore.autoTranscribeOnStop && settingsStore.transcriptionEngine == .appleDictation)
         let updated = await permissionChecker.requestPermissions(
             captureMicrophone: settingsStore.captureMicrophone,
             captureSystemAudio: settingsStore.captureSystemAudio,
-            transcribe: includeSpeech || settingsStore.autoTranscribeOnStop
+            transcribe: needsAppleSpeech
         )
         permissionState = updated
         return updated
@@ -307,7 +312,7 @@ public final class MeetingRecorderService: ObservableObject {
         let metadataURL = sessionDir.appendingPathComponent("metadata.json")
         let skipReason: MeetingTranscriptSkipReason? = !transcribe ? nil
             : !settingsStore.autoTranscribeOnStop ? .transcriptionTurnedOff
-            : !permissionState.canTranscribe ? .speechRecognitionNotAllowed
+            : !canTranscribeWithCurrentEngine ? .speechRecognitionNotAllowed
             : nil
         let shouldTranscribe = transcribe && skipReason == nil
         var warnings: [String] = []
@@ -330,6 +335,8 @@ public final class MeetingRecorderService: ObservableObject {
         Self.writeMetadata(metadata, to: metadataURL)
 
         let mixed: Bool
+        var deferredTrackDeletion: [String] = []
+        let keepTracksForDualTrack = shouldTranscribe && settingsStore.transcriptionEngine == .whisperAI
         if let mixDeadline, ContinuousClock.now + .seconds(MeetingTrackMixer.estimatedMixSeconds(in: sessionDir)) > mixDeadline {
             warnings.append("Bitz quit before mixing the audio tracks; they are kept and mixed at next launch.")
             mixed = false
@@ -337,8 +344,9 @@ public final class MeetingRecorderService: ObservableObject {
             // Off the main actor; if quit's safety net cuts it short, mic.caf / system.caf stay intact.
             // If shouldTranscribe is true, preserve tracks for dual-track speaker attribution (#202).
             let beforeMix = metadata
+            let deleteAfterMix = !keepTracksForDualTrack
             let outcome = await Task.detached(priority: .userInitiated) {
-                MeetingTrackMixer.mixSession(in: sessionDir, deleteTracks: !shouldTranscribe, systemGain: 2.5) { names in
+                MeetingTrackMixer.mixSession(in: sessionDir, deleteTracks: deleteAfterMix, systemGain: 2.5) { names in
                     var recorded = beforeMix
                     recorded.mixedTracks = names
                     Self.writeMetadata(recorded, to: metadataURL)
@@ -348,6 +356,9 @@ public final class MeetingRecorderService: ObservableObject {
             mixed = outcome.mixed
             if mixed {
                 metadata.mixedTracks = outcome.mixedTracks
+                if keepTracksForDualTrack {
+                    deferredTrackDeletion = outcome.mixedTracks
+                }
             }
         }
         let mixedURL = sessionDir.appendingPathComponent(MeetingTrackMixer.audioFileName)
@@ -382,6 +393,13 @@ public final class MeetingRecorderService: ObservableObject {
                 localeOverride: snapshotLocaleID.map(Locale.init(identifier:)),
                 forceAutomatic: snapshotLocaleID == nil
             )
+        }
+        if !deferredTrackDeletion.isEmpty {
+            for trackName in deferredTrackDeletion {
+                try? FileManager.default.removeItem(at: sessionDir.appendingPathComponent(trackName))
+            }
+            metadata.audioFileNames = MeetingTrackMixer.audioFileNames(in: sessionDir)
+            Self.writeMetadata(metadata, to: metadataURL)
         }
         // After transcription's metadata write: until then a track it may be reading (failed mix) stays protected
         activeSessionLock?.release()
@@ -444,7 +462,7 @@ public final class MeetingRecorderService: ObservableObject {
         let metadataURL = last.metadataFileURL
         let audioURL = Self.transcriptionAudioURL(in: sessionDir)
         permissionState = permissionChecker.currentPermissions()
-        if permissionState.speechRecognition == .notDetermined {
+        if settingsStore.transcriptionEngine == .appleDictation, permissionState.speechRecognition == .notDetermined {
             // Speech only: with auto-transcribe off nothing has asked yet, and the capture permissions are not needed here
             permissionState = await permissionChecker.requestPermissions(
                 captureMicrophone: false,
@@ -457,7 +475,7 @@ public final class MeetingRecorderService: ObservableObject {
         var transcriptError: String?
         var transcriptMissingAsset = false
         let localeOverride = localeIdentifier.map(Locale.init(identifier:))
-        if permissionState.canTranscribe {
+        if canTranscribeWithCurrentEngine {
             if var metadata = Self.recoveryMetadata(at: metadataURL, sessionDir: sessionDir) {
                 transcriptURLs = await transcribeSession(
                     sessionDir,
@@ -484,7 +502,7 @@ public final class MeetingRecorderService: ObservableObject {
             transcriptJSONURL: transcriptURLs?.jsonURL,
             durationSeconds: last.durationSeconds,
             warning: warnings.isEmpty ? nil : warnings.joined(separator: " "),
-            transcriptSkipReason: permissionState.canTranscribe ? nil : .speechRecognitionNotAllowed,
+            transcriptSkipReason: canTranscribeWithCurrentEngine ? nil : .speechRecognitionNotAllowed,
             transcriptError: transcriptError,
             transcriptMissingAsset: transcriptMissingAsset
         ))
@@ -553,13 +571,28 @@ public final class MeetingRecorderService: ObservableObject {
 
         let transcript: MeetingTranscript
         do {
-            transcript = try await transcriptionService.transcribeDualTrack(
-                micURL: hasMic ? micURL : nil,
-                systemURL: hasSystem ? systemURL : nil,
-                fallbackURL: audioURL,
-                sessionID: sessionID,
-                locale: chosenLocale
-            )
+            if let dualTrackService = transcriptionService as? any MeetingDualTrackTranscriptionProviding {
+                transcript = try await dualTrackService.transcribeTracks(
+                    micURL: hasMic ? micURL : nil,
+                    systemURL: hasSystem ? systemURL : nil,
+                    fallbackAudioURL: audioURL,
+                    sessionID: sessionID,
+                    locale: chosenLocale,
+                    onStatusUpdate: { [weak self] message in
+                        guard let self, self.state == .transcribing else { return }
+                        self.statusMessage = message
+                        self.present(.transcribing(detail: message))
+                    }
+                )
+            } else {
+                transcript = try await transcriptionService.transcribeDualTrack(
+                    micURL: hasMic ? micURL : nil,
+                    systemURL: hasSystem ? systemURL : nil,
+                    fallbackURL: audioURL,
+                    sessionID: sessionID,
+                    locale: chosenLocale
+                )
+            }
         } catch {
             let isMissingAsset = SpeechFrameworkTranscriptionService.isMissingAssetError(error)
             if isMissingAsset {

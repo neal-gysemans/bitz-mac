@@ -788,6 +788,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         let notAllowed = makeService(captureEngine: MockMeetingAudioCaptureEngine(), speechRecognition: .denied)
         notAllowed.settingsStore.setMeetingsRootDirectoryURL(tempDir.appendingPathComponent("denied", isDirectory: true))
         notAllowed.settingsStore.setAutoTranscribeOnStop(true) // same defaults suite as the first service
+        notAllowed.settingsStore.setTranscriptionEngine(.appleDictation)
         await notAllowed.startRecording()
         await notAllowed.stopRecording()
         XCTAssertEqual(notAllowed.lastCompletedResult?.transcriptSkipReason, .speechRecognitionNotAllowed)
@@ -866,6 +867,7 @@ final class MeetingRecorderServiceTests: XCTestCase {
         checker.stateAfterRequest = MeetingPermissionState(microphone: .authorized, screenAudio: .authorized, speechRecognition: .authorized)
         checker.onRequest = { log.requests.append([$0, $1, $2]) }
         let service = makeService(captureEngine: MockMeetingAudioCaptureEngine(), permissionChecker: checker)
+        service.settingsStore.setTranscriptionEngine(.appleDictation)
         service.settingsStore.setAutoTranscribeOnStop(false)
         await service.startRecording()
         await service.stopRecording()

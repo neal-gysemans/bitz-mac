@@ -102,6 +102,9 @@ public struct MeetingBubble: Equatable, Sendable {
     public static let recording = MeetingBubble(kind: .recording, text: recordingText)
     public static let saving = MeetingBubble(kind: .saving, text: savingText)
     public static let transcribing = MeetingBubble(kind: .transcribing, text: transcribingText)
+    public static func transcribing(detail: String?) -> MeetingBubble {
+        MeetingBubble(kind: .transcribing, text: detail ?? transcribingText)
+    }
     /// A start refused while the last meeting is busy; same look as the busy bubble it briefly covers.
     public static let stillSaving = MeetingBubble(kind: .saving, text: stillSavingText)
     public static let stillTranscribing = MeetingBubble(kind: .transcribing, text: stillTranscribingText)

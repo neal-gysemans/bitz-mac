@@ -232,7 +232,7 @@ final class AudioSettingsViewsTests: XCTestCase {
 
         let rendered = String(describing: view.body)
         XCTAssertTrue(rendered.contains("Language") || rendered.contains("Transcription"))
-        XCTAssertTrue(rendered.contains("Don't see your language?") || rendered.contains("macOS Settings"))
+        XCTAssertTrue(rendered.contains("Whisper Model") || rendered.contains("Whisper AI"))
 
         // Verify languageOptions prepends the saved language when not present in loaded
         let merged = AudioSettingsTabView.languageOptions(

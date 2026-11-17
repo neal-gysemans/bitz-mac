@@ -16,9 +16,15 @@ let package = Package(
             targets: ["Bitz"]
         )
     ],
+    dependencies: [
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "1.1.1")
+    ],
     targets: [
         .target(
             name: "BitzCore",
+            dependencies: [
+                .product(name: "WhisperKit", package: "WhisperKit")
+            ],
             path: "src",
             exclude: ["Executable"],
             resources: [
