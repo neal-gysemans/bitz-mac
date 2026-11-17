@@ -169,6 +169,148 @@ public struct GitHubNotification: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// User activity event from `GET /users/{username}/events` (e.g. `PushEvent`, `CreateEvent`, `PullRequestEvent`).
+public struct GitHubUserActivityEvent: Decodable, Equatable, Identifiable, Sendable {
+    public struct EventRepo: Decodable, Equatable, Sendable {
+        public let name: String
+
+        public var shortName: String {
+            name.split(separator: "/").last.map(String.init) ?? name
+        }
+
+        public init(name: String) {
+            self.name = name
+        }
+    }
+
+    public struct PullRequestRef: Decodable, Equatable, Sendable {
+        public let number: Int?
+        public let title: String?
+        public let htmlURL: URL?
+
+        enum CodingKeys: String, CodingKey {
+            case number
+            case title
+            case htmlURL = "html_url"
+        }
+
+        public init(number: Int? = nil, title: String? = nil, htmlURL: URL? = nil) {
+            self.number = number
+            self.title = title
+            self.htmlURL = htmlURL
+        }
+    }
+
+    public struct ReleaseRef: Decodable, Equatable, Sendable {
+        public let tagName: String?
+        public let htmlURL: URL?
+
+        enum CodingKeys: String, CodingKey {
+            case tagName = "tag_name"
+            case htmlURL = "html_url"
+        }
+
+        public init(tagName: String? = nil, htmlURL: URL? = nil) {
+            self.tagName = tagName
+            self.htmlURL = htmlURL
+        }
+    }
+
+    public struct Payload: Decodable, Equatable, Sendable {
+        public let ref: String?
+        public let refType: String?
+        public let size: Int?
+        public let action: String?
+        public let head: String?
+        public let pullRequest: PullRequestRef?
+        public let release: ReleaseRef?
+
+        enum CodingKeys: String, CodingKey {
+            case ref
+            case refType = "ref_type"
+            case size
+            case action
+            case head
+            case pullRequest = "pull_request"
+            case release
+        }
+
+        public init(
+            ref: String? = nil,
+            refType: String? = nil,
+            size: Int? = nil,
+            action: String? = nil,
+            head: String? = nil,
+            pullRequest: PullRequestRef? = nil,
+            release: ReleaseRef? = nil
+        ) {
+            self.ref = ref
+            self.refType = refType
+            self.size = size
+            self.action = action
+            self.head = head
+            self.pullRequest = pullRequest
+            self.release = release
+        }
+    }
+
+    public let id: String
+    public let type: String
+    public let repo: EventRepo
+    public let payload: Payload?
+
+    public init(id: String, type: String, repo: EventRepo, payload: Payload? = nil) {
+        self.id = id
+        self.type = type
+        self.repo = repo
+        self.payload = payload
+    }
+}
+
+/// Response wrapper from `GET /repos/{owner}/{repo}/actions/runs`.
+public struct GitHubWorkflowRunsResponse: Decodable, Sendable {
+    public let workflowRuns: [GitHubWorkflowRun]
+
+    enum CodingKeys: String, CodingKey {
+        case workflowRuns = "workflow_runs"
+    }
+}
+
+/// GitHub Actions workflow run summary.
+public struct GitHubWorkflowRun: Decodable, Equatable, Identifiable, Sendable {
+    public let id: Int
+    public let name: String?
+    public let status: String?
+    public let conclusion: String?
+    public let headBranch: String?
+    public let htmlURL: URL?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case status
+        case conclusion
+        case headBranch = "head_branch"
+        case htmlURL = "html_url"
+    }
+
+    public init(
+        id: Int,
+        name: String? = nil,
+        status: String? = nil,
+        conclusion: String? = nil,
+        headBranch: String? = nil,
+        htmlURL: URL? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.status = status
+        self.conclusion = conclusion
+        self.headBranch = headBranch
+        self.htmlURL = htmlURL
+    }
+}
+
 /// Alert model surfaced to Bitz's floating speech bubble when key GitHub developer events occur.
 public struct GitHubEventAlert: Equatable, Hashable, Identifiable, Sendable {
     public enum Kind: String, Equatable, Hashable, Sendable {

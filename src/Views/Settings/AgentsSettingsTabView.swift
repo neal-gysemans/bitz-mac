@@ -427,6 +427,15 @@ public struct AgentsSettingsTabView: View {
                     )
                     .font(.subheadline)
 
+                    Toggle(
+                        "Push & Git Activity (All Repositories)",
+                        isOn: Binding(
+                            get: { githubService.settingsStore.notifyGitActivity },
+                            set: { githubService.settingsStore.setNotifyGitActivity($0) }
+                        )
+                    )
+                    .font(.subheadline)
+
                     HStack {
                         Button {
                             Task {

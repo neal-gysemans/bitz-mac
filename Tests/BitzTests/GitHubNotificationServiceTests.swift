@@ -128,6 +128,7 @@ final class GitHubNotificationServiceTests: XCTestCase {
         XCTAssertTrue(settings.notifyCIFailures)
         XCTAssertTrue(settings.notifyCIPasses)
         XCTAssertTrue(settings.notifyPRStatus)
+        XCTAssertTrue(settings.notifyGitActivity)
 
         var changed = false
         settings.onSettingsChanged = { changed = true }
@@ -502,5 +503,144 @@ final class GitHubNotificationServiceTests: XCTestCase {
         XCTAssertEqual(GitHubURLConverter.itemNumber(from: pullAPI), "142")
         XCTAssertEqual(GitHubURLConverter.itemNumber(from: issueAPI), "188")
         XCTAssertNil(GitHubURLConverter.itemNumber(from: nonAPIURL))
+    }
+
+    func testUserPushAndBranchEventsProduceAlertsAcrossAnyRepository() async throws {
+        let storage = InMemoryGitHubTokenStorage()
+        try storage.saveToken("ghp_push_test")
+        let credentials = GitHubCredentialsStore(
+            tokenStorage: storage,
+            ghRunner: { "" }
+        )
+        let settings = GitHubSettingsStore(userDefaults: defaults)
+
+        final class StepBox: @unchecked Sendable { var value = 0 }
+        let step = StepBox()
+        let requester = MockHTTPRequester { request in
+            let urlStr = request.url?.absoluteString ?? ""
+            if urlStr.hasSuffix("/user") {
+                let json = #"{"login":"AkramKs","id":1,"name":"Akram"}"#
+                return (
+                    Data(json.utf8),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                )
+            }
+            if urlStr.contains("/notifications") {
+                return (
+                    Data("[]".utf8),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                )
+            }
+            if urlStr.contains("/users/AkramKs/events") {
+                step.value += 1
+                if step.value == 1 {
+                    let seedJSON = #"[{"id":"evt-0","type":"PushEvent","repo":{"name":"AkramKs/old-repo"},"payload":{"ref":"refs/heads/main","size":1,"head":"abc111"}}]"#
+                    return (
+                        Data(seedJSON.utf8),
+                        HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["ETag": "\"e1\""])!
+                    )
+                } else {
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "If-None-Match"), "\"e1\"")
+                    let newJSON = #"[{"id":"evt-2","type":"PushEvent","repo":{"name":"AkramKs/another-repo"},"payload":{"ref":"refs/heads/feat/cool","size":3,"head":"def222"}}]"#
+                    return (
+                        Data(newJSON.utf8),
+                        HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["ETag": "\"e2\""])!
+                    )
+                }
+            }
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!)
+        }
+
+        let service = GitHubNotificationService(
+            settingsStore: settings,
+            credentialsStore: credentials,
+            httpRequester: requester
+        )
+        await service.checkAuthentication()
+
+        // First poll seeds historical events without popping up
+        await service.pollNotificationsOnce()
+        XCTAssertNil(service.activeAlert)
+
+        // Second poll detects new push on a different repo
+        await service.pollNotificationsOnce()
+        XCTAssertEqual(service.activeAlert?.title, "🚀 Code Pushed")
+        XCTAssertEqual(service.activeAlert?.repositoryName, "another-repo")
+        XCTAssertEqual(service.activeAlert?.message, "Pushed 3 commits to another-repo (feat/cool)")
+        XCTAssertEqual(service.activeAlert?.targetURL?.absoluteString, "https://github.com/AkramKs/another-repo/commit/def222")
+    }
+
+    func testCreateDeletePRAndReleaseEventsMapToAlerts() {
+        let settings = GitHubSettingsStore(userDefaults: defaults)
+        let service = GitHubNotificationService(settingsStore: settings)
+
+        let createEvt = GitHubUserActivityEvent(
+            id: "e1",
+            type: "CreateEvent",
+            repo: .init(name: "AkramKs/demo"),
+            payload: .init(ref: "feat/xyz", refType: "branch")
+        )
+        let createAlert = service.makeAlert(from: createEvt)
+        XCTAssertEqual(createAlert?.title, "🌿 Branch Created")
+        XCTAssertEqual(createAlert?.message, "Created branch feat/xyz on demo")
+
+        let prEvt = GitHubUserActivityEvent(
+            id: "e2",
+            type: "PullRequestEvent",
+            repo: .init(name: "AkramKs/demo"),
+            payload: .init(
+                action: "opened",
+                pullRequest: .init(number: 42, title: "Add widget", htmlURL: URL(string: "https://github.com/AkramKs/demo/pull/42"))
+            )
+        )
+        let prAlert = service.makeAlert(from: prEvt)
+        XCTAssertEqual(prAlert?.title, "🔀 PR Opened")
+        XCTAssertEqual(prAlert?.targetURL?.absoluteString, "https://github.com/AkramKs/demo/pull/42")
+
+        settings.setNotifyGitActivity(false)
+        XCTAssertNil(service.makeAlert(from: createEvt))
+    }
+
+    func testWorkflowRunCompletionTriggersPassAndFailAlerts() {
+        let settings = GitHubSettingsStore(userDefaults: defaults)
+        let service = GitHubNotificationService(settingsStore: settings)
+
+        let seededRun = GitHubWorkflowRun(
+            id: 100,
+            name: "CI",
+            status: "completed",
+            conclusion: "success",
+            headBranch: "main",
+            htmlURL: URL(string: "https://github.com/AkramKs/bitz-mac/actions/runs/100")
+        )
+        // First call seeds without alerting
+        service.handleIncomingWorkflowRuns([seededRun], repoFullName: "AkramKs/bitz-mac")
+        XCTAssertNil(service.activeAlert)
+
+        // New passing run triggers alert
+        let newPass = GitHubWorkflowRun(
+            id: 101,
+            name: "Swift CI",
+            status: "completed",
+            conclusion: "success",
+            headBranch: "feat/207",
+            htmlURL: URL(string: "https://github.com/AkramKs/bitz-mac/actions/runs/101")
+        )
+        service.handleIncomingWorkflowRuns([newPass, seededRun], repoFullName: "AkramKs/bitz-mac")
+        XCTAssertEqual(service.activeAlert?.title, "✅ Workflow Passed")
+        XCTAssertEqual(service.activeAlert?.message, "Swift CI passed on bitz-mac (feat/207)")
+
+        // New failing run triggers failure alert
+        let newFail = GitHubWorkflowRun(
+            id: 102,
+            name: "Swift CI",
+            status: "completed",
+            conclusion: "failure",
+            headBranch: "feat/207",
+            htmlURL: URL(string: "https://github.com/AkramKs/bitz-mac/actions/runs/102")
+        )
+        service.handleIncomingWorkflowRuns([newFail, newPass], repoFullName: "AkramKs/bitz-mac")
+        XCTAssertEqual(service.activeAlert?.title, "🚨 Workflow Failed")
+        XCTAssertEqual(service.activeAlert?.message, "Swift CI failure on bitz-mac (feat/207)")
     }
 }

@@ -80,8 +80,14 @@ public final class GitHubNotificationService: ObservableObject {
 
     private var cachedETag: String?
     private var cachedLastModified: String?
+    private var cachedEventsETag: String?
     private var seenNotificationIDs = Set<String>()
+    private var seenEventIDs = Set<String>()
+    private var seenCompletedRunIDs = Set<Int>()
+    private var seededRunRepos = Set<String>()
+    private var recentlyActiveRepos: [String] = []
     private var isSeeded: Bool = false
+    private var isEventsSeeded: Bool = false
 
     public init(
         settingsStore: GitHubSettingsStore = GitHubSettingsStore(),
@@ -240,6 +246,32 @@ public final class GitHubNotificationService: ObservableObject {
         }
     }
 
+    nonisolated public static func userEventsURL(for username: String) -> URL? {
+        let encoded = username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? username
+        return URL(string: "https://api.github.com/users/\(encoded)/events?per_page=15")
+    }
+
+    private func makeGitHubRequest(
+        url: URL,
+        token: String,
+        etag: String? = nil,
+        lastModified: String? = nil
+    ) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        request.setValue("Bitz-CyberCat", forHTTPHeaderField: "User-Agent")
+        if let etag {
+            request.setValue(etag, forHTTPHeaderField: "If-None-Match")
+        }
+        if let lastModified {
+            request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since")
+        }
+        return request
+    }
+
     public func pollNotificationsOnce() async {
         guard let (token, _) = await credentialsStore.activeToken(mode: settingsStore.authMode) else {
             authState = .unauthenticated
@@ -249,49 +281,78 @@ public final class GitHubNotificationService: ObservableObject {
         isPolling = true
         defer { isPolling = false }
 
-        var request = URLRequest(url: Self.notificationsURL)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        request.setValue("Bitz-CyberCat", forHTTPHeaderField: "User-Agent")
-
-        if let etag = cachedETag {
-            request.setValue(etag, forHTTPHeaderField: "If-None-Match")
-        }
-        if let lastModified = cachedLastModified {
-            request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since")
-        }
+        let request = makeGitHubRequest(
+            url: Self.notificationsURL,
+            token: token,
+            etag: cachedETag,
+            lastModified: cachedLastModified
+        )
 
         do {
             let (data, response) = try await httpRequester.data(for: request)
             lastStatusCode = response.statusCode
             lastPollDate = clock()
 
-            // 304 Not Modified: zero new notifications, zero rate limit impact
-            if response.statusCode == 304 {
-                return
-            }
-
-            guard response.statusCode == 200 else {
-                if response.statusCode == 401 || response.statusCode == 403 {
-                    authState = .error("Authentication expired or rate limited (HTTP \(response.statusCode))")
+            if response.statusCode == 200 {
+                // Save caching headers for subsequent conditional requests
+                if let etag = response.value(forHTTPHeaderField: "ETag") ?? response.value(forHTTPHeaderField: "Etag") {
+                    cachedETag = etag
                 }
+                if let lastModified = response.value(forHTTPHeaderField: "Last-Modified") {
+                    cachedLastModified = lastModified
+                }
+
+                let notifications = try decodeNotifications(from: data)
+                handleIncomingNotifications(notifications)
+            } else if response.statusCode == 401 || response.statusCode == 403 {
+                authState = .error("Authentication expired or rate limited (HTTP \(response.statusCode))")
                 return
             }
-
-            // Save caching headers for subsequent conditional requests
-            if let etag = response.value(forHTTPHeaderField: "ETag") ?? response.value(forHTTPHeaderField: "Etag") {
-                cachedETag = etag
-            }
-            if let lastModified = response.value(forHTTPHeaderField: "Last-Modified") {
-                cachedLastModified = lastModified
-            }
-
-            let notifications = try decodeNotifications(from: data)
-            handleIncomingNotifications(notifications)
         } catch {
             // Transient network failure: keep calm and preserve battery
+        }
+
+        if settingsStore.notifyGitActivity,
+           case .authenticated(let username, _) = authState {
+            await pollUserEventsOnce(token: token, username: username)
+        }
+    }
+
+    public func pollUserEventsOnce(token: String, username: String) async {
+        guard let url = Self.userEventsURL(for: username) else { return }
+        let request = makeGitHubRequest(url: url, token: token, etag: cachedEventsETag)
+
+        do {
+            let (data, response) = try await httpRequester.data(for: request)
+            if response.statusCode == 200 {
+                if let etag = response.value(forHTTPHeaderField: "ETag") ?? response.value(forHTTPHeaderField: "Etag") {
+                    cachedEventsETag = etag
+                }
+                let events = try JSONDecoder().decode([GitHubUserActivityEvent].self, from: data)
+                handleIncomingUserEvents(events)
+            }
+        } catch {
+            // Transient network or decode failure on user events: fail soft
+        }
+
+        if settingsStore.notifyCIPasses || settingsStore.notifyCIFailures {
+            for repo in recentlyActiveRepos {
+                await pollWorkflowRunsOnce(token: token, repoFullName: repo)
+            }
+        }
+    }
+
+    public func pollWorkflowRunsOnce(token: String, repoFullName: String) async {
+        guard let url = URL(string: "https://api.github.com/repos/\(repoFullName)/actions/runs?per_page=5") else { return }
+        let request = makeGitHubRequest(url: url, token: token)
+
+        do {
+            let (data, response) = try await httpRequester.data(for: request)
+            guard response.statusCode == 200 else { return }
+            let decoded = try JSONDecoder().decode(GitHubWorkflowRunsResponse.self, from: data)
+            handleIncomingWorkflowRuns(decoded.workflowRuns, repoFullName: repoFullName)
+        } catch {
+            // Fail soft if repo has no Actions or transient error
         }
     }
 
@@ -503,5 +564,185 @@ public final class GitHubNotificationService: ObservableObject {
 
     public func setSeededForTesting(_ seeded: Bool) {
         isSeeded = seeded
+    }
+
+    public func setEventsSeededForTesting(_ seeded: Bool) {
+        isEventsSeeded = seeded
+    }
+
+    public func handleIncomingUserEvents(_ events: [GitHubUserActivityEvent]) {
+        for event in events.reversed() {
+            recordActiveRepo(event.repo.name)
+        }
+
+        if !isEventsSeeded {
+            for event in events {
+                seenEventIDs.insert(event.id)
+            }
+            isEventsSeeded = true
+            return
+        }
+
+        let newEvents = events.filter { !seenEventIDs.contains($0.id) }
+        guard !newEvents.isEmpty else { return }
+
+        for event in newEvents {
+            seenEventIDs.insert(event.id)
+        }
+
+        for event in newEvents {
+            if let alert = makeAlert(from: event) {
+                presentAlert(alert)
+                break
+            }
+        }
+    }
+
+    private func recordActiveRepo(_ fullName: String) {
+        recentlyActiveRepos.removeAll { $0 == fullName }
+        recentlyActiveRepos.insert(fullName, at: 0)
+        if recentlyActiveRepos.count > 5 {
+            recentlyActiveRepos.removeLast(recentlyActiveRepos.count - 5)
+        }
+    }
+
+    public func handleIncomingWorkflowRuns(_ runs: [GitHubWorkflowRun], repoFullName: String) {
+        let completedRuns = runs.filter { $0.status == "completed" }
+        if !seededRunRepos.contains(repoFullName) {
+            for run in completedRuns {
+                seenCompletedRunIDs.insert(run.id)
+            }
+            seededRunRepos.insert(repoFullName)
+            return
+        }
+
+        let newRuns = completedRuns.filter { !seenCompletedRunIDs.contains($0.id) }
+        guard !newRuns.isEmpty else { return }
+
+        for run in newRuns {
+            seenCompletedRunIDs.insert(run.id)
+        }
+
+        for run in newRuns {
+            if let alert = makeAlert(from: run, repoFullName: repoFullName) {
+                presentAlert(alert)
+                break
+            }
+        }
+    }
+
+    public func makeAlert(from run: GitHubWorkflowRun, repoFullName: String) -> GitHubEventAlert? {
+        guard run.status == "completed" else { return nil }
+        let repoShort = repoFullName.split(separator: "/").last.map(String.init) ?? repoFullName
+        let runName = run.name ?? "Workflow"
+        let branchText = run.headBranch.map { " (\($0))" } ?? ""
+        let conclusion = run.conclusion ?? ""
+
+        if conclusion == "failure" || conclusion == "cancelled" || conclusion == "timed_out" {
+            guard settingsStore.notifyCIFailures else { return nil }
+            return GitHubEventAlert(
+                id: "run-\(run.id)",
+                kind: .ciFailed,
+                title: "🚨 Workflow Failed",
+                message: "\(runName) \(conclusion) on \(repoShort)\(branchText)",
+                repositoryName: repoShort,
+                targetURL: run.htmlURL,
+                actionTitle: "VIEW LOGS"
+            )
+        } else if conclusion == "success" {
+            guard settingsStore.notifyCIPasses else { return nil }
+            return GitHubEventAlert(
+                id: "run-\(run.id)",
+                kind: .ciPassed,
+                title: "✅ Workflow Passed",
+                message: "\(runName) passed on \(repoShort)\(branchText)",
+                repositoryName: repoShort,
+                targetURL: run.htmlURL,
+                actionTitle: "VIEW LOGS"
+            )
+        }
+        return nil
+    }
+
+    public func makeAlert(from event: GitHubUserActivityEvent) -> GitHubEventAlert? {
+        guard settingsStore.notifyGitActivity else { return nil }
+        let repoFull = event.repo.name
+        let repoShort = event.repo.shortName
+        let repoURL = URL(string: "https://github.com/\(repoFull)")
+
+        switch event.type {
+        case "PushEvent":
+            let branch = event.payload?.ref?.replacingOccurrences(of: "refs/heads/", with: "") ?? "main"
+            let commitCount = max(1, event.payload?.size ?? 1)
+            let commitWord = commitCount == 1 ? "commit" : "commits"
+            let targetURL = event.payload?.head.flatMap { URL(string: "https://github.com/\(repoFull)/commit/\($0)") } ?? repoURL
+            return GitHubEventAlert(
+                id: event.id,
+                kind: .ciPassed,
+                title: "🚀 Code Pushed",
+                message: "Pushed \(commitCount) \(commitWord) to \(repoShort) (\(branch))",
+                repositoryName: repoShort,
+                targetURL: targetURL,
+                actionTitle: "VIEW COMMIT"
+            )
+
+        case "CreateEvent":
+            let refType = event.payload?.refType ?? "branch"
+            let ref = event.payload?.ref ?? ""
+            let targetURL = ref.isEmpty ? repoURL : URL(string: "https://github.com/\(repoFull)/tree/\(ref)")
+            let detail = ref.isEmpty ? refType : "\(refType) \(ref)"
+            return GitHubEventAlert(
+                id: event.id,
+                kind: .prStatus,
+                title: "🌿 \(refType.capitalized) Created",
+                message: "Created \(detail) on \(repoShort)",
+                repositoryName: repoShort,
+                targetURL: targetURL ?? repoURL,
+                actionTitle: "VIEW REPO"
+            )
+
+        case "DeleteEvent":
+            let refType = event.payload?.refType ?? "branch"
+            let ref = event.payload?.ref ?? ""
+            let detail = ref.isEmpty ? refType : "\(refType) \(ref)"
+            return GitHubEventAlert(
+                id: event.id,
+                kind: .general,
+                title: "🗑️ \(refType.capitalized) Deleted",
+                message: "Deleted \(detail) on \(repoShort)",
+                repositoryName: repoShort,
+                targetURL: repoURL,
+                actionTitle: "VIEW REPO"
+            )
+
+        case "PullRequestEvent":
+            let action = event.payload?.action ?? "updated"
+            let numText = event.payload?.pullRequest?.number.map { "#\($0) " } ?? ""
+            let title = event.payload?.pullRequest?.title ?? "Pull Request"
+            return GitHubEventAlert(
+                id: event.id,
+                kind: .prStatus,
+                title: "🔀 PR \(action.capitalized)",
+                message: "PR \(numText)\(action) on \(repoShort): \(title)",
+                repositoryName: repoShort,
+                targetURL: event.payload?.pullRequest?.htmlURL ?? repoURL,
+                actionTitle: "VIEW PR"
+            )
+
+        case "ReleaseEvent":
+            let tag = event.payload?.release?.tagName ?? "new release"
+            return GitHubEventAlert(
+                id: event.id,
+                kind: .ciPassed,
+                title: "📦 Release Published",
+                message: "Released \(tag) on \(repoShort)",
+                repositoryName: repoShort,
+                targetURL: event.payload?.release?.htmlURL ?? repoURL,
+                actionTitle: "VIEW RELEASE"
+            )
+
+        default:
+            return nil
+        }
     }
 }

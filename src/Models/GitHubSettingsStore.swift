@@ -17,7 +17,7 @@ public final class GitHubSettingsStore: ObservableObject {
     public static let notifyCIFailuresKey = "\(keyPrefix)notifyCIFailures"
     public static let notifyCIPassesKey = "\(keyPrefix)notifyCIPasses"
     public static let notifyPRStatusKey = "\(keyPrefix)notifyPRStatus"
-    public static let onlyActiveRepositoryKey = "\(keyPrefix)onlyActiveRepository"
+    public static let notifyGitActivityKey = "\(keyPrefix)notifyGitActivity"
 
     public static let defaultPollIntervalSeconds: Int = 60
     public static let allowedPollIntervals: [Int] = [30, 60, 120]
@@ -29,7 +29,7 @@ public final class GitHubSettingsStore: ObservableObject {
     @Published public private(set) var notifyCIFailures: Bool
     @Published public private(set) var notifyCIPasses: Bool
     @Published public private(set) var notifyPRStatus: Bool
-    @Published public private(set) var onlyActiveRepository: Bool
+    @Published public private(set) var notifyGitActivity: Bool
 
     private let userDefaults: UserDefaults
     public var onSettingsChanged: (() -> Void)?
@@ -84,11 +84,11 @@ public final class GitHubSettingsStore: ObservableObject {
             self.notifyPRStatus = true
         }
 
-        // Only active repository: defaults to false
-        if userDefaults.object(forKey: Self.onlyActiveRepositoryKey) != nil {
-            self.onlyActiveRepository = userDefaults.bool(forKey: Self.onlyActiveRepositoryKey)
+        // Notify git push & activity across all repos: defaults to true
+        if userDefaults.object(forKey: Self.notifyGitActivityKey) != nil {
+            self.notifyGitActivity = userDefaults.bool(forKey: Self.notifyGitActivityKey)
         } else {
-            self.onlyActiveRepository = false
+            self.notifyGitActivity = true
         }
     }
 
@@ -137,9 +137,9 @@ public final class GitHubSettingsStore: ObservableObject {
         onSettingsChanged?()
     }
 
-    public func setOnlyActiveRepository(_ enabled: Bool) {
-        onlyActiveRepository = enabled
-        userDefaults.set(enabled, forKey: Self.onlyActiveRepositoryKey)
+    public func setNotifyGitActivity(_ enabled: Bool) {
+        notifyGitActivity = enabled
+        userDefaults.set(enabled, forKey: Self.notifyGitActivityKey)
         onSettingsChanged?()
     }
 }
