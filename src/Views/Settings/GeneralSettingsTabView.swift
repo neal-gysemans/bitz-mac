@@ -7,17 +7,24 @@ public struct GeneralSettingsTabView: View {
     @ObservedObject public var displayStore: DisplayPreferenceStore
     @ObservedObject public var interactionSettings: MascotInteractionSettingsStore
     public var inboxDirectoryURL: URL
+    public var licensingService: (any LicensingServiceProtocol)?
+
+    private var isAgentInboxUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.multiAgentSwarm) ?? true
+    }
 
     public init(
         positionStore: AvatarPositionStore,
         displayStore: DisplayPreferenceStore,
         interactionSettings: MascotInteractionSettingsStore = MascotInteractionSettingsStore(),
-        inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory
+        inboxDirectoryURL: URL = FileDropInboxService.defaultInboxDirectory,
+        licensingService: (any LicensingServiceProtocol)? = nil
     ) {
         self.interactionSettings = interactionSettings
         self.inboxDirectoryURL = inboxDirectoryURL
         self.positionStore = positionStore
         self.displayStore = displayStore
+        self.licensingService = licensingService
     }
 
     public var body: some View {
@@ -104,9 +111,33 @@ public struct GeneralSettingsTabView: View {
                     Toggle("Drop files on Bitz to copy their path", isOn: $interactionSettings.isFileDropEnabled)
                         .font(.subheadline)
 
-                    Toggle("Also write a JSON entry to the agent inbox", isOn: $interactionSettings.isInboxHandoffEnabled)
+                    HStack {
+                        Toggle(
+                            "Also write a JSON entry to the agent inbox",
+                            isOn: Binding(
+                                get: { isAgentInboxUnlocked && interactionSettings.isInboxHandoffEnabled },
+                                set: { enabled in
+                                    guard isAgentInboxUnlocked else {
+                                        NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                                        return
+                                    }
+                                    interactionSettings.isInboxHandoffEnabled = enabled
+                                }
+                            )
+                        )
                         .font(.subheadline)
                         .disabled(!interactionSettings.isFileDropEnabled)
+
+                        if !isAgentInboxUnlocked {
+                            Spacer()
+                            Button {
+                                NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                            } label: {
+                                ProBadgeView()
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                     Text(inboxDirectoryURL.path)
                         .font(.caption2.monospaced())
                         .foregroundStyle(.secondary)

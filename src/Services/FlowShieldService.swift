@@ -191,6 +191,17 @@ public final class SpyShortcutsRunner: ShortcutsRunning, @unchecked Sendable {
 public final class FlowShieldService: ObservableObject {
     public let settingsStore: FlowShieldSettingsStore
     public let shortcutsRunner: any ShortcutsRunning
+    public var licensingService: (any LicensingServiceProtocol)?
+
+    public var isFlowShieldUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.personality) ?? true
+    }
+
+    public func validateTierEntitlement() {
+        if !isFlowShieldUnlocked && isFlowShieldActive {
+            activateBreakShieldOverride()
+        }
+    }
 
     @Published public private(set) var isFlowShieldActive: Bool = false {
         didSet {
@@ -217,15 +228,17 @@ public final class FlowShieldService: ObservableObject {
 
     public init(
         settingsStore: FlowShieldSettingsStore = FlowShieldSettingsStore(),
-        shortcutsRunner: any ShortcutsRunning = ProcessShortcutsRunner()
+        shortcutsRunner: any ShortcutsRunning = ProcessShortcutsRunner(),
+        licensingService: (any LicensingServiceProtocol)? = nil
     ) {
         self.settingsStore = settingsStore
         self.shortcutsRunner = shortcutsRunner
+        self.licensingService = licensingService
         bindSettings()
     }
 
     public var currentStatus: FlowShieldStatus {
-        guard settingsStore.isEnabled else {
+        guard isFlowShieldUnlocked && settingsStore.isEnabled else {
             return .disabled
         }
         if settingsStore.isBreakShieldOverrideActive {
@@ -419,7 +432,8 @@ public final class FlowShieldService: ObservableObject {
             hasTriggeredForCurrentStreak = false
         }
 
-        guard settingsStore.isEnabled,
+        guard isFlowShieldUnlocked,
+              settingsStore.isEnabled,
               !settingsStore.isBreakShieldOverrideActive,
               !isFlowShieldActive,
               !hasTriggeredForCurrentStreak,

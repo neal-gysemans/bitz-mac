@@ -8,6 +8,8 @@ import SwiftUI
 @MainActor
 public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, ObservableObject {
     public static let hasCompletedInitialLaunchKey = "Bitz.HasCompletedInitialLaunch"
+    public static let firstLaunchWelcomeBubbleText = "👋 WELCOME! HOLD ⌥ OPTION TO DRAG OR PET ME"
+    public static let firstLaunchWelcomeBubbleDuration: TimeInterval = 8.0
 
     public let riveController: ProductionRiveController
     public let engine: WellnessPointEngine
@@ -133,10 +135,20 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
         self.diffViewer = diffViewer ?? SystemDiffViewer()
         let resolvedCalendarSettings = calendarSettings ?? CalendarSettingsStore(userDefaults: userDefaults)
         self.calendarSettings = resolvedCalendarSettings
-        self.calendarService = calendarService ?? CalendarAgendaService(settingsStore: resolvedCalendarSettings)
+        let resolvedCalendarService = calendarService ?? CalendarAgendaService(
+            settingsStore: resolvedCalendarSettings,
+            licensingService: resolvedLicensingService
+        )
+        resolvedCalendarService.licensingService = resolvedLicensingService
+        self.calendarService = resolvedCalendarService
         let resolvedGitHubSettings = githubSettings ?? GitHubSettingsStore(userDefaults: userDefaults)
         self.githubSettings = resolvedGitHubSettings
-        self.githubService = githubService ?? GitHubNotificationService(settingsStore: resolvedGitHubSettings)
+        let resolvedGitHubService = githubService ?? GitHubNotificationService(
+            settingsStore: resolvedGitHubSettings,
+            licensingService: resolvedLicensingService
+        )
+        resolvedGitHubService.licensingService = resolvedLicensingService
+        self.githubService = resolvedGitHubService
         self.paletteStore = paletteStore ?? AvatarPaletteStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
         self.characterStore = characterStore ?? AvatarCharacterStore(userDefaults: userDefaults, licensingService: resolvedLicensingService)
         let resolvedPersonalitySettings = personalitySettings ?? PersonalitySettingsStore(
@@ -174,7 +186,11 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
 
         let resolvedFlowShieldSettings = flowShieldSettings ?? FlowShieldSettingsStore(userDefaults: userDefaults)
         self.flowShieldSettings = resolvedFlowShieldSettings
-        let resolvedFlowShieldService = flowShieldService ?? FlowShieldService(settingsStore: resolvedFlowShieldSettings)
+        let resolvedFlowShieldService = flowShieldService ?? FlowShieldService(
+            settingsStore: resolvedFlowShieldSettings,
+            licensingService: resolvedLicensingService
+        )
+        resolvedFlowShieldService.licensingService = resolvedLicensingService
         self.flowShieldService = resolvedFlowShieldService
 
         let resolvedAudioSettings = audioSettings ?? CyberAudioSettingsStore(userDefaults: userDefaults)
@@ -296,6 +312,9 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
                 self?.characterStore.validateTierEntitlement()
                 self?.personalitySettings.validateTierEntitlement()
                 self?.agentMonitor.validateTierEntitlement()
+                self?.calendarService.validateTierEntitlement()
+                self?.githubService.validateTierEntitlement()
+                self?.flowShieldService.validateTierEntitlement()
             }
         self.recordingIndicatorCancellable = self.meetingRecorder.$state
             .map { $0 == .recording }
@@ -478,19 +497,20 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             _ = SpeechFrameworkTranscriptionService.onDeviceLocaleOptions()
         }
         if shouldOpenSettingsOnLaunch() {
-            showSettingsWindow()
+            showSettings(tab: nil, startInOnboarding: true)
         }
         if personalitySettings.isEnabled {
             triggerPersonalityTick(bypassRateLimit: true)
         }
     }
 
-    /// Returns true only on the very first launch, marking initial launch complete so subsequent logins stay quiet (#94 C10 / D-3).
+    /// Returns true only on the very first launch, showing a welcome speech bubble and marking initial launch complete so subsequent logins stay quiet (#94 C10 / D-3, #211).
     public func shouldOpenSettingsOnLaunch() -> Bool {
         if userDefaults.bool(forKey: Self.hasCompletedInitialLaunchKey) {
             return false
         }
         userDefaults.set(true, forKey: Self.hasCompletedInitialLaunchKey)
+        engine.showTransientBubble(Self.firstLaunchWelcomeBubbleText, duration: Self.firstLaunchWelcomeBubbleDuration)
         return true
     }
 
@@ -729,7 +749,7 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
     }
 
     /// With a `tab`, an already open window is switched to it (meeting failure bubble's OPEN SETTINGS → Audio).
-    public func showSettings(tab: SettingsTab?) {
+    public func showSettings(tab: SettingsTab?, startInOnboarding: Bool = false) {
         SettingsWindowManager.shared.showSettingsWindow(
             rootView: SettingsRootView(
                 engine: engine,
@@ -757,9 +777,10 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
                 calendarService: calendarService,
                 githubService: githubService,
                 workShiftTracker: workShiftTracker,
-                initialTab: tab ?? .general
+                initialTab: tab ?? .general,
+                startInOnboarding: startInOnboarding
             ),
-            replacingContent: tab != nil
+            replacingContent: tab != nil || startInOnboarding
         )
     }
 
@@ -1029,9 +1050,10 @@ public final class BitzAppDelegate: NSObject, NSApplicationDelegate, NSMenuItemV
             onFilesDropped: { [weak self] urls in
                 guard let self else { return }
                 do {
+                    let isInboxUnlocked = self.licensingService.isFeatureUnlocked(.multiAgentSwarm)
                     let result = try self.fileDropService.handleDrop(
                         urls: urls,
-                        writeInbox: self.interactionSettings.isInboxHandoffEnabled
+                        writeInbox: isInboxUnlocked && self.interactionSettings.isInboxHandoffEnabled
                     )
                     self.engine.showTransientBubble(result.message)
                 } catch {

@@ -124,6 +124,10 @@ public struct AgentCommandDeckView: View {
                             )
                         },
                         onToggleTaskLauncher: {
+                            guard isSwarmUnlocked else {
+                                NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                                return
+                            }
                             isTaskLauncherPresented.toggle()
                         }
                     )

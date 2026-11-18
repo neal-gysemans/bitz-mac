@@ -291,6 +291,17 @@ final class SettingsIntegrationTests: XCTestCase {
 
         XCTAssertTrue(firstDelegate.shouldOpenSettingsOnLaunch(), "First launch must open Settings")
         XCTAssertTrue(defaults.bool(forKey: BitzAppDelegate.hasCompletedInitialLaunchKey))
+        XCTAssertEqual(
+            firstDelegate.engine.transientBubbleText,
+            BitzAppDelegate.firstLaunchWelcomeBubbleText,
+            "First launch must display the welcome speech bubble (#211)"
+        )
+        firstDelegate.engine.showTransientBubble("", duration: 0)
         XCTAssertFalse(firstDelegate.shouldOpenSettingsOnLaunch(), "Subsequent launches must not auto-open Settings")
+        XCTAssertNotEqual(
+            firstDelegate.engine.transientBubbleText,
+            BitzAppDelegate.firstLaunchWelcomeBubbleText,
+            "Subsequent launches must not re-trigger the welcome speech bubble (#211)"
+        )
     }
 }

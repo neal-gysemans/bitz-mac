@@ -9,6 +9,16 @@ public struct BehaviorSettingsTabView: View {
     @ObservedObject public var flowShieldService: FlowShieldService
     @ObservedObject public var calendarService: CalendarAgendaService
     @ObservedObject public var workShiftTracker: WorkShiftTrackerService
+    public var licensingService: (any LicensingServiceProtocol)?
+    @State private var isShowingAdvancedSensors: Bool = false
+
+    private var isCalendarUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.meetingRecorder) ?? calendarService.isCalendarAgendaUnlocked
+    }
+
+    private var isFlowAndHistoryUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.personality) ?? flowShieldService.isFlowShieldUnlocked
+    }
 
     public init(
         engine: WellnessPointEngine,
@@ -16,7 +26,8 @@ public struct BehaviorSettingsTabView: View {
         flowShieldSettings: FlowShieldSettingsStore? = nil,
         flowShieldService: FlowShieldService? = nil,
         calendarService: CalendarAgendaService? = nil,
-        workShiftTracker: WorkShiftTrackerService? = nil
+        workShiftTracker: WorkShiftTrackerService? = nil,
+        licensingService: (any LicensingServiceProtocol)? = nil
     ) {
         self.engine = engine
         self.activityMonitor = activityMonitor
@@ -25,50 +36,15 @@ public struct BehaviorSettingsTabView: View {
         self.flowShieldService = flowShieldService ?? FlowShieldService(settingsStore: resolvedSettings)
         self.calendarService = calendarService ?? CalendarAgendaService()
         self.workShiftTracker = workShiftTracker ?? WorkShiftTrackerService()
+        self.licensingService = licensingService
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            // Section 1: Focus & Health Status
-            settingsCard(title: "Focus & Wellness Engine", systemImage: "pawprint.fill") {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Current State:")
-                            .font(.subheadline)
-                        Spacer()
-                        stateBadge(state: engine.currentState)
-                    }
-
-                    HStack {
-                        Text("Continuous Focus Streak:")
-                            .font(.subheadline)
-                        Spacer()
-                        Text(String(format: "%.0f min", engine.continuousWorkMinutes))
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-
-                    HStack {
-                        Text("Wellness Energy Points:")
-                            .font(.subheadline)
-                        Spacer()
-                        Text(String(format: "%.1f / 100", engine.currentPoints))
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            // Section 2: Work Shift & Daily Hours (#187)
+            // Section 1: Work Shift & Daily Hours (#187)
             workShiftCard
 
-            // Section 3: Auto Flow Shield (macOS Focus)
-            flowShieldCard
-
-            // Section 3: macOS Calendar & Agenda (#186)
-            calendarAgendaCard
-
-            // Section 4: Application Classification Rules
+            // Section 2: Application Classification Rules
             settingsCard(title: "Application Productivity Rules", systemImage: "app.badge.checkmark") {
                 VStack(alignment: .leading, spacing: 12) {
                     if let frontmost = activityMonitor.lastFrontmostAppName {
@@ -122,40 +98,81 @@ public struct BehaviorSettingsTabView: View {
                 }
             }
 
-            // Section 3: Hardware & Idle Sensors
-            settingsCard(title: "Hardware Sensors & Idle Telemetry", systemImage: "sensor.tag.radiowaves.forward.fill") {
-                VStack(alignment: .leading, spacing: 10) {
-                    sensorRow(
-                        title: "User Idle Time",
-                        value: String(format: "%.0fs", activityMonitor.lastIdleSeconds),
-                        icon: "clock.badge.checkmark"
-                    )
+            // Section 3: macOS Calendar & Agenda (#186)
+            calendarAgendaCard
 
-                    if let temp = activityMonitor.lastTemperatureCelsius {
-                        sensorRow(
-                            title: "CPU Die Temperature",
-                            value: String(format: "%.1f °C", temp),
-                            icon: "thermometer.medium",
-                            isWarning: temp > activityMonitor.overheatingTemperatureThresholdCelsius
-                        )
+            // Section 4: Auto Flow Shield (macOS Focus)
+            flowShieldCard
+
+            // Section 5: Live Focus & Hardware Sensor Diagnostics (Collapsed by default, #211)
+            DisclosureGroup("Live Wellness & Hardware Sensor Readouts", isExpanded: $isShowingAdvancedSensors) {
+                VStack(alignment: .leading, spacing: 14) {
+                    settingsCard(title: "Focus & Wellness Engine", systemImage: "pawprint.fill") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("Current State:")
+                                    .font(.subheadline)
+                                Spacer()
+                                stateBadge(state: engine.currentState)
+                            }
+
+                            HStack {
+                                Text("Continuous Focus Streak:")
+                                    .font(.subheadline)
+                                Spacer()
+                                Text(String(format: "%.0f min", engine.continuousWorkMinutes))
+                                    .font(.subheadline.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            HStack {
+                                Text("Wellness Energy Points:")
+                                    .font(.subheadline)
+                                Spacer()
+                                Text(String(format: "%.1f / 100", engine.currentPoints))
+                                    .font(.subheadline.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
 
-                    if let load = activityMonitor.lastCPULoadPercentage {
-                        sensorRow(
-                            title: "CPU Total Load",
-                            value: String(format: "%.1f%%", load * 100.0),
-                            icon: "cpu"
-                        )
-                    }
+                    settingsCard(title: "Hardware Sensors & Idle Telemetry", systemImage: "sensor.tag.radiowaves.forward.fill") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            sensorRow(
+                                title: "User Idle Time",
+                                value: String(format: "%.0fs", activityMonitor.lastIdleSeconds),
+                                icon: "clock.badge.checkmark"
+                            )
 
-                    Button {
-                        activityMonitor.performSampleTick()
-                    } label: {
-                        Label("Sample Sensors Now", systemImage: "arrow.clockwise")
+                            if let temp = activityMonitor.lastTemperatureCelsius {
+                                sensorRow(
+                                    title: "CPU Die Temperature",
+                                    value: String(format: "%.1f °C", temp),
+                                    icon: "thermometer.medium",
+                                    isWarning: temp > activityMonitor.overheatingTemperatureThresholdCelsius
+                                )
+                            }
+
+                            if let load = activityMonitor.lastCPULoadPercentage {
+                                sensorRow(
+                                    title: "CPU Total Load",
+                                    value: String(format: "%.1f%%", load * 100.0),
+                                    icon: "cpu"
+                                )
+                            }
+
+                            Button {
+                                activityMonitor.performSampleTick()
+                            } label: {
+                                Label("Sample Sensors Now", systemImage: "arrow.clockwise")
+                            }
+                            .padding(.top, 4)
+                        }
                     }
-                    .padding(.top, 4)
                 }
+                .padding(.top, 8)
             }
+            .font(.subheadline.weight(.medium))
         }
     }
 
@@ -195,33 +212,51 @@ public struct BehaviorSettingsTabView: View {
                 }
 
                 if !workShiftTracker.weeklyHistory.isEmpty {
-                    let maxScale = max(
-                        workShiftTracker.goalSeconds,
-                        workShiftTracker.weeklyHistory.map(\.activeSeconds).max() ?? 1
-                    )
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Past 7 Days")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        HStack(alignment: .bottom, spacing: 8) {
-                            ForEach(workShiftTracker.weeklyHistory) { record in
-                                let barHeight = max(4, CGFloat(record.activeSeconds / maxScale) * 52)
-                                let reached = record.activeSeconds >= (record.goalHours * 3600)
-                                VStack(spacing: 4) {
-                                    RoundedRectangle(cornerRadius: 3)
-                                        .fill(reached ? Color.green : Color.accentColor.opacity(0.75))
-                                        .frame(height: barHeight)
-                                    Text(String(record.dateKey.suffix(5)))
-                                        .font(.system(size: 9, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-                                .frame(maxWidth: .infinity)
+                    if !isFlowAndHistoryUnlocked {
+                        HStack(spacing: 8) {
+                            Image(systemName: "lock.fill")
+                                .foregroundStyle(.cyan)
+                            Text("7-Day Work Shift History Analytics requires Bitz Pro.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button {
+                                NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                            } label: {
+                                ProBadgeView()
                             }
+                            .buttonStyle(.plain)
                         }
-                        .frame(height: 70, alignment: .bottom)
+                        .padding(.top, 4)
+                    } else {
+                        let maxScale = max(
+                            workShiftTracker.goalSeconds,
+                            workShiftTracker.weeklyHistory.map(\.activeSeconds).max() ?? 1
+                        )
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Past 7 Days")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            HStack(alignment: .bottom, spacing: 8) {
+                                ForEach(workShiftTracker.weeklyHistory) { record in
+                                    let barHeight = max(4, CGFloat(record.activeSeconds / maxScale) * 52)
+                                    let reached = record.activeSeconds >= (record.goalHours * 3600)
+                                    VStack(spacing: 4) {
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(reached ? Color.green : Color.accentColor.opacity(0.75))
+                                            .frame(height: barHeight)
+                                        Text(String(record.dateKey.suffix(5)))
+                                            .font(.system(size: 9, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                }
+                            }
+                            .frame(height: 70, alignment: .bottom)
+                        }
+                        .padding(.top, 4)
                     }
-                    .padding(.top, 4)
                 }
             }
         }
@@ -230,12 +265,36 @@ public struct BehaviorSettingsTabView: View {
     private var flowShieldCard: some View {
         settingsCard(title: "Auto Flow Shield (macOS Focus)", systemImage: "shield.checkered") {
             VStack(alignment: .leading, spacing: 12) {
+                if !isFlowAndHistoryUnlocked {
+                    HStack(spacing: 8) {
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.cyan)
+                        Text("Automatic macOS Focus / Do Not Disturb activation on deep-work streaks requires Bitz Pro.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button {
+                            NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                        } label: {
+                            ProBadgeView()
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Divider()
+                }
+
                 HStack {
                     Toggle(
                         "Enable Auto Flow Shield",
                         isOn: Binding(
-                            get: { flowShieldSettings.isEnabled },
-                            set: { flowShieldSettings.setEnabled($0) }
+                            get: { isFlowAndHistoryUnlocked && flowShieldSettings.isEnabled },
+                            set: { enabled in
+                                guard isFlowAndHistoryUnlocked else {
+                                    NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                                    return
+                                }
+                                flowShieldSettings.setEnabled(enabled)
+                            }
                         )
                     )
                     .font(.subheadline.weight(.medium))
@@ -388,6 +447,24 @@ public struct BehaviorSettingsTabView: View {
     private var calendarAgendaCard: some View {
         settingsCard(title: "macOS Calendar & Agenda", systemImage: "calendar.badge.clock") {
             VStack(alignment: .leading, spacing: 14) {
+                if !isCalendarUnlocked {
+                    HStack(spacing: 8) {
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.cyan)
+                        Text("Upcoming meeting countdowns, 1-click Zoom/Meet/Teams join & daily schedule briefs require Bitz Pro.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button {
+                            NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                        } label: {
+                            ProBadgeView()
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Divider()
+                }
+
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Enable Calendar Agenda")
@@ -400,8 +477,12 @@ public struct BehaviorSettingsTabView: View {
                     Toggle(
                         "",
                         isOn: Binding(
-                            get: { calendarService.settingsStore.isEnabled },
+                            get: { isCalendarUnlocked && calendarService.settingsStore.isEnabled },
                             set: { newValue in
+                                guard isCalendarUnlocked else {
+                                    NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                                    return
+                                }
                                 if newValue {
                                     Task {
                                         if !calendarService.authorizationStatus.isAuthorized {
@@ -464,7 +545,7 @@ public struct BehaviorSettingsTabView: View {
                     .cornerRadius(8)
                 }
 
-                if calendarService.settingsStore.isEnabled && calendarService.authorizationStatus.isAuthorized {
+                if isCalendarUnlocked && calendarService.settingsStore.isEnabled && calendarService.authorizationStatus.isAuthorized {
                     Divider()
 
                     // Reminder Notice Offset Picker

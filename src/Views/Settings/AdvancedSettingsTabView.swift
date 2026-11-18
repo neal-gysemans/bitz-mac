@@ -13,6 +13,7 @@ public struct AdvancedSettingsTabView: View {
 
     @State private var launchAtLoginEnabled: Bool = (SMAppService.mainApp.status == .enabled)
     @State private var launchAtLoginMessage: String? = Self.launchAtLoginApprovalMessage(for: SMAppService.mainApp.status)
+    @State private var isShowingDeveloperSimulation: Bool = false
 
     public init(
         engine: WellnessPointEngine,
@@ -37,195 +38,7 @@ public struct AdvancedSettingsTabView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            // Section 1: Behavior State Simulation
-            settingsCard(title: "Behavior State Simulation", systemImage: "sparkles") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Trigger manual emotional states to preview animations, colors, and HUD behaviors.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    if activityMonitor.isManualOverrideActive {
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                            Text("Manual simulation override is currently active.")
-                                .font(.caption.bold())
-                            Spacer()
-                            Button("Resume Live Sensors") {
-                                activityMonitor.clearManualOverride()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                        }
-                        .padding(10)
-                        .background(Color.orange.opacity(0.12))
-                        .cornerRadius(8)
-                    }
-
-                    // 3-Column Simulation Grid
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                        simulationButton(
-                            title: "Super Charged",
-                            detail: "90 PTS",
-                            icon: "bolt.fill",
-                            color: .cyan
-                        ) {
-                            activityMonitor.startSimulation(points: 90.0, continuousWorkMinutes: 10.0)
-                        }
-
-                        simulationButton(
-                            title: "Balanced",
-                            detail: "50 PTS",
-                            icon: "circle.circle.fill",
-                            color: .blue
-                        ) {
-                            activityMonitor.startSimulation(points: 50.0, continuousWorkMinutes: 0.0)
-                        }
-
-                        simulationButton(
-                            title: "Dopamine Sad",
-                            detail: "20 PTS",
-                            icon: "moon.fill",
-                            color: .purple
-                        ) {
-                            activityMonitor.startSimulation(points: 20.0, continuousWorkMinutes: 0.0)
-                        }
-
-                        simulationButton(
-                            title: "Overworked",
-                            detail: "50m streak",
-                            icon: "flame.fill",
-                            color: .orange
-                        ) {
-                            activityMonitor.startSimulation(points: 75.0, continuousWorkMinutes: 50.0)
-                        }
-
-                        simulationButton(
-                            title: "Burnout",
-                            detail: "95m streak",
-                            icon: "exclamationmark.octagon.fill",
-                            color: .red
-                        ) {
-                            activityMonitor.startSimulation(points: 75.0, continuousWorkMinutes: 95.0)
-                        }
-
-                        simulationButton(
-                            title: "Charging Mode",
-                            detail: "Break recovery",
-                            icon: "battery.100.bolt",
-                            color: .green
-                        ) {
-                            activityMonitor.startChargingSimulation()
-                        }
-                    }
-
-                    if let agentMonitor {
-                        Divider()
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Simulate Live Agent Alerts & Audio:")
-                                .font(.caption.bold())
-                                .foregroundStyle(.secondary)
-
-                            HStack(spacing: 10) {
-                                Button {
-                                    agentMonitor.handleSimulatedEvent(AgentEvent(
-                                        agentID: "antigravity",
-                                        agentName: "Antigravity",
-                                        kind: .needsApproval,
-                                        message: "Antigravity has a question for you!",
-                                        timestamp: Date()
-                                    ))
-                                } label: {
-                                    Label("Question / Chime", systemImage: "questionmark.bubble.fill")
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-
-                                Button {
-                                    agentMonitor.handleSimulatedEvent(AgentEvent(
-                                        agentID: "antigravity",
-                                        agentName: "Antigravity",
-                                        kind: .done,
-                                        message: "Antigravity finished all tasks!",
-                                        timestamp: Date()
-                                    ))
-                                } label: {
-                                    Label("All Done / Fanfare", systemImage: "checkmark.seal.fill")
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                            }
-                        }
-                    }
-
-                    if let licensingService, licensingService.isEntitlementOverrideAvailable {
-                        Divider()
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("QA / Developer Licensing Entitlement Override:")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                if licensingService.entitlementOverride != .automatic {
-                                    Button("Reset Override") {
-                                        licensingService.setEntitlementOverride(.automatic)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.mini)
-                                }
-                            }
-
-                            Picker("Entitlement Mode", selection: Binding(
-                                get: { licensingService.entitlementOverride },
-                                set: { licensingService.setEntitlementOverride($0) }
-                            )) {
-                                ForEach(BitzEntitlementOverride.allCases) { mode in
-                                    Text(mode.displayName).tag(mode)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                        }
-                    }
-                }
-            }
-
-            // Section 2: Keyboard Shortcuts Reference
-            settingsCard(title: "Keyboard Shortcuts", systemImage: "keyboard") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Global (Works from Any App)")
-                        .font(.caption.bold())
-                        .foregroundStyle(.secondary)
-                    shortcutRow(action: "Toggle / Open Settings", keys: ["⌥⌘B"])
-                    Divider()
-                    shortcutRow(action: "Toggle / Open Agent Command Deck", keys: ["⌥⌘D", "or", "⌘D"])
-                    Divider()
-                    shortcutRow(action: "Start / Stop Meeting Recording", keys: [meetingSettings.recordingHotkey.displayString])
-                    Divider()
-                    shortcutRow(action: "Move mascot anywhere (drag)", keys: ["⌥ Option", "Drag"])
-                    Divider()
-                    shortcutRow(action: "Lock position when dragging", keys: ["⎋ Esc", "⏎ Return"])
-
-                    Divider()
-                        .padding(.vertical, 2)
-
-                    Text("When Bitz or Settings is Focused")
-                        .font(.caption.bold())
-                        .foregroundStyle(.secondary)
-                    shortcutRow(action: "Open Settings", keys: ["⌘ ,"])
-                    Divider()
-                    shortcutRow(action: "Pet Bitz mascot", keys: ["⌘ P", "or", "P"])
-                    Divider()
-                    shortcutRow(action: "Scale mascot smaller / larger", keys: ["⌘ -", "⌘ ="])
-                    Divider()
-                    shortcutRow(action: "Decrease / increase opacity", keys: ["⌘ [", "⌘ ]"])
-                    Divider()
-                    shortcutRow(action: "Quit Bitz", keys: ["⌘ Q"])
-                }
-            }
-
-            // Section 3: System & Updates
+            // Section 1: System & Updates
             settingsCard(title: "System & Software Updates", systemImage: "gear") {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
@@ -285,23 +98,217 @@ public struct AdvancedSettingsTabView: View {
                 }
             }
 
-            // Section 4: Application Lifecycle & Exit
-            settingsCard(title: "Application Lifecycle", systemImage: "power") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Completely exit Bitz, remove the mascot overlay from all displays, and stop background activity monitoring.")
-                        .font(.caption)
+            // Section 2: Keyboard Shortcuts Reference
+            settingsCard(title: "Keyboard Shortcuts", systemImage: "keyboard") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Global (Works from Any App)")
+                        .font(.caption.bold())
                         .foregroundStyle(.secondary)
+                    shortcutRow(action: "Toggle / Open Settings", keys: ["⌥⌘B"])
+                    Divider()
+                    shortcutRow(action: "Toggle / Open Agent Command Deck", keys: ["⌥⌘D", "or", "⌘D"])
+                    Divider()
+                    shortcutRow(action: "Start / Stop Meeting Recording", keys: [meetingSettings.recordingHotkey.displayString])
+                    Divider()
+                    shortcutRow(action: "Move mascot anywhere (drag)", keys: ["⌥ Option", "Drag"])
+                    Divider()
+                    shortcutRow(action: "Lock position when dragging", keys: ["⎋ Esc", "⏎ Return"])
 
-                    Button(role: .destructive) {
-                        NSApplication.shared.terminate(nil)
-                    } label: {
-                        Label("Quit Bitz Completely", systemImage: "power")
-                            .font(.subheadline.bold())
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
+                    Divider()
+                        .padding(.vertical, 2)
+
+                    Text("When Bitz or Settings is Focused")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    shortcutRow(action: "Open Settings", keys: ["⌘ ,"])
+                    Divider()
+                    shortcutRow(action: "Pet Bitz mascot", keys: ["⌘ P", "or", "P"])
+                    Divider()
+                    shortcutRow(action: "Scale mascot smaller / larger", keys: ["⌘ -", "⌘ ="])
+                    Divider()
+                    shortcutRow(action: "Decrease / increase opacity", keys: ["⌘ [", "⌘ ]"])
+                    Divider()
+                    shortcutRow(action: "Quit Bitz", keys: ["⌘ Q"])
                 }
             }
+
+            // Section 3: Developer & Behavior State Simulation (Collapsed by default, #211)
+            DisclosureGroup("Developer Diagnostics & State Simulation", isExpanded: $isShowingDeveloperSimulation) {
+                VStack(alignment: .leading, spacing: 14) {
+                    settingsCard(title: "Behavior State Simulation", systemImage: "sparkles") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Trigger manual emotional states to preview animations, colors, and HUD behaviors.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            if activityMonitor.isManualOverrideActive {
+                                HStack {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                    Text("Manual simulation override is currently active.")
+                                        .font(.caption.bold())
+                                    Spacer()
+                                    Button("Resume Live Sensors") {
+                                        activityMonitor.clearManualOverride()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                }
+                                .padding(10)
+                                .background(Color.orange.opacity(0.12))
+                                .cornerRadius(8)
+                            }
+
+                            // 3-Column Simulation Grid
+                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                                simulationButton(
+                                    title: "Super Charged",
+                                    detail: "90 PTS",
+                                    icon: "bolt.fill",
+                                    color: .cyan
+                                ) {
+                                    activityMonitor.startSimulation(points: 90.0, continuousWorkMinutes: 10.0)
+                                }
+
+                                simulationButton(
+                                    title: "Balanced",
+                                    detail: "50 PTS",
+                                    icon: "circle.circle.fill",
+                                    color: .blue
+                                ) {
+                                    activityMonitor.startSimulation(points: 50.0, continuousWorkMinutes: 0.0)
+                                }
+
+                                simulationButton(
+                                    title: "Dopamine Sad",
+                                    detail: "20 PTS",
+                                    icon: "moon.fill",
+                                    color: .purple
+                                ) {
+                                    activityMonitor.startSimulation(points: 20.0, continuousWorkMinutes: 0.0)
+                                }
+
+                                simulationButton(
+                                    title: "Overworked",
+                                    detail: "50m streak",
+                                    icon: "flame.fill",
+                                    color: .orange
+                                ) {
+                                    activityMonitor.startSimulation(points: 75.0, continuousWorkMinutes: 50.0)
+                                }
+
+                                simulationButton(
+                                    title: "Burnout",
+                                    detail: "95m streak",
+                                    icon: "exclamationmark.octagon.fill",
+                                    color: .red
+                                ) {
+                                    activityMonitor.startSimulation(points: 75.0, continuousWorkMinutes: 95.0)
+                                }
+
+                                simulationButton(
+                                    title: "Charging Mode",
+                                    detail: "Break recovery",
+                                    icon: "battery.100.bolt",
+                                    color: .green
+                                ) {
+                                    activityMonitor.startChargingSimulation()
+                                }
+                            }
+
+                            if let agentMonitor {
+                                Divider()
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Simulate Live Agent Alerts & Audio:")
+                                        .font(.caption.bold())
+                                        .foregroundStyle(.secondary)
+
+                                    HStack(spacing: 10) {
+                                        Button {
+                                            agentMonitor.handleSimulatedEvent(AgentEvent(
+                                                agentID: "antigravity",
+                                                agentName: "Antigravity",
+                                                kind: .needsApproval,
+                                                message: "Antigravity has a question for you!",
+                                                timestamp: Date()
+                                            ))
+                                        } label: {
+                                            Label("Question / Chime", systemImage: "questionmark.bubble.fill")
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+
+                                        Button {
+                                            agentMonitor.handleSimulatedEvent(AgentEvent(
+                                                agentID: "antigravity",
+                                                agentName: "Antigravity",
+                                                kind: .done,
+                                                message: "Antigravity finished all tasks!",
+                                                timestamp: Date()
+                                            ))
+                                        } label: {
+                                            Label("All Done / Fanfare", systemImage: "checkmark.seal.fill")
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                    }
+                                }
+                            }
+
+                            if let licensingService, licensingService.isEntitlementOverrideAvailable {
+                                Divider()
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Text("QA / Developer Licensing Entitlement Override:")
+                                            .font(.caption.bold())
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        if licensingService.entitlementOverride != .automatic {
+                                            Button("Reset Override") {
+                                                licensingService.setEntitlementOverride(.automatic)
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .controlSize(.mini)
+                                        }
+                                    }
+
+                                    Picker("Entitlement Mode", selection: Binding(
+                                        get: { licensingService.entitlementOverride },
+                                        set: { licensingService.setEntitlementOverride($0) }
+                                    )) {
+                                        ForEach(BitzEntitlementOverride.allCases) { mode in
+                                            Text(mode.displayName).tag(mode)
+                                        }
+                                    }
+                                    .pickerStyle(.segmented)
+                                }
+                            }
+                        }
+                    }
+
+                    // Section 4: Application Lifecycle & Exit
+                    settingsCard(title: "Application Lifecycle", systemImage: "power") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Completely exit Bitz, remove the mascot overlay from all displays, and stop background activity monitoring.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Button(role: .destructive) {
+                                NSApplication.shared.terminate(nil)
+                            } label: {
+                                Label("Quit Bitz Completely", systemImage: "power")
+                                    .font(.subheadline.bold())
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.red)
+                        }
+                    }
+                }
+                .padding(.top, 8)
+            }
+            .font(.subheadline.weight(.medium))
         }
     }
 

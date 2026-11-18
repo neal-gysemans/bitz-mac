@@ -5,6 +5,7 @@ import AppKit
 public struct TelemetrySettingsTabView: View {
     @ObservedObject public var telemetryDashboard: TelemetryDashboardService
     @ObservedObject public var telemetrySettings: TelemetrySettingsStore
+    @State private var isShowingAdvancedTelemetry: Bool = false
 
     public init(
         telemetryDashboard: TelemetryDashboardService,
@@ -49,62 +50,67 @@ public struct TelemetrySettingsTabView: View {
                 }
             }
 
-            // Section 2: Monitored Hardware Metrics
-            settingsCard(title: "Monitored Hardware Metrics", systemImage: "gauge.with.needle.fill") {
-                VStack(spacing: 8) {
-                    ForEach(TelemetryMetric.allCases) { metric in
-                        HStack {
-                            Image(systemName: metricIcon(for: metric))
-                                .foregroundStyle(Color.accentColor)
-                                .frame(width: 24)
+            // Section 2 & 3: Advanced Monitored Hardware Metrics & Sampling Cadence (#211)
+            DisclosureGroup("Advanced Hardware Metrics & Sampling Thresholds", isExpanded: $isShowingAdvancedTelemetry) {
+                VStack(alignment: .leading, spacing: 14) {
+                    settingsCard(title: "Monitored Hardware Metrics", systemImage: "gauge.with.needle.fill") {
+                        VStack(spacing: 8) {
+                            ForEach(TelemetryMetric.allCases) { metric in
+                                HStack {
+                                    Image(systemName: metricIcon(for: metric))
+                                        .foregroundStyle(Color.accentColor)
+                                        .frame(width: 24)
 
-                            Text(metric.displayName)
-                                .font(.subheadline)
+                                    Text(metric.displayName)
+                                        .font(.subheadline)
 
-                            Spacer()
+                                    Spacer()
 
-                            Toggle("", isOn: Binding(
-                                get: { telemetrySettings.isMetricEnabled(metric) },
-                                set: { telemetrySettings.setMetric(metric, enabled: $0) }
-                            ))
-                            .labelsHidden()
+                                    Toggle("", isOn: Binding(
+                                        get: { telemetrySettings.isMetricEnabled(metric) },
+                                        set: { telemetrySettings.setMetric(metric, enabled: $0) }
+                                    ))
+                                    .labelsHidden()
+                                }
+                                if metric.id != TelemetryMetric.allCases.last?.id {
+                                    Divider()
+                                }
+                            }
                         }
-                        if metric.id != TelemetryMetric.allCases.last?.id {
-                            Divider()
+                    }
+
+                    settingsCard(title: "Sampling Interval & Alerts", systemImage: "timer") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Picker("Sampling Cadence", selection: $telemetrySettings.pollingIntervalSeconds) {
+                                Text("1 second (High fidelity)").tag(1.0)
+                                Text("3 seconds (Balanced)").tag(3.0)
+                                Text("5 seconds (Battery saver)").tag(5.0)
+                                Text("10 seconds (Low power)").tag(10.0)
+                            }
+                            .pickerStyle(.menu)
+
+                            Picker("Low Disk Space Alert", selection: $telemetrySettings.lowDiskWarningThresholdPercent) {
+                                Text("Alert below 5% free").tag(5.0)
+                                Text("Alert below 10% free").tag(10.0)
+                                Text("Alert below 15% free").tag(15.0)
+                                Text("Alert below 20% free").tag(20.0)
+                            }
+                            .pickerStyle(.menu)
+
+                            Button {
+                                Task {
+                                    await telemetryDashboard.performSampleTick(forceDiskRefresh: true)
+                                }
+                            } label: {
+                                Label("Sample Telemetry Now", systemImage: "arrow.clockwise")
+                            }
+                            .padding(.top, 4)
                         }
                     }
                 }
+                .padding(.top, 8)
             }
-
-            // Section 3: Sampling Cadence & Warning Limits
-            settingsCard(title: "Sampling Interval & Alerts", systemImage: "timer") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Picker("Sampling Cadence", selection: $telemetrySettings.pollingIntervalSeconds) {
-                        Text("1 second (High fidelity)").tag(1.0)
-                        Text("3 seconds (Balanced)").tag(3.0)
-                        Text("5 seconds (Battery saver)").tag(5.0)
-                        Text("10 seconds (Low power)").tag(10.0)
-                    }
-                    .pickerStyle(.menu)
-
-                    Picker("Low Disk Space Alert", selection: $telemetrySettings.lowDiskWarningThresholdPercent) {
-                        Text("Alert below 5% free").tag(5.0)
-                        Text("Alert below 10% free").tag(10.0)
-                        Text("Alert below 15% free").tag(15.0)
-                        Text("Alert below 20% free").tag(20.0)
-                    }
-                    .pickerStyle(.menu)
-
-                    Button {
-                        Task {
-                            await telemetryDashboard.performSampleTick(forceDiskRefresh: true)
-                        }
-                    } label: {
-                        Label("Sample Telemetry Now", systemImage: "arrow.clockwise")
-                    }
-                    .padding(.top, 4)
-                }
-            }
+            .font(.subheadline.weight(.medium))
         }
     }
 

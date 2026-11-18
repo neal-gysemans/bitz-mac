@@ -149,6 +149,21 @@ public final class CalendarAgendaService: ObservableObject {
     /// Pluggable date provider for deterministic unit testing.
     public var dateProvider: () -> Date = { Date() }
 
+    /// Optional licensing service gating Calendar Agenda & 1-Click Join behind Bitz Pro (`.meetingRecorder`).
+    public var licensingService: (any LicensingServiceProtocol)?
+
+    public var isCalendarAgendaUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.meetingRecorder) ?? true
+    }
+
+    public func validateTierEntitlement() {
+        if !isCalendarAgendaUnlocked {
+            stop()
+        } else if settingsStore.isEnabled && authorizationStatus.isAuthorized {
+            Task { await refreshEvents() }
+        }
+    }
+
     private var eventStoreChangedCancellable: AnyCancellable?
     private var dayChangedCancellable: AnyCancellable?
     private var settingsChangedCancellable: AnyCancellable?
@@ -162,11 +177,13 @@ public final class CalendarAgendaService: ObservableObject {
     public init(
         storeProvider: any CalendarEventStoreProviding = SystemCalendarEventStore(),
         settingsStore: CalendarSettingsStore = CalendarSettingsStore(),
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        licensingService: (any LicensingServiceProtocol)? = nil
     ) {
         self.storeProvider = storeProvider
         self.settingsStore = settingsStore
         self.calendar = calendar
+        self.licensingService = licensingService
         self.authorizationStatus = storeProvider.authorizationStatus()
 
         self.onJoinMeeting = { url in
@@ -254,7 +271,7 @@ public final class CalendarAgendaService: ObservableObject {
     // MARK: - Event Fetching & Refresh
 
     public func refreshEvents(at currentDate: Date? = nil) async {
-        guard settingsStore.isEnabled && authorizationStatus.isAuthorized else { return }
+        guard isCalendarAgendaUnlocked && settingsStore.isEnabled && authorizationStatus.isAuthorized else { return }
         isRefreshing = true
         defer { isRefreshing = false }
 
@@ -358,7 +375,7 @@ public final class CalendarAgendaService: ObservableObject {
     // MARK: - Daily Briefs
 
     public func checkDailyBriefs(continuousWorkMinutes: Double = 0, at currentDate: Date? = nil) {
-        guard settingsStore.isEnabled && authorizationStatus.isAuthorized else { return }
+        guard isCalendarAgendaUnlocked && settingsStore.isEnabled && authorizationStatus.isAuthorized else { return }
         let now = currentDate ?? dateProvider()
 
         triggerMorningBriefIfEligible(at: now)

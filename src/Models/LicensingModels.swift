@@ -111,11 +111,11 @@ public enum BetaAccessPolicy: Sendable, Equatable {
     /// GA production mode: requires a valid Ed25519-signed `BITZ1` license key in Keychain for `.pro`.
     case production
 
-    /// Build timestamp floor (`2026-11-10T00:00:00Z` UTC) to prevent clock-rollback extension of Beta access.
-    public static let defaultBuildDate = Date(timeIntervalSince1970: 1_794_268_800)
+    /// Build timestamp floor (`2026-11-18T00:00:00Z` UTC) to prevent clock-rollback extension of Beta access.
+    public static let defaultBuildDate = Date(timeIntervalSince1970: 1_794_960_000)
 
-    /// Beta sunset deadline (`2027-01-09T00:00:00Z` UTC — 60 days from `2026-11-10`).
-    public static let defaultSunsetDate = Date(timeIntervalSince1970: 1_799_452_800)
+    /// Beta sunset deadline (`2027-01-18T00:00:00Z` UTC — 60 days from v1.1.0 launch).
+    public static let defaultSunsetDate = Date(timeIntervalSince1970: 1_800_230_400)
 
     /// Active compiled policy for the current release line.
     public static let current: BetaAccessPolicy = .betaAllAccess(

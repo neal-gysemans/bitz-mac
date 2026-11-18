@@ -247,6 +247,20 @@ public final class AgentMonitorService: ObservableObject {
         loadCatalog()
         pruneStateForDisabledAgents()
         clampActiveSessionsToSinglePairIfLocked()
+        if !isMultiAgentSwarmUnlocked {
+            if activeWarning != nil {
+                acknowledgeWarning()
+            }
+            for key in Array(sessions.keys) {
+                guard var entry = sessions[key], entry.activeWarningReason != nil else { continue }
+                entry.activeWarningReason = nil
+                if entry.lifecycleState == .warning {
+                    entry.lifecycleState = entry.turnActive ? .working : .idle
+                }
+                sessions[key] = entry
+            }
+            recomputeSessionSnapshots()
+        }
     }
 
     private func pruneStateForDisabledAgents() {
@@ -663,9 +677,9 @@ public final class AgentMonitorService: ObservableObject {
             } else if !event.isProcessPresence {
                 restoreWarningBubble(ifOverriddenByAgentID: id, stateKey: stateKey)
             }
-        case .warning:
+            case .warning:
             let reason = event.warningReason
-            if signalSettings.isEnabled(reason) {
+            if isMultiAgentSwarmUnlocked && signalSettings.isEnabled(reason) {
                 session.activeWarningReason = reason
                 session.lifecycleState = .warning
                 raiseWarning(
@@ -707,7 +721,7 @@ public final class AgentMonitorService: ObservableObject {
                 contextReadings[stateKey] = reading
                 latestContextStateKey = stateKey
                 latestContext = reading
-                if reading.percent >= signalSettings.contextThresholdPercent {
+                if isMultiAgentSwarmUnlocked && reading.percent >= signalSettings.contextThresholdPercent {
                     if !session.contextFired {
                         session.contextFired = true
                         if !event.isSeed && signalSettings.contextWarningEnabled {
@@ -730,7 +744,7 @@ public final class AgentMonitorService: ObservableObject {
                     }
                 }
             }
-            if let cpuPercent = event.cpuPercent {
+            if isMultiAgentSwarmUnlocked, let cpuPercent = event.cpuPercent {
                 evaluateRunawayCPU(agentID: id, agentName: name, cpuPercent: cpuPercent, stateKey: stateKey, now: now)
             }
         }
@@ -743,7 +757,7 @@ public final class AgentMonitorService: ObservableObject {
 
     /// Raises one stall warning per stall (FR-009). Runs every 5 s while monitoring; public for tests.
     public func evaluateStalls() {
-        guard signalSettings.stallWarningEnabled else { return }
+        guard isMultiAgentSwarmUnlocked && signalSettings.stallWarningEnabled else { return }
         let now = clock()
         let minutes = signalSettings.stallTimeoutMinutes
         var changed = false

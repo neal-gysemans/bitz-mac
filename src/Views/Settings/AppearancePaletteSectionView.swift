@@ -7,6 +7,7 @@ public struct AppearancePaletteSectionView: View {
 
     @State private var hexDrafts: [String: String] = [:]
     @State private var showingProPopover: Bool = false
+    @State private var isShowingCustomColorStudio: Bool = false
     @State private var proPopoverTitle: String = "Bitz Pro Feature"
     @State private var proPopoverDescription: String = ""
 
@@ -96,85 +97,91 @@ public struct AppearancePaletteSectionView: View {
 
             Divider()
 
-            colorRow(
-                title: "Chassis (body shell)",
-                key: "chassis",
-                currentHex: paletteStore.resolvedPalette.chassisHex,
-                isCustom: paletteStore.chassisOverride != nil,
-                apply: { _ = paletteStore.setChassisHex($0) },
-                reset: { paletteStore.resetChassis() },
-                preview: nil
-            )
+            DisclosureGroup("Custom Visor & Chassis Color Studio", isExpanded: $isShowingCustomColorStudio) {
+                VStack(alignment: .leading, spacing: 12) {
+                    colorRow(
+                        title: "Chassis (body shell)",
+                        key: "chassis",
+                        currentHex: paletteStore.resolvedPalette.chassisHex,
+                        isCustom: paletteStore.chassisOverride != nil,
+                        apply: { _ = paletteStore.setChassisHex($0) },
+                        reset: { paletteStore.resetChassis() },
+                        preview: nil
+                    )
 
-            colorRow(
-                title: "Trim (outlines)",
-                key: "trim",
-                currentHex: paletteStore.resolvedPalette.trimHex ?? "#FFFFFF",
-                isCustom: paletteStore.trimOverride != nil,
-                subtitle: paletteStore.trimOverride == nil ? "Following each emotion's LED color" : nil,
-                apply: { _ = paletteStore.setTrimHex($0) },
-                reset: { paletteStore.resetTrim() },
-                preview: nil
-            )
+                    colorRow(
+                        title: "Trim (outlines)",
+                        key: "trim",
+                        currentHex: paletteStore.resolvedPalette.trimHex ?? "#FFFFFF",
+                        isCustom: paletteStore.trimOverride != nil,
+                        subtitle: paletteStore.trimOverride == nil ? "Following each emotion's LED color" : nil,
+                        apply: { _ = paletteStore.setTrimHex($0) },
+                        reset: { paletteStore.resetTrim() },
+                        preview: nil
+                    )
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Glow intensity").font(.subheadline)
-                    Spacer()
-                    Text("\(Int((paletteStore.glowIntensity * 100).rounded()))%")
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                Slider(
-                    value: Binding(
-                        get: { paletteStore.glowIntensity },
-                        set: { paletteStore.setGlowIntensity($0) }
-                    ),
-                    in: AvatarResolvedPalette.glowRange
-                )
-                .disabled(!isCustomThemesUnlocked)
-            }
-
-            Divider()
-
-            HStack {
-                Text("Per-emotion LED, glow & particle colors")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if !isCustomThemesUnlocked {
-                    Spacer()
-                    Button {
-                        proPopoverTitle = "Custom Color Overrides (Pro)"
-                        proPopoverDescription = "Custom chassis, trim, and per-emotion LED customization is exclusive to Bitz Pro."
-                        showingProPopover = true
-                    } label: {
-                        ProBadgeView()
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Glow intensity").font(.subheadline)
+                            Spacer()
+                            Text("\(Int((paletteStore.glowIntensity * 100).rounded()))%")
+                                .font(.subheadline.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(
+                            value: Binding(
+                                get: { paletteStore.glowIntensity },
+                                set: { paletteStore.setGlowIntensity($0) }
+                            ),
+                            in: AvatarResolvedPalette.glowRange
+                        )
+                        .disabled(!isCustomThemesUnlocked)
                     }
-                    .buttonStyle(.plain)
-                    .help("View Pro features")
-                    .accessibilityLabel("View Pro Features")
-                }
-            }
 
-            ForEach(AvatarEmotionColorSlot.allCases) { slot in
-                colorRow(
-                    title: slot.title,
-                    key: slot.rawValue,
-                    currentHex: paletteStore.resolvedPalette.hex(for: slot),
-                    isCustom: paletteStore.isSlotCustomized(slot),
-                    apply: { _ = paletteStore.setEmotionHex($0, for: slot) },
-                    reset: { paletteStore.resetSlot(slot) },
-                    preview: { paletteStore.triggerPreview(for: slot) }
-                )
-            }
+                    Divider()
 
-            HStack {
-                Spacer()
-                Button("Reset to Default Theme") {
-                    hexDrafts.removeAll()
-                    paletteStore.resetToDefaultTheme()
+                    HStack {
+                        Text("Per-emotion LED, glow & particle colors")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if !isCustomThemesUnlocked {
+                            Spacer()
+                            Button {
+                                proPopoverTitle = "Custom Color Overrides (Pro)"
+                                proPopoverDescription = "Custom chassis, trim, and per-emotion LED customization is exclusive to Bitz Pro."
+                                showingProPopover = true
+                            } label: {
+                                ProBadgeView()
+                            }
+                            .buttonStyle(.plain)
+                            .help("View Pro features")
+                            .accessibilityLabel("View Pro Features")
+                        }
+                    }
+
+                    ForEach(AvatarEmotionColorSlot.allCases) { slot in
+                        colorRow(
+                            title: slot.title,
+                            key: slot.rawValue,
+                            currentHex: paletteStore.resolvedPalette.hex(for: slot),
+                            isCustom: paletteStore.isSlotCustomized(slot),
+                            apply: { _ = paletteStore.setEmotionHex($0, for: slot) },
+                            reset: { paletteStore.resetSlot(slot) },
+                            preview: { paletteStore.triggerPreview(for: slot) }
+                        )
+                    }
+
+                    HStack {
+                        Spacer()
+                        Button("Reset to Default Theme") {
+                            hexDrafts.removeAll()
+                            paletteStore.resetToDefaultTheme()
+                        }
+                    }
                 }
+                .padding(.top, 8)
             }
+            .font(.subheadline.weight(.medium))
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)

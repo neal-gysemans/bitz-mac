@@ -1344,6 +1344,90 @@ final class LicensingServiceTests: XCTestCase {
         XCTAssertEqual(service2.activeLicense?.licenseId, "BTZ-UPGRADE-1")
         XCTAssertNil(service2.activeLicense?.expiresAt)
     }
+
+    @MainActor
+    func testExpandedProFeatureGatingForGuardrailsGitHubCalendarAndFlowShield() async {
+        let (defaults, suite) = makeIsolatedDefaults("ExpandedProGating")
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let freeLicensing = LicensingService(
+            storage: MockLicenseStorage(),
+            publicKeyData: testPublicKeyData,
+            accessPolicy: .production,
+            userDefaults: defaults
+        )
+        XCTAssertEqual(freeLicensing.currentTier, .free)
+
+        // 1. Agent Guardrails (Context / Loop / Stall warnings) are suppressed on Free tier
+        let monitor = AgentMonitorService(adapters: [], userDefaults: defaults, licensingService: freeLicensing)
+        monitor.handleEvent(AgentEvent(
+            agentID: "claude",
+            agentName: "Claude Code",
+            kind: .warning,
+            message: "Loop detected",
+            timestamp: Date(),
+            metadata: [AgentEvent.MetadataKey.reason: AgentWarningReason.loop.rawValue]
+        ))
+        XCTAssertNil(monitor.activeWarning, "Agent warning guardrails must be gated behind Pro (.multiAgentSwarm)")
+
+        // Downgrading while a warning is active clears the stuck warning bubble & visor
+        let proAndDowngradeLicensing = LicensingService(
+            storage: MockLicenseStorage(),
+            publicKeyData: testPublicKeyData,
+            userDefaults: defaults,
+            allowEntitlementOverride: true
+        )
+        let downgradeMonitor = AgentMonitorService(adapters: [], userDefaults: defaults, licensingService: proAndDowngradeLicensing)
+        downgradeMonitor.handleEvent(AgentEvent(
+            agentID: "claude",
+            agentName: "Claude Code",
+            kind: .warning,
+            message: "Loop detected",
+            timestamp: Date(),
+            metadata: [AgentEvent.MetadataKey.reason: AgentWarningReason.loop.rawValue]
+        ))
+        XCTAssertNotNil(downgradeMonitor.activeWarning)
+        proAndDowngradeLicensing.setEntitlementOverride(.simulateFreeTier)
+        downgradeMonitor.validateTierEntitlement()
+        XCTAssertNil(downgradeMonitor.activeWarning, "Downgrading to Free must clear any active guardrail warning")
+
+        // 2. GitHub Watcher refuses to start polling on Free tier (even when isEnabled=true before init)
+        let githubSettings = GitHubSettingsStore(userDefaults: defaults)
+        githubSettings.setEnabled(true)
+        let githubService = GitHubNotificationService(settingsStore: githubSettings, licensingService: freeLicensing)
+        XCTAssertFalse(githubService.isGitHubWatcherUnlocked)
+        githubService.start()
+        XCTAssertFalse(githubService.isPolling)
+
+        // 3. Calendar Agenda refuses to refresh events on Free tier
+        let calendarSettings = CalendarSettingsStore(userDefaults: defaults)
+        calendarSettings.setEnabled(true)
+        let mockCalStore = MockCalendarEventStore(status: .fullAccess, stubbedEvents: [
+            CalendarEventSnapshot(
+                id: "ev-1",
+                title: "Standup",
+                startDate: Date().addingTimeInterval(300),
+                endDate: Date().addingTimeInterval(1800),
+                isAllDay: false,
+                location: nil,
+                meetingURL: nil,
+                notes: nil
+            )
+        ])
+        let calendarService = CalendarAgendaService(storeProvider: mockCalStore, settingsStore: calendarSettings)
+        calendarService.licensingService = freeLicensing
+        XCTAssertFalse(calendarService.isCalendarAgendaUnlocked)
+        await calendarService.refreshEvents()
+        XCTAssertTrue(calendarService.todayEvents.isEmpty)
+
+        // 4. Auto Flow Shield remains disabled on Free tier
+        let flowSettings = FlowShieldSettingsStore(userDefaults: defaults)
+        flowSettings.setEnabled(true)
+        let flowService = FlowShieldService(settingsStore: flowSettings)
+        flowService.licensingService = freeLicensing
+        XCTAssertFalse(flowService.isFlowShieldUnlocked)
+        XCTAssertEqual(flowService.currentStatus, FlowShieldStatus.disabled)
+    }
 }
 
 // MARK: - Test Mock Backend Client

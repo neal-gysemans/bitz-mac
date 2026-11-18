@@ -408,24 +408,24 @@ public struct BitzProSettingsTabView: View {
                 featureCard(
                     icon: "cpu.fill",
                     color: .blue,
-                    title: "Multi-Agent Swarm",
-                    description: "Simultaneously monitor 2+ AI coding agents with aggregated HUD alerts.",
+                    title: "Multi-Agent Swarm & Guardrails",
+                    description: "Monitor 2+ AI agents, 3D Command Deck, Context/Loop/Stall warnings, GitHub PR/CI Watcher & Agent Inbox.",
                     isComingSoon: BitzFeature.multiAgentSwarm.isComingSoon
                 )
 
                 featureCard(
                     icon: "mic.fill",
                     color: .orange,
-                    title: "Meeting Assistant",
-                    description: "Local microphone & system audio recording with private on-device Speech transcription.",
+                    title: "Meeting & Calendar Assistant",
+                    description: "Local mic & system audio WhisperKit transcription, Calendar countdowns, and 1-click video call join.",
                     isComingSoon: BitzFeature.meetingRecorder.isComingSoon
                 )
 
                 featureCard(
                     icon: "sparkles",
                     color: .mint,
-                    title: "AI Personality",
-                    description: "On-device Apple Foundation Models commentary with Snarky, Supportive, and Cute presets.",
+                    title: "AI Personality & Flow Shield",
+                    description: "On-device LLM commentary (Snarky, Supportive, Cute), Auto Flow Shield Focus & 7-Day Shift Analytics.",
                     isComingSoon: BitzFeature.personality.isComingSoon
                 )
 

@@ -414,6 +414,110 @@ final class SettingsViewsTests: XCTestCase {
         XCTAssertNotNil(AdvancedSettingsTabView.launchAtLoginApprovalMessage(for: .requiresApproval))
         XCTAssertNil(AdvancedSettingsTabView.launchAtLoginApprovalMessage(for: .enabled))
     }
+
+    /// #211: Verify 6 consolidated primary tabs, legacy 9-tab mapping, and 4-step Companion Onboarding Wizard presets.
+    func testConsolidatedPrimaryTabsAndCompanionOnboardingWizard() {
+        let suiteName = "CompanionOnboardingTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        // 1. Primary consolidated tabs
+        XCTAssertEqual(SettingsTab.primaryTabs, [.general, .behaviors, .agents, .audio, .pro, .advanced])
+        XCTAssertEqual(SettingsTab.appearance.resolvedPrimaryTab, .general)
+        XCTAssertEqual(SettingsTab.personality.resolvedPrimaryTab, .general)
+        XCTAssertEqual(SettingsTab.telemetry.resolvedPrimaryTab, .behaviors)
+        XCTAssertEqual(SettingsTab.general.primaryDisplayTitle, "Companion")
+        XCTAssertEqual(SettingsTab.behaviors.primaryDisplayTitle, "Focus & Work")
+        XCTAssertEqual(SettingsTab.agents.primaryDisplayTitle, "AI & Coding")
+        XCTAssertEqual(SettingsTab.audio.primaryDisplayTitle, "Audio & Meetings")
+        XCTAssertEqual(SettingsTab.advanced.primaryDisplayTitle, "System")
+
+        let engine = WellnessPointEngine(userDefaults: defaults)
+        let activityMonitor = ActivityMonitorService(engine: engine, telemetry: MockTelemetryProvider())
+        let scaleStore = AvatarScaleStore(userDefaults: defaults)
+        let opacityStore = AvatarOpacityStore(userDefaults: defaults)
+        let positionStore = AvatarPositionStore(userDefaults: defaults)
+        let displayStore = DisplayPreferenceStore(userDefaults: defaults)
+        let agentMonitor = AgentMonitorService(adapters: [], userDefaults: defaults)
+        let telemetrySettings = TelemetrySettingsStore(userDefaults: defaults)
+        let telemetryDashboard = TelemetryDashboardService(settingsStore: telemetrySettings)
+        let audioSettings = CyberAudioSettingsStore(userDefaults: defaults)
+        let personalitySettings = PersonalitySettingsStore(userDefaults: defaults)
+        let characterStore = AvatarCharacterStore(userDefaults: defaults)
+        let paletteStore = AvatarPaletteStore(userDefaults: defaults)
+
+        var didComplete = false
+        let onboardingView = CompanionOnboardingView(
+            engine: engine,
+            scaleStore: scaleStore,
+            opacityStore: opacityStore,
+            positionStore: positionStore,
+            characterStore: characterStore,
+            paletteStore: paletteStore,
+            personalitySettings: personalitySettings,
+            agentMonitor: agentMonitor,
+            telemetrySettings: telemetrySettings,
+            audioSettings: audioSettings,
+            workShiftTracker: WorkShiftTrackerService(userDefaults: defaults),
+            calendarService: CalendarAgendaService(settingsStore: CalendarSettingsStore(userDefaults: defaults)),
+            meetingRecorder: .stub(defaults: defaults),
+            onComplete: { didComplete = true }
+        )
+        _ = onboardingView.body
+        onboardingView.finishOnboarding()
+        XCTAssertTrue(didComplete)
+        XCTAssertTrue(agentMonitor.popupsEnabled)
+        XCTAssertTrue(telemetrySettings.displayInMascotCyberHUD)
+
+        // Unchecking AI Coding Copilot while keeping Focus & Wellness disables agent popups (#211 review fix 2)
+        CompanionOnboardingMode.apply(
+            selectedModes: [.focusAndWellness],
+            agentMonitor: agentMonitor,
+            telemetrySettings: telemetrySettings,
+            audioSettings: audioSettings,
+            personalitySettings: personalitySettings,
+            licensingService: nil
+        )
+        XCTAssertFalse(agentMonitor.popupsEnabled)
+        XCTAssertTrue(telemetrySettings.displayInMascotCyberHUD)
+        XCTAssertTrue(personalitySettings.isEnabled)
+
+        // Minimalist mode disables popups and HUD clutter
+        CompanionOnboardingMode.apply(
+            selectedModes: [.minimalistPet],
+            agentMonitor: agentMonitor,
+            telemetrySettings: telemetrySettings,
+            audioSettings: audioSettings,
+            personalitySettings: personalitySettings,
+            licensingService: nil
+        )
+        XCTAssertFalse(agentMonitor.popupsEnabled)
+        XCTAssertFalse(telemetrySettings.displayInMascotCyberHUD)
+        XCTAssertFalse(telemetrySettings.displayInSpeechBubbleCycle)
+        XCTAssertFalse(personalitySettings.isEnabled)
+
+        // SettingsRootView renders in onboarding mode too
+        let onboardingRoot = SettingsRootView(
+            engine: engine,
+            activityMonitor: activityMonitor,
+            scaleStore: scaleStore,
+            opacityStore: opacityStore,
+            positionStore: positionStore,
+            displayStore: displayStore,
+            agentMonitor: agentMonitor,
+            updateStore: AppUpdateStore(userDefaults: defaults),
+            telemetryDashboard: telemetryDashboard,
+            telemetrySettings: telemetrySettings,
+            audioSettings: audioSettings,
+            paletteStore: paletteStore,
+            characterStore: characterStore,
+            personalitySettings: personalitySettings,
+            meetingRecorder: .stub(defaults: defaults),
+            startInOnboarding: true
+        )
+        let renderedRoot = String(describing: onboardingRoot.body)
+        XCTAssertTrue(renderedRoot.contains("CompanionOnboardingView"))
+    }
 }
 
 private final class InMemoryTestLicenseStorage: LicenseStorageProtocol {

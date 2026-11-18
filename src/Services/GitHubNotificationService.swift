@@ -75,6 +75,13 @@ public final class GitHubNotificationService: ObservableObject {
     /// Closure invoked when an alert arrives, allowing audio chime integration.
     public var onPlaySound: ((CyberSoundEvent) -> Void)?
 
+    /// Optional licensing service gating GitHub PR & CI Watcher behind Bitz Pro (`.multiAgentSwarm`).
+    public var licensingService: (any LicensingServiceProtocol)?
+
+    public var isGitHubWatcherUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.multiAgentSwarm) ?? true
+    }
+
     private var pollTask: Task<Void, Never>?
     private var alertDismissTask: Task<Void, Never>?
     private var settingsCancellables = Set<AnyCancellable>()
@@ -95,6 +102,7 @@ public final class GitHubNotificationService: ObservableObject {
         credentialsStore: GitHubCredentialsStore = GitHubCredentialsStore(),
         httpRequester: any HTTPRequestPerforming = URLSessionHTTPRequester(),
         localGitWatcher: LocalGitEventWatcher? = nil,
+        licensingService: (any LicensingServiceProtocol)? = nil,
         clock: @escaping @Sendable () -> Date = Date.init
     ) {
         self.settingsStore = settingsStore
@@ -102,6 +110,7 @@ public final class GitHubNotificationService: ObservableObject {
         self.httpRequester = httpRequester
         let resolvedWatcher = localGitWatcher ?? LocalGitEventWatcher()
         self.localGitWatcher = resolvedWatcher
+        self.licensingService = licensingService
         self.clock = clock
 
         self.onOpenURL = { url in
@@ -123,7 +132,7 @@ public final class GitHubNotificationService: ObservableObject {
     // MARK: - Lifecycle
 
     public func start() {
-        guard settingsStore.isEnabled else { return }
+        guard isGitHubWatcherUnlocked && settingsStore.isEnabled else { return }
 
         if settingsStore.notifyGitActivity {
             localGitWatcher.start(installHooks: true)
@@ -134,6 +143,15 @@ public final class GitHubNotificationService: ObservableObject {
             if authState.isAuthenticated {
                 startPollingLoop()
             }
+        }
+    }
+
+    public func validateTierEntitlement() {
+        if !isGitHubWatcherUnlocked {
+            stop()
+            dismissAlert()
+        } else if settingsStore.isEnabled {
+            start()
         }
     }
 

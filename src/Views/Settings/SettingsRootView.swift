@@ -28,6 +28,41 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
         case .advanced: return "gearshape.2.fill"
         }
     }
+
+    /// The 6 consolidated top-level primary tabs displayed in the Settings toolbar header (#211).
+    public static var primaryTabs: [SettingsTab] {
+        [.general, .behaviors, .agents, .audio, .pro, .advanced]
+    }
+
+    /// Maps any legacy 9-tab reference onto one of the 6 primary consolidated tabs (#211).
+    public var resolvedPrimaryTab: SettingsTab {
+        switch self {
+        case .general, .appearance, .personality:
+            return .general
+        case .behaviors, .telemetry:
+            return .behaviors
+        case .agents:
+            return .agents
+        case .audio:
+            return .audio
+        case .pro:
+            return .pro
+        case .advanced:
+            return .advanced
+        }
+    }
+
+    public var primaryDisplayTitle: String {
+        switch resolvedPrimaryTab {
+        case .general: return "Companion"
+        case .behaviors: return "Focus & Work"
+        case .agents: return "AI & Coding"
+        case .audio: return "Audio & Meetings"
+        case .pro: return "Bitz Pro"
+        case .advanced: return "System"
+        default: return rawValue
+        }
+    }
 }
 
 /// Root container for the Bitz Settings window, organizing configuration into native macOS tabs with high-fidelity visuals.
@@ -59,6 +94,7 @@ public struct SettingsRootView: View {
     @ObservedObject public var workShiftTracker: WorkShiftTrackerService
 
     @State private var selectedTab: SettingsTab
+    @State private var isShowingOnboarding: Bool
 
     public init(
         engine: WellnessPointEngine,
@@ -86,9 +122,11 @@ public struct SettingsRootView: View {
         calendarService: CalendarAgendaService? = nil,
         githubService: GitHubNotificationService? = nil,
         workShiftTracker: WorkShiftTrackerService? = nil,
-        initialTab: SettingsTab = .general
+        initialTab: SettingsTab = .general,
+        startInOnboarding: Bool = false
     ) {
-        self._selectedTab = State(initialValue: initialTab)
+        self._selectedTab = State(initialValue: initialTab.resolvedPrimaryTab)
+        self._isShowingOnboarding = State(initialValue: startInOnboarding)
         self.interactionSettings = interactionSettings
         self.inboxDirectoryURL = inboxDirectoryURL
         self.paletteStore = paletteStore
@@ -119,15 +157,44 @@ public struct SettingsRootView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Modern macOS Settings Toolbar Header
-            tabHeader
-            Divider()
+            if !isShowingOnboarding {
+                // Modern macOS Settings Toolbar Header (Consolidated 6 primary tabs, #211)
+                tabHeader
+                Divider()
+            }
 
-            // Active Tab View Content
+            // Active Tab View Content or First-Launch Companion Onboarding Wizard (#211)
             ScrollView(.vertical, showsIndicators: true) {
-                activeTabContent
-                    .padding(20)
-                    .frame(maxWidth: .infinity)
+                Group {
+                    if isShowingOnboarding {
+                        CompanionOnboardingView(
+                            engine: engine,
+                            scaleStore: scaleStore,
+                            opacityStore: opacityStore,
+                            positionStore: positionStore,
+                            characterStore: characterStore,
+                            paletteStore: paletteStore,
+                            personalitySettings: personalitySettings,
+                            agentMonitor: agentMonitor,
+                            telemetrySettings: telemetrySettings,
+                            audioSettings: audioSettings,
+                            workShiftTracker: workShiftTracker,
+                            calendarService: calendarService,
+                            meetingRecorder: meetingRecorder,
+                            licensingService: licensingService,
+                            audioPlayer: audioPlayer,
+                            onComplete: {
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                                    isShowingOnboarding = false
+                                }
+                            }
+                        )
+                    } else {
+                        activeTabContent
+                    }
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -144,6 +211,7 @@ public struct SettingsRootView: View {
         )
         .background(Color(nsColor: .windowBackgroundColor))
         .onReceive(NotificationCenter.default.publisher(for: .bitzOpenProSettingsTab)) { _ in
+            isShowingOnboarding = false
             selectedTab = .pro
         }
     }
@@ -154,6 +222,19 @@ public struct SettingsRootView: View {
         HStack(spacing: 14) {
             Toggle("Show Mascot on Desktop", isOn: $positionStore.isMascotVisible)
                 .font(.subheadline)
+
+            if !isShowingOnboarding {
+                Button {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        isShowingOnboarding = true
+                    }
+                } label: {
+                    Label("Companion Setup Wizard…", systemImage: "sparkles")
+                        .font(.caption.bold())
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
 
             Spacer()
 
@@ -170,9 +251,9 @@ public struct SettingsRootView: View {
     // MARK: - Tab Header Bar
 
     private var tabHeader: some View {
-        HStack(spacing: 6) {
-            ForEach(SettingsTab.allCases) { tab in
-                let isSelected = (selectedTab == tab)
+        HStack(spacing: 8) {
+            ForEach(SettingsTab.primaryTabs) { tab in
+                let isSelected = (selectedTab.resolvedPrimaryTab == tab)
                 Button {
                     withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
                         selectedTab = tab
@@ -183,16 +264,16 @@ public struct SettingsRootView: View {
                             .font(.system(size: 16, weight: isSelected ? .semibold : .regular))
                             .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
 
-                        Text(tab.rawValue)
-                            .font(.system(size: 11, weight: isSelected ? .medium : .regular))
+                        Text(tab.primaryDisplayTitle)
+                            .font(.system(size: 12, weight: isSelected ? .medium : .regular))
                             .lineLimit(1)
-                            .minimumScaleFactor(0.75)
+                            .minimumScaleFactor(0.85)
                             .foregroundStyle(isSelected ? Color.primary : Color.secondary)
                     }
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: 44)
                     .padding(.vertical, 6)
-                    .padding(.horizontal, 4)
+                    .padding(.horizontal, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
                             .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
@@ -216,42 +297,50 @@ public struct SettingsRootView: View {
 
     @ViewBuilder
     private var activeTabContent: some View {
-        switch selectedTab {
-        case .general:
-            GeneralSettingsTabView(
-                positionStore: positionStore,
-                displayStore: displayStore,
-                interactionSettings: interactionSettings,
-                inboxDirectoryURL: inboxDirectoryURL
-            )
-        case .appearance:
-            AppearanceSettingsTabView(
-                scaleStore: scaleStore,
-                opacityStore: opacityStore,
-                engine: engine,
-                paletteStore: paletteStore,
-                characterStore: characterStore,
-                licensingService: licensingService,
-                audioPlayer: audioPlayer
-            )
-        case .behaviors:
-            BehaviorSettingsTabView(
-                engine: engine,
-                activityMonitor: activityMonitor,
-                flowShieldSettings: flowShieldSettings,
-                flowShieldService: flowShieldService,
-                calendarService: calendarService,
-                workShiftTracker: workShiftTracker
-            )
+        switch selectedTab.resolvedPrimaryTab {
+        case .general, .appearance, .personality:
+            VStack(alignment: .leading, spacing: 18) {
+                AppearanceSettingsTabView(
+                    scaleStore: scaleStore,
+                    opacityStore: opacityStore,
+                    engine: engine,
+                    paletteStore: paletteStore,
+                    characterStore: characterStore,
+                    licensingService: licensingService,
+                    audioPlayer: audioPlayer
+                )
+                PersonalitySettingsTabView(
+                    settingsStore: personalitySettings,
+                    licensingService: licensingService
+                )
+                GeneralSettingsTabView(
+                    positionStore: positionStore,
+                    displayStore: displayStore,
+                    interactionSettings: interactionSettings,
+                    inboxDirectoryURL: inboxDirectoryURL,
+                    licensingService: licensingService
+                )
+            }
+        case .behaviors, .telemetry:
+            VStack(alignment: .leading, spacing: 18) {
+                BehaviorSettingsTabView(
+                    engine: engine,
+                    activityMonitor: activityMonitor,
+                    flowShieldSettings: flowShieldSettings,
+                    flowShieldService: flowShieldService,
+                    calendarService: calendarService,
+                    workShiftTracker: workShiftTracker,
+                    licensingService: licensingService
+                )
+                TelemetrySettingsTabView(
+                    telemetryDashboard: telemetryDashboard,
+                    telemetrySettings: telemetrySettings
+                )
+            }
         case .agents:
             AgentsSettingsTabView(
                 agentMonitor: agentMonitor,
                 githubService: githubService,
-                licensingService: licensingService
-            )
-        case .personality:
-            PersonalitySettingsTabView(
-                settingsStore: personalitySettings,
                 licensingService: licensingService
             )
         case .audio:
@@ -262,11 +351,6 @@ public struct SettingsRootView: View {
                 licensingService: licensingService,
                 characterStore: characterStore,
                 whisperModelManager: whisperModelManager
-            )
-        case .telemetry:
-            TelemetrySettingsTabView(
-                telemetryDashboard: telemetryDashboard,
-                telemetrySettings: telemetrySettings
             )
         case .pro:
             BitzProSettingsTabView(

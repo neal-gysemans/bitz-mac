@@ -11,6 +11,7 @@ public struct AgentsSettingsTabView: View {
     @State private var patInput: String = ""
     @State private var patActionMessage: String? = nil
     @State private var isPATActionError: Bool = false
+    @State private var isShowingAdvancedSignalThresholds: Bool = false
 
     /// Agents whose window picker sits on Custom; needed because a preset value would otherwise snap the picker back.
     @State private var customWindowAgentIDs: Set<String> = []
@@ -37,6 +38,10 @@ public struct AgentsSettingsTabView: View {
         self.licensingService = licensingService
     }
 
+    private var isAgentPowerPackUnlocked: Bool {
+        licensingService?.isFeatureUnlocked(.multiAgentSwarm) ?? true
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             // Section 1: Notifications
@@ -57,56 +62,79 @@ public struct AgentsSettingsTabView: View {
             // Section 2: Agent Signals (FR-012); WP02's didSet clamps and persists every change.
             settingsCard(title: "Agent Signals & Warnings", systemImage: "exclamationmark.triangle.fill") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Toggle("Almost Done Heads-Up", isOn: $agentMonitor.signalSettings.almostDoneEnabled)
+                    if !isAgentPowerPackUnlocked {
+                        HStack(spacing: 8) {
+                            Image(systemName: "lock.fill")
+                                .foregroundStyle(.cyan)
+                            Text("Smart Agent Guardrails (Context Window %, Tool-Loop, Stall, 429 Quota & Runaway CPU warnings) require Bitz Pro.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button {
+                                NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                            } label: {
+                                ProBadgeView()
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        Divider()
+                    }
 
-                    Toggle("Context Window Warnings", isOn: $agentMonitor.signalSettings.contextWarningEnabled)
-                    Stepper("Warn at \(agentMonitor.signalSettings.contextThresholdPercent)% context",
-                            value: $agentMonitor.signalSettings.contextThresholdPercent, in: 50...99, step: 5)
-                        .disabled(!agentMonitor.signalSettings.contextWarningEnabled)
-                        .padding(.leading, 20)
-
-                    Toggle("Tool Loop Warnings (4 identical calls)", isOn: $agentMonitor.signalSettings.loopWarningEnabled)
-
-                    Toggle("Stall Warnings", isOn: $agentMonitor.signalSettings.stallWarningEnabled)
-                    Stepper("Stall after \(agentMonitor.signalSettings.stallTimeoutMinutes) min without output",
-                            value: $agentMonitor.signalSettings.stallTimeoutMinutes, in: 1...30)
-                        .disabled(!agentMonitor.signalSettings.stallWarningEnabled)
-                        .padding(.leading, 20)
-
-                    Toggle("Usage Limit / Quota Warnings (429)", isOn: $agentMonitor.signalSettings.rateLimitWarningEnabled)
-
-                    Toggle("Runaway CPU Warnings", isOn: $agentMonitor.signalSettings.runawayCPUWarningEnabled)
-                    Stepper("Warn above \(agentMonitor.signalSettings.runawayCPUPercentThreshold)% CPU",
-                            value: $agentMonitor.signalSettings.runawayCPUPercentThreshold, in: 50...400, step: 10)
-                        .disabled(!agentMonitor.signalSettings.runawayCPUWarningEnabled)
-                        .padding(.leading, 20)
-                    Stepper("Sustained for \(agentMonitor.signalSettings.runawayCPUDurationMinutes) min",
-                            value: $agentMonitor.signalSettings.runawayCPUDurationMinutes, in: 1...15)
-                        .disabled(!agentMonitor.signalSettings.runawayCPUWarningEnabled)
-                        .padding(.leading, 20)
+                    Group {
+                        Toggle("Almost Done Heads-Up", isOn: $agentMonitor.signalSettings.almostDoneEnabled)
+                        Toggle("Context Window Warnings", isOn: $agentMonitor.signalSettings.contextWarningEnabled)
+                        Toggle("Tool Loop Warnings (4 identical calls)", isOn: $agentMonitor.signalSettings.loopWarningEnabled)
+                        Toggle("Stall Warnings", isOn: $agentMonitor.signalSettings.stallWarningEnabled)
+                        Toggle("Usage Limit / Quota Warnings (429)", isOn: $agentMonitor.signalSettings.rateLimitWarningEnabled)
+                        Toggle("Runaway CPU Warnings", isOn: $agentMonitor.signalSettings.runawayCPUWarningEnabled)
+                    }
+                    .disabled(!isAgentPowerPackUnlocked)
 
                     hint("Turning off Agent Speech Bubbles hides bubbles only; the amber visor and context gauge keep working.")
 
                     Divider()
 
-                    ForEach(Self.contextWindowAgents, id: \.id) { agent in
-                        HStack {
-                            Picker("\(agent.name) context window", selection: windowPresetBinding(agent.id)) {
-                                Text("200k").tag(200_000)
-                                Text("1M").tag(1_000_000)
-                                Text("Custom").tag(Self.customWindowTag)
-                            }
-                            .fixedSize()
+                    DisclosureGroup("Customize Signal Thresholds & Context Window Sizes", isExpanded: $isShowingAdvancedSignalThresholds) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Stepper("Warn at \(agentMonitor.signalSettings.contextThresholdPercent)% context",
+                                    value: $agentMonitor.signalSettings.contextThresholdPercent, in: 50...99, step: 5)
+                                .disabled(!agentMonitor.signalSettings.contextWarningEnabled)
 
-                            if windowPresetBinding(agent.id).wrappedValue == Self.customWindowTag {
-                                TextField("Tokens", value: windowBinding(agent.id), format: .number)
-                                    .frame(width: 110)
-                                    .accessibilityLabel("\(agent.name) context window in tokens")
+                            Stepper("Stall after \(agentMonitor.signalSettings.stallTimeoutMinutes) min without output",
+                                    value: $agentMonitor.signalSettings.stallTimeoutMinutes, in: 1...30)
+                                .disabled(!agentMonitor.signalSettings.stallWarningEnabled)
+
+                            Stepper("Warn above \(agentMonitor.signalSettings.runawayCPUPercentThreshold)% CPU",
+                                    value: $agentMonitor.signalSettings.runawayCPUPercentThreshold, in: 50...400, step: 10)
+                                .disabled(!agentMonitor.signalSettings.runawayCPUWarningEnabled)
+                            Stepper("Sustained for \(agentMonitor.signalSettings.runawayCPUDurationMinutes) min",
+                                    value: $agentMonitor.signalSettings.runawayCPUDurationMinutes, in: 1...15)
+                                .disabled(!agentMonitor.signalSettings.runawayCPUWarningEnabled)
+
+                            Divider()
+
+                            ForEach(Self.contextWindowAgents, id: \.id) { agent in
+                                HStack {
+                                    Picker("\(agent.name) context window", selection: windowPresetBinding(agent.id)) {
+                                        Text("200k").tag(200_000)
+                                        Text("1M").tag(1_000_000)
+                                        Text("Custom").tag(Self.customWindowTag)
+                                    }
+                                    .fixedSize()
+
+                                    if windowPresetBinding(agent.id).wrappedValue == Self.customWindowTag {
+                                        TextField("Tokens", value: windowBinding(agent.id), format: .number)
+                                            .frame(width: 110)
+                                            .accessibilityLabel("\(agent.name) context window in tokens")
+                                    }
+                                }
                             }
+
+                            hint("Bitz can't read the model's window size from session logs. Pick 1M if you use a 1M-context model.")
                         }
+                        .padding(.top, 8)
                     }
-
-                    hint("Bitz can't read the model's window size from session logs. Pick 1M if you use a 1M-context model.")
+                    .font(.subheadline.weight(.medium))
                 }
             }
 
@@ -114,14 +142,19 @@ public struct AgentsSettingsTabView: View {
             settingsCard(title: "Agent Command Deck", systemImage: "macwindow.on.rectangle") {
                 HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("3D Cyber-Ship Squad Deck")
-                            .font(.subheadline.bold())
+                        HStack(spacing: 6) {
+                            Text("3D Cyber-Ship Squad Deck")
+                                .font(.subheadline.bold())
+                            if !isAgentPowerPackUnlocked {
+                                ProBadgeView()
+                            }
+                        }
                         Text("Visualize all background agent sessions, context usage, loops, and approval alerts in a real-time isometric spacecraft.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Open Command Deck") {
+                    Button(isAgentPowerPackUnlocked ? "Open Command Deck" : "Preview Command Deck") {
                         NSApp.sendAction(#selector(BitzAppDelegate.showCommandDeckWindow), to: nil, from: nil)
                     }
                     .accessibilityIdentifier("AgentsTabOpenCommandDeckButton")
@@ -258,6 +291,24 @@ public struct AgentsSettingsTabView: View {
     private var githubSection: some View {
         settingsCard(title: "GitHub Notifications & PR Watcher", systemImage: "chevron.left.forwardslash.chevron.right") {
             VStack(alignment: .leading, spacing: 12) {
+                if !isAgentPowerPackUnlocked {
+                    HStack(spacing: 8) {
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.cyan)
+                        Text("Real-time GitHub PR review requests & CI build failure alerts require Bitz Pro.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button {
+                            NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                        } label: {
+                            ProBadgeView()
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Divider()
+                }
+
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Enable GitHub Watcher")
@@ -270,8 +321,12 @@ public struct AgentsSettingsTabView: View {
                     Toggle(
                         "",
                         isOn: Binding(
-                            get: { githubService.settingsStore.isEnabled },
+                            get: { isAgentPowerPackUnlocked && githubService.settingsStore.isEnabled },
                             set: { newValue in
+                                guard isAgentPowerPackUnlocked else {
+                                    NotificationCenter.default.post(name: .bitzOpenProSettingsTab, object: nil)
+                                    return
+                                }
                                 githubService.settingsStore.setEnabled(newValue)
                                 if newValue {
                                     githubService.start()
@@ -293,7 +348,7 @@ public struct AgentsSettingsTabView: View {
                     githubStatusBadge
                 }
 
-                if githubService.settingsStore.isEnabled {
+                if isAgentPowerPackUnlocked && githubService.settingsStore.isEnabled {
                     Divider()
 
                     // Auth mode

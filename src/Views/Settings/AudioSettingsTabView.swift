@@ -26,6 +26,7 @@ public struct AudioSettingsTabView: View {
     @State private var recordingsFolderWarning: String?
     @State private var exportFolderWarning: String?
     @State private var showingProPopover = false
+    @State private var isShowingAdvancedSoundEffects = false
 
     public init(
         settingsStore: CyberAudioSettingsStore,
@@ -53,15 +54,19 @@ public struct AudioSettingsTabView: View {
             // Master Toggle & Volume Card
             masterAudioCard
 
-            // Per-Event Toggles & Previews
-            soundEventsCard
-
-            // Environmental Suppression Card
-            suppressionCard
-
             // Meeting recorder and its transcription (#43)
             meetingRecorderCard
             transcriptionCard
+
+            // Per-Event Toggles, Previews & Environmental Suppression (Collapsed by default, #211)
+            DisclosureGroup("Customize Individual Sound Effects & Call Suppression", isExpanded: $isShowingAdvancedSoundEffects) {
+                VStack(alignment: .leading, spacing: 14) {
+                    soundEventsCard
+                    suppressionCard
+                }
+                .padding(.top, 8)
+            }
+            .font(.subheadline.weight(.medium))
         }
         .onAppear {
             Task { await meetingRecorder.refreshPermissions() }

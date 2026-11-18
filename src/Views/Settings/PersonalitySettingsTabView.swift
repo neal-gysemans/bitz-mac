@@ -9,6 +9,7 @@ public struct PersonalitySettingsTabView: View {
     @ObservedObject public var settingsStore: PersonalitySettingsStore
     public var licensingService: (any LicensingServiceProtocol)?
     @State private var showingProPopover: Bool = false
+    @State private var isShowingAdvancedPersonality: Bool = false
 
     private var isPersonalityUnlocked: Bool {
         licensingService?.isFeatureUnlocked(.personality) ?? settingsStore.isPersonalityUnlocked
@@ -42,11 +43,15 @@ public struct PersonalitySettingsTabView: View {
             // Section 2: Voice Preset Selection
             presetSelectionCard
 
-            // Section 3: Cadence & Daily Quotas
-            cadenceAndQuotasCard
-
-            // Section 4: Watched Git Repositories
-            watchedReposCard
+            // Section 3 & 4: Advanced Cadence, Quotas & Watched Git Repositories (#211)
+            DisclosureGroup("Advanced Personality Quotas & Git Commit Signal", isExpanded: $isShowingAdvancedPersonality) {
+                VStack(alignment: .leading, spacing: 14) {
+                    cadenceAndQuotasCard
+                    watchedReposCard
+                }
+                .padding(.top, 8)
+            }
+            .font(.subheadline.weight(.medium))
         }
     }
 

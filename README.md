@@ -66,8 +66,23 @@ brew upgrade --cask bitz
   - Anchor Bitz to `Bottom-Right (Default)`, `Bottom-Left`, `Top-Right`, or `Top-Left` directly from the Menu Bar.
 - **Manual Avatar Resizing (`AvatarScaleStore`)**
   - Scale Bitz from `50%` to `175%` (`Small 60%`, `Medium 80%`, `Default 100%`, `Large 125%`, `XL 150%`) with automatic bottom/right corner re-anchoring.
-- **Expressive Procedural Animations (`MascotOverlayView`)**
-  - Cyberpunk cat silhouette with moving paws/trot cycle, natural eye-blink intervals, glowing LED visor, and ambient particles (neon sparks in Super Charged, binary bits in Balanced, drifting ZZZs in Charging, and ear steam puffs in Overheat).
+- **Expressive Procedural Animations & 6-Companion Roster (`MascotOverlayView`, `AvatarCharacterStore`)**
+  - Switch between **Bitz** (Cyber Cat), **Drako** (Cyber Dragon), **Byte** (Robo-Hound), **Aero** (Hover Drone), **Pixel** (Mini-Mech), and **Volt** (Cyber Bunny), each with custom vector silhouettes, out-of-process CoreAnimation motion (`0%` app CPU), glowing LED visors, ambient particles, and unique reaction audio.
+- **Palette & Visor Studio (`AvatarPaletteStore`)**
+  - Customize companion themes with presets (**Cyber Default**, **Tokyo Night**, **Dracula**, **Matrix**, **Nord**, **Synthwave**) and per-state LED visor color overrides with live interactive preview.
+- **3D Agent Command Deck (`AgentCommandDeckView`, `⌥⌘D`)**
+  - Interactive isometric spacecraft dashboard visualizing all concurrent AI coding agent sessions, real-time token/context window gauges, tool-loop & stall alerts, task kittens, and 1-click diff / IDE jump actions.
+- **On-Device Meeting Recorder & WhisperKit Transcription (`MeetingRecorderService`)**
+  - Dual-track microphone (`AVAudioEngine`) and system meeting audio (`ScreenCaptureKit`) recording with 100% local, zero-cloud **WhisperKit** and Apple Speech transcription, configurable global hotkey, retention policy, and automatic transcript folder/clipboard export.
+- **On-Device AI Personality Commentary (`PersonalityService`)**
+  - Powered by Apple Foundation Models (macOS 26+ on-device LLM) with deterministic zero-latency fallback, offering **Snarky**, **Supportive**, and **Cute** voices that react to your coding streaks, thermal spikes, and local Git commit velocity.
+- **Daily Work Shift Tracker, Auto Flow Shield & Calendar / GitHub Watchers**
+  - **Work Shift & Daily Hours (`WorkShiftTrackerService`)**: Track daily active coding hours against a customizable workday goal with a 7-day history chart and shift celebration bubbles.
+  - **Auto Flow Shield (`FlowShieldService`)**: Automatically activates macOS Focus / Do Not Disturb when you hit a deep-work streak.
+  - **macOS Calendar Agenda (`CalendarAgendaService`)**: Surfaces upcoming meeting countdown bubbles, 1-click Zoom/Meet/Teams join buttons, and morning/evening schedule briefs.
+  - **GitHub PR & CI Watcher (`GitHubNotificationService`)**: Zero-config `gh` CLI or Keychain PAT integration for real-time PR review requests, CI failure alerts, and merge notifications.
+- **8-Bit Cyber Audio Engine & File-Drop Agent Inbox (`CyberAudioService`, `FileDropInboxService`)**
+  - Low-latency synthesized cyber sound effects with automatic microphone/call and DND suppression, plus drag-and-drop file path copying and `~/.bitz/inbox` JSON agent handoff.
 - **Real Apple Silicon Hardware Telemetry (`AppleSiliconHardwareSensors`)**
   - **Live Die Temperature (`°C`)**: Queries Apple Silicon `IOHIDEventSystemClient` on-die thermal sensors (`PrimaryUsagePage: 0xFF00`, `PrimaryUsage: 5`) without requiring `sudo` or root privileges.
   - **Live CPU Load (`%`)**: Samples Darwin Mach kernel `host_statistics(HOST_CPU_LOAD_INFO)` delta ticks (`user`, `system`, `nice`, `idle`).
@@ -151,7 +166,7 @@ bitz-mac/
 │   └── Views/
 │       └── MascotOverlayView.swift            # Vector cat rig, LED visor, trot cycles & speech bubble popups
 ├── Tests/
-│   └── BitzTests/                             # 66 deterministic XCTest unit tests
+│   └── BitzTests/                             # 873 deterministic XCTest unit & layout tests
 │       ├── WellnessPointEngineTests.swift
 │       ├── ActivityMonitorServiceTests.swift
 │       ├── MascotOverlayPanelTests.swift
