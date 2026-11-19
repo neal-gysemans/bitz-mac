@@ -25,7 +25,7 @@ This file is the **single source of truth** for all AI coding agents (Antigravit
   - `BitzCharacterView(state:time:...)`: Pure deterministic SwiftUI vector mascot (used for static rendering & `ImageRenderer` snapshot tests).
   - `LiveBitzCharacterView` / `AnimatedBitzCharacterView`: Production CoreAnimation-offloaded mascot (`CALayerMotionBridge` + `CoreAnimationParticlesView`) running continuous motion in `WindowServer` at 0% app CPU (#70).
 - `src/Views/SpeechBubbleView.swift` — Priority-ordered bubble renderer (`SpeechBubbleContent.current`: `.agentPopup` > `.update` > thermal `.wellness` > `.meeting` > other `.wellness` > `.carousel`) with `BubbleWindowLayout` and isolated `CarouselSpeechBubbleObserver`.
-- `src/Views/Settings/` — `SettingsRootView.swift` + 6 tabs: `GeneralSettingsTabView.swift`, `BehaviorSettingsTabView.swift`, `AgentsSettingsTabView.swift`, `TelemetrySettingsTabView.swift`, `AudioSettingsTabView.swift`, `AdvancedSettingsTabView.swift`.
+- `src/Views/Settings/` — `SettingsRootView.swift` (6 consolidated primary tabs: `Companion`, `Focus & Work`, `AI & Coding`, `Audio & Meetings`, `Bitz Pro`, `System`), `CompanionOnboardingView.swift` (4-step interactive first-launch Companion Setup Wizard), plus section views (`GeneralSettingsTabView.swift`, `AppearanceSettingsTabView.swift`, `PersonalitySettingsTabView.swift`, `BehaviorSettingsTabView.swift`, `TelemetrySettingsTabView.swift`, `AgentsSettingsTabView.swift`, `AudioSettingsTabView.swift`, `BitzProSettingsTabView.swift`, `AdvancedSettingsTabView.swift`).
 
 ### `src/Services/` & `src/Models/` — Domain Engine, Telemetry, Agents & Audio
 - `src/Services/WellnessPointEngine.swift` — `@MainActor` PTS state machine (`0...100` pts across `.superCharged`, `.balanced`, `.dopamineSad`, `.overworked`, `.burnout`, `.charging`, `.overheating`), offline break recovery, warning visor (`isWarningVisorActive`), pet reaction debounce, and `BitzRiveControllable` contract.
@@ -161,7 +161,24 @@ Bitz sits on the user's desktop all day alongside heavy IDEs and LLM agents. Reg
 
 ---
 
-## 📄 6. Ownership & Legal Policy
+## 🌐 6. Mandatory Cross-Repo Sync with `bitz-web` (`bitz-mac` ↔ `bitz-web`)
+
+The official website repository lives alongside `bitz-mac` at `/Users/akram/Documents/GitHub/bitz-web` (`AkramKs/bitz-web`). **Whenever you ship a new feature, change Free vs. Pro tier gating, update the Beta sunset date, change branding/icons, or tag a new release in `bitz-mac`, you MUST also check and update `bitz-web` so both repos stay 100% in sync:**
+
+1. **Release Version & Test Count**:
+   - Update `BITZ_VERSION` in `bitz-web/components/console/types.ts`, `metadata.title` & `softwareVersion` in `bitz-web/app/layout.tsx`, `bitz-web/public/llms.txt`, and the XCTest count in `bitz-web/components/console/StudioTelemetryAndInstall.tsx`.
+2. **Beta Sunset Date & Free vs. Pro Feature Split**:
+   - Whenever `BetaAccessPolicy.defaultSunsetDate` (`src/Models/LicensingModels.swift`) or `isFeatureUnlocked(...)` gates change in `bitz-mac`, update `BETA_END_DATE_LABEL` in `bitz-web/components/console/types.ts`, the Free vs. Pro pricing table in `StudioTelemetryAndInstall.tsx`, the JSON-LD FAQ in `app/layout.tsx`, and `public/llms.txt`.
+3. **Companions, Palettes, Audio & Icons**:
+   - Keep `Resources/AppIcon.icns` synced with `bitz-web/public/app-icon.png`, `Resources/Sounds/*.wav` synced with `bitz-web/public/sounds/*.wav`, and character/palette definitions synced with `bitz-web/components/BitzMascot.tsx`.
+4. **Download URL & Gatekeeper Workaround**:
+   - Ensure `DMG_RELEASE_URL` points to `https://github.com/AkramKs/bitz-releases/releases/latest/download/Bitz.dmg` and the first-open Gatekeeper instructions (`xattr -cr /Applications/Bitz.app` + **System Settings → Privacy & Security → Open Anyway** while no paid Apple Developer ID is active) match `docs/BETA_TESTING.md` and `Scripts/create_dmg.sh`.
+5. **Verify `bitz-web` Build**:
+   - Run `npm run lint && npm run build` in `/Users/akram/Documents/GitHub/bitz-web` before committing and pushing.
+
+---
+
+## 📄 7. Ownership & Legal Policy
 
 - Bitz is exclusively owned by **Akram Kasimi**.
 - Released under a **Source-Available & Personal Hobbyist License** (see [LICENSE](LICENSE)).
